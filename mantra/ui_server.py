@@ -309,16 +309,24 @@ async def _run_health_checks() -> bool:
         except Exception as e:
             checks["tts_cartesia"] = str(e)
 
-    async def _check_n8n():
+    async def _check_mantraassist_backend():
+        """Check the health of the main MantraAssist backend."""
         url = os.getenv("MANTRAASSIST_BACKEND_URL", "").rstrip("/")
         if not url:
-            checks["n8n_backend"] = "MANTRAASSIST_BACKEND_URL not set"
+            checks["mantraassist_backend"] = "MANTRAASSIST_BACKEND_URL not set"
             return
         try:
             r = await http_client.get(f"{url}/api/v1/health")
-            checks["n8n_backend"] = r.is_success
+            if r.is_success:
+                data = r.json()
+                if data.get("success") is True:
+                    checks["mantraassist_backend"] = True
+                else:
+                    checks["mantraassist_backend"] = f"Unexpected response body: {data}"
+            else:
+                checks["mantraassist_backend"] = f"HTTP status {r.status_code}"
         except Exception as e:
-            checks["n8n_backend"] = str(e)
+            checks["mantraassist_backend"] = str(e)
 
     async def _check_s3():
         bucket = os.getenv("AWS_S3_BUCKET_NAME")
@@ -365,7 +373,7 @@ async def _run_health_checks() -> bool:
         _check_postgres(),
         _check_stt(),
         _check_tts(),
-        _check_n8n(),
+        _check_mantraassist_backend(),
         _check_s3(),
         return_exceptions=True
     )
