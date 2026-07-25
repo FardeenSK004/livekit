@@ -1,181 +1,155 @@
-# LKT Workspace
+# Mantra Voice Agent
 
 [![Built with LiveKit](https://img.shields.io/badge/Built%20with-LiveKit-blue)](https://livekit.io/)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-black?logo=github)](https://github.com/Mantracare-Org/livekit)
 
-Welcome to the [Mantracare-Org](https://github.com/Mantracare-Org/livekit) workspace, a collection of advanced voice AI agents and real-time communication tools optimized for high-performance telephony.
+Low-latency **bilingual (English/Hindi)** telephony voice agent on **LiveKit**. It connects SIP carriers to LiveKit rooms, runs a real-time STT → LLM → TTS pipeline (`agent_name=mantra-agent`), serves an org-scoped knowledge base and ops dashboard, and returns post-call artifacts to **MantraAssist** via HMAC-signed webhooks.
 
 ---
 
-## 🤖 Projects
+## Documentation
 
-### Mantra Voice Agent (Bilingual)
+| Doc | Role |
+|-----|------|
+| **[`PROJECT.md`](PROJECT.md)** | **Complete developer reference / SSOT** — architecture, APIs, env vars, flows, deploy, security, known issues |
+| [`report.md`](report.md) | Restructure verification (verdict: GO WITH CAVEATS) |
+| [`obsidian/`](obsidian/Home.md) | Team knowledge vault (detail & history; may lag code) |
 
-A low-latency, human-like voice agent designed for professional care support and outbound follow-up calls.
-
-#### 🛠 Optimized Tech Stack
-
-- **STT:** [Deepgram Nova-3](https://www.deepgram.com/) (Configured for `hi` Multilingual support)
-- **LLM:** [OpenAI GPT-4o-Mini](https://openai.com/) (Fast reasoning & process-driven responses)
-- **TTS:** [Cartesia Sonic-3](https://cartesia.ai/) (Multilingual Native English/Hindi synthesis)
-- **VAD & Turn Detection:** Silero VAD + Multilingual Turn Detection (Optimized with PyTorch)
-- **Knowledge Base:** PostgreSQL + pgvector + OpenAI text-embedding-3-small (Semantic search, multi-KB isolation)
+Prefer **`PROJECT.md`** over vault notes when they conflict with current code under `app/`.
 
 ---
 
-## 🚀 Deployment & Usage
+## Quick start
 
-### Webhook-Driven Outbound Calls
+**Prerequisites:** Python ≥3.11, [uv](https://github.com/astral-sh/uv), Redis, PostgreSQL, LiveKit credentials, and provider keys (see [PROJECT.md §14](PROJECT.md#14-configuration)).
 
-The agent is integrated with a SIP-based outbound system. Trigger calls by sending a POST request to:
-`http://<your-ip>:8081/api/v1/webhooks/telephony`
+```bash
+uv sync
+# Copy/configure .env.local (never commit secrets)
+# Apply migrations/*.sql to your Postgres DB
+./dev.sh
+```
 
-### Local Development
+If port **8081** is already taken (common on hosts with phpMyAdmin):
 
-1. **Install Dependencies:**
+```bash
+PORT=8091 ./dev.sh
+```
 
-   ```bash
-   uv sync
-   ```
+Then open `http://localhost:8091` (or `:8081` by default). Note: `dev.sh` status lines always print `:8081` even when `PORT` differs — use the port you set.
 
-2. **Start the Agent and Server:**
+| URL | Purpose |
+|-----|---------|
+| `http://localhost:$PORT` | Login / UI |
+| `POST /api/v1/webhooks/telephony` | Outbound call trigger |
+| `GET /health` | UI liveness |
 
-   ```bash
-   ./dev.sh
-   ```
+**`./dev.sh` starts:** MCP · Agent (`dev`) · UI (`app.main`) · Dispatcher (`app.routines`).
 
-   _This script runs both the Voice Agent and the UI Server._
+**Console scripts** (`pyproject.toml`):
 
-3. **Access the Interface:**
-   Visit `http://localhost:8081` to monitor and trigger tests.  
-   If port `8081` is already in use (e.g. phpMyAdmin), run with `PORT=8091 ./dev.sh` and open `http://localhost:8091`.
+| Script | Module |
+|--------|--------|
+| `mantra-ui` / `app-ui` | `app.main` |
+| `mantra-agent` / `app-agent` | `app.agent.entrypoint` |
+| `app-dispatcher` | `app.routines` |
 
-### Infrastructure & Logging
+Individual processes:
 
-This project relies on an isolated database environment to store call logs, transcripts, and knowledge base data.
-
-- **PostgreSQL (with pgvector extension):** Stores call logs and the knowledge base vectors.
-  - **Required:** `pgvector` extension must be installed on the PostgreSQL server.
-    - Ubuntu/Debian: `sudo apt-get install postgresql-16-pgvector`
-    - Or compile from source: https://github.com/pgvector/pgvector
-  - Run the KB migration once: `uv run python scripts/migrate_kb_pages.py` (or apply `migrations/*.sql`)
-- **Redis:** Used for capacity management and connection state routing, running locally on port `6379`.
-- **Logging Pipeline:** Call timelines, statuses, recording URLs, and detailed JSON payloads are automatically saved into the isolated `call_logs_db` after every call.
-
----
-
-### Environment Variables (Knowledge Base)
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `EMBEDDING_MODEL` | OpenAI embedding model | `text-embedding-3-small` |
-| `EMBEDDING_API_KEY` | API key for embeddings (falls back to OPENAI_API_KEY) | — |
-| `KB_SIMILARITY_THRESHOLD` | Minimum cosine similarity for KB results | `0.7` |
-| `KB_MAX_CHUNK_TOKENS` | Max tokens per chunk before sub-chunking | `2000` |
-| `OPENAI_API_KEY` | Required for embeddings if EMBEDDING_API_KEY not set | — |
+```bash
+uv run python -m app.main
+uv run python -m app.agent.entrypoint dev   # or: start
+uv run python -m app.routines
+uv run python mcp/server.py
+```
 
 ---
 
-### ✨ Key Features
+## Architecture (brief)
 
-- **Native Bilingual Intelligence:** Flawlessly switches between English and Hindi based on the caller's preference.
-- **Telephony-First VAD:** Tuned thresholds to filter background noise and cellular interference.
-- **Romanized Stability:** Optimized for high-quality Cartesia synthesis using transliterated Hinglish.
-- **Modern UI:** Premium glassmorphism dashboard with real-time transcript synchronization.
-- **Dynamic Context:** Automatically ingests JSON metadata from SIP triggers to provide personalized care.
-- **Vector Knowledge Base (New):** 
-  - **Multi-KB Isolation:** Each agency gets its own `kb_id` — zero cross-KB leakage.
-  - **Semantic Search:** OpenAI embeddings + pgvector for intent-based retrieval.
-  - **3-Way Ingestion:** Upload PDF/TXT/MD, paste raw text, or fetch from URL — all via dashboard.
-  - **Adaptive Chunking:** Auto-detects document structure (headings → paragraphs → sliding window).
-  - **Payload-Routed Queries:** The call payload's `kb_id` field determines which KB the agent queries.
+Three long-running processes plus optional MCP:
+
+1. **UI / API** (`app.main`) — FastAPI: telephony webhooks, SIP CRUD, dashboard, KB APIs, static UI
+2. **Agent worker** (`app.agent.entrypoint`) — LiveKit jobs; STT/LLM/TTS; tools; post-call finalize
+3. **Dispatcher** (`app.routines`) — Redis `queue:pending` capacity loop + zombie cleanup
+4. **MCP** (`mcp/server.py`) — optional Postgres tools over stdio
+
+Outbound telephony webhooks currently **dispatch immediately** (not via the Redis queue). Full diagrams, flows, and caveats: **[PROJECT.md §4–§9](PROJECT.md#4-high-level-architecture)**.
 
 ---
 
-## 📊 Dashboard
+## Repository layout
 
-The dashboard at `http://<host>:8081/dashboard` provides:
+```
+app/           # Production package (routers, agent, kb, dispatcher, services, …)
+prompts/       # Markdown system / handoff / analysis prompts
+static/        # Dashboard, console, login (served by FastAPI)
+migrations/    # SQL schemas (kb_pages, call_logs, org_configs)
+mcp/           # MCP Postgres server
+config/        # inbound_mappings.json, voices.json
+scripts/       # Optional migration helpers
+tests/         # pytest suite
+obsidian/      # Team vault
+PROJECT.md     # Developer SSOT
+report.md      # Verification report
+dev.sh         # Local all-in-one runner
+entrypoint.sh  # Docker process modes
+```
 
-- **Real-time metrics:** Active calls, queue depth, capacity gauge
-- **Call history:** Paginated, filterable table with recordings and summaries
-- **Activity feed:** Live SSE stream of call events
-- **Knowledge Base Management:** 
-  - **Upload File** — PDF, TXT, or MD → auto-chunked & embedded
-  - **Paste Text** — Raw text + optional title → indexed instantly
-  - **From URL** — Fetch, extract readable content, embed
-  - Each upload tagged with `kb_id` for agent routing
+Legacy `mantra/` was removed in the restructure; all production code lives under `app/`.
 
 ---
 
-## 🐳 Docker
+## Tech stack
 
-### Build
+- **Runtime:** Python ≥3.11 · `uv` · FastAPI + Uvicorn
+- **Realtime:** LiveKit Agents ~1.4 · Silero VAD + multilingual turn detector
+- **STT:** Deepgram Nova-3 (`hi` multilingual)
+- **LLM:** OpenAI GPT-4o-mini (default); Gemini / DeepSeek via call metadata
+- **TTS:** Cartesia Sonic-3 via LiveKit Inference
+- **KB:** PostgreSQL **full-text search** on `kb_pages` (not vector embeddings in current code)
+- **Coord / storage:** Redis · AWS S3 (recordings) · LiveKit Cloud SIP
+- **Frontend:** Static HTML/JS under `static/`
+
+---
+
+## Deployment
+
+Docker image uses `entrypoint.sh` modes: `agent` (default), `ui`, `dispatcher`, `mcp`.
 
 ```bash
 docker build -t lkt-mantra .
-```
-
-### Run
-
-```bash
-# Agent mode (default)
 docker run --env-file .env.local lkt-mantra agent
-
-# UI Server mode
 docker run --env-file .env.local -p 8081:8081 lkt-mantra ui
+docker run --env-file .env.local lkt-mantra dispatcher
+docker run --env-file .env.local lkt-mantra mcp
 ```
 
-### Required on PostgreSQL Server
+Apply `migrations/*.sql` before relying on KB, call logs, or org configs. Production roles, health checks, and scaling notes: **[PROJECT.md §17](PROJECT.md#17-deployment)**.
 
-The container connects to an external PostgreSQL. Ensure the server has:
+---
 
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
+## Testing
 
-Then run migrations (SQL under `migrations/`, or the helper scripts):
 ```bash
-# Prefer applying migrations/*.sql against your Postgres, or:
-docker run --env-file .env.local lkt-mantra uv run python scripts/migrate_kb_pages.py
+uv run python -m pytest
+# or: uv run python -m pytest tests/ -v
 ```
+
+Restructure smoke results and caveats are in [`report.md`](report.md).
 
 ---
 
-## 📁 Project Structure
+## Contributing & docs
 
-```
-livekit/
-├── app/                      # Application package (replaces legacy mantra/)
-│   ├── main.py               # FastAPI app factory + lifespan
-│   ├── agent/                # Voice agent entrypoint, tools, finalize
-│   ├── routers/              # HTTP routes (SIP, webhooks, dashboard, KB, …)
-│   ├── services/             # LiveKit, Redis, DB, auth, SIP, S3, webhooks
-│   ├── kb/                   # KB engine, chunker, retriever
-│   ├── dispatcher/           # Queue → LiveKit dispatch
-│   ├── routines/             # Dispatcher loop + zombie cleanup
-│   ├── config/               # Settings, constants, prompts loader
-│   ├── models/               # Pydantic schemas
-│   └── static/               # Copy of UI assets (served from repo-root static/ too)
-├── static/                   # Dashboard, console, login, KB chat UI
-├── migrations/               # SQL: kb_pages, call_logs, org_configs
-├── prompts/                  # System / handoff / guardrail markdown prompts
-├── config/                   # inbound_mappings.json, voices.json
-├── mcp/
-│   └── server.py             # MCP Postgres server
-├── scripts/                  # Migration helpers
-├── tests/                    # pytest suite
-├── pyproject.toml            # Python deps (uv); scripts: mantra-agent, app-ui, …
-├── uv.lock
-├── Dockerfile
-├── entrypoint.sh
-├── dev.sh
-├── report.md                 # Latest restructure verification report
-└── README.md
-```
+1. Read **[`PROJECT.md`](PROJECT.md)** for APIs, env vars, and conventions.
+2. Use the vault at [`obsidian/Home.md`](obsidian/Home.md) for sprint/history; update Changelog / Current Sprint when you change behavior.
+3. Keep secrets in `.env` / `.env.local` — never commit them.
+4. Prefer `app/` packages and `migrations/*.sql`; do not revive a `mantra/` tree.
 
 ---
 
-## 📜 License
+## License
 
 Proprietary — Mantracare-Org internal use.

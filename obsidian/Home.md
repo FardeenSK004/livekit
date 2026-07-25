@@ -7,10 +7,20 @@
 
 ---
 
+## Developer SSOT
+
+> **Start here for onboarding & full reference:** [`PROJECT.md`](../PROJECT.md) (repository root)  
+> Vault pointer: [[Knowledge/Project Reference.md|Project Reference]]
+
+`PROJECT.md` is the **single source of truth** for structure, use cases, APIs, env vars, agent/dispatcher/KB flows, deployment, and known issues. Prefer it over older vault notes when they conflict with live code under `app/`.
+
+---
+
 ## Quick Links
 
 | Area | Document |
 |------|----------|
+| 📘 **PROJECT.md** | [`../PROJECT.md`](../PROJECT.md) — **developer SSOT** |
 | 🏛️ Architecture | [[Architecture/Overview.md\|Overview]] · [[Architecture/Components.md\|Components]] · [[Architecture/Data Flow.md\|Data Flow]] |
 | 🌐 APIs | [[Architecture/APIs.md\|API Reference]] |
 | 🗄️ Database | [[Architecture/Database.md\|Database Schema]] |
@@ -18,7 +28,7 @@
 | 🔧 Restructure | [[Architecture/Restructure Plan.md\|Restructure Plan]] · [[Development/Restructure Implementation.md\|Implementation]] · [[Development/Restructure Verification Report.md\|Verification Report]] |
 | 🎯 Features | [[Features/Feature Index.md\|Feature Index]] |
 | 📋 Development | [[Development/TODO.md\|TODO]] · [[Development/Changelog.md\|Changelog]] · [[Development/Bugs.md\|Bugs]] · [[Development/Current Sprint.md\|Current Sprint]] |
-| 🧠 Knowledge | [[Knowledge/Coding Standards.md\|Coding Standards]] · [[Knowledge/Conventions.md\|Conventions]] |
+| 🧠 Knowledge | [[Knowledge/Project Reference.md\|Project Reference]] · [[Knowledge/Coding Standards.md\|Coding Standards]] · [[Knowledge/Conventions.md\|Conventions]] |
 | 📖 Context | [[Context/Project Summary.md\|Project Summary]] · [[Context/Stack.md\|Stack]] · [[Context/Repository Map.md\|Repository Map]] |
 
 ---
@@ -52,6 +62,7 @@ Telephony Provider → Webhook → FastAPI → Redis Queue → Dispatcher → Li
 
 ## Recent Changelog
 
+- **2026-07-25:** Added repo-root [`PROJECT.md`](../PROJECT.md) as developer SSOT (linked from Home / README / [[Knowledge/Project Reference.md|Project Reference]])
 - **2026-07-25:** Final restructure verification — **GO WITH CAVEATS** (39/39 endpoint smoke; see [[Development/Restructure Verification Report.md|Verification Report]] / `report.md`)
 - **2026-07-25:** Restructure cutover complete — `mantra/` removed; production entrypoints point at `app.*`
 - **2026-06-30:** Cartesia TTS migrated to LiveKit Inference, removed redundant API key management, added env var fallbacks for MAX_CONCURRENCY

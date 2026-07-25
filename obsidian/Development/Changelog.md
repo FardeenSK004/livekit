@@ -2,6 +2,8 @@
 
 ## 2026-07-25
 
+- **doc:** Added repository-root [`PROJECT.md`](../../PROJECT.md) as the developer single-source-of-truth (architecture, APIs, env vars, flows, deploy/ops); linked from Home, README, and [[Knowledge/Project Reference.md|Project Reference]] vault pointer
+- **doc:** Rewrote [`README.md`](../../README.md) as post-restructure entry point (SSOT link, quick start, architecture, layout, Docker, testing) — no stale `mantra/` paths
 - **fix:** Dashboard APIs now require JWT (`Depends(require_auth)` on `/api/v1/dashboard/*`) — restructure had left `require_auth` unused
 - **fix:** Telephony webhook returns 400 on invalid JSON instead of unhandled 500
 - **verify:** Final restructure verification on `feature/restructure` — **GO WITH CAVEATS**; unit 7/7, import smoke OK, UI/agent/dispatcher start, endpoint smoke **39/39** after auth/JSON fixes
