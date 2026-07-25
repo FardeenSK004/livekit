@@ -77,7 +77,7 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.plugins import openai, google, silero, deepgram
 
 # Import our production helpers
-from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_to_iso8601, save_call_log_to_db
+from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_to_iso8601, save_call_log_to_db, report_telemetry
 
 
 
@@ -183,10 +183,31 @@ class AssistantFunctions:
         self.agent = None
         self.session = None
         self.ctx = ctx
+        self.call_id = None
+        self.tos_task_id = None
+        if job_metadata:
+            try:
+                payload = json.loads(job_metadata)
+                self.call_id = str(payload.get("call_id") or payload.get("voice_id") or "")
+                self.tos_task_id = payload.get("metadata", {}).get("tos_task_id")
+            except Exception:
+                pass
+
+    def _telemetry(self, message: str, call_id: str = None):
+        if self.tos_task_id:
+            cid = call_id or self.call_id or ""
+            create_bg_task(
+                report_telemetry(
+                    tos_task_id=self.tos_task_id,
+                    message=f"[Agent Worker] {message}",
+                    call_id=cid,
+                )
+            )
 
     @llm.function_tool(description="End the call. Call this tool when the conversation is over — the user said goodbye, is not interested, or there is nothing left to discuss.")
     async def end_call(self):
         logger.info("Agent decided to end the call via function tool. Waiting for speech to finish before disconnecting.")
+        self._telemetry("call_ended")
         async def graceful_disconnect():
             # Wait for the agent to finish speaking her goodbye, with a safety cap
             if self.session:
@@ -244,12 +265,41 @@ class AssistantFunctions:
 @server.rtc_session(agent_name="mantra-agent")
 async def entrypoint(ctx: JobContext):
     entrypoint_start_time = asyncio.get_event_loop().time()
-    # Plain log to verify entrypoint is reached
     logger.info(f"Entrypoint reached for room: {ctx.room.name}")
-    
-    await ctx.connect()
 
-    # logger.info(f"{Fore.GREEN}➕ Room Created / Connected: {ctx.room.name}{Style.RESET_ALL}")
+    call_state = {
+        "user_joined": False,
+        "timeline": [{"event": "Agent Session Started", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"}]
+    }
+
+    tos_task_id = None
+    call_id = ctx.job.id
+    if ctx.job.metadata:
+        try:
+            payload = json.loads(ctx.job.metadata)
+            call_id = payload.get("call_id") or payload.get("voice_id") or ctx.job.id
+            tos_task_id = payload.get("metadata", {}).get("tos_task_id")
+        except:
+            pass
+
+    call_state["tos_task_id"] = tos_task_id
+    call_state["call_id"] = str(call_id)
+
+    async def _telemetry(status: str, detail: str = ""):
+        _tos_task_id = call_state.get("tos_task_id")
+        _cid = call_state.get("call_id")
+        if _tos_task_id:
+            msg = f"[Agent Worker] {status}"
+            if detail:
+                msg += f" — {detail}"
+            if _cid:
+                msg += f" — call_id={_cid}" if not detail else f", call_id={_cid}"
+            create_bg_task(report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid))
+
+    await _telemetry("agent_started", f"room={ctx.room.name}")
+    await ctx.connect()
+    await _telemetry("room_connected", f"room={ctx.room.name}")
+
     logger.info(f"--- Starting agent session ---")
     logger.info(f"Room: {ctx.room.name}")
     logger.info(f"Job ID: {ctx.job.id}")
@@ -257,22 +307,9 @@ async def entrypoint(ctx: JobContext):
 
     # Initialize function context for handoff
     fnc_ctx = AssistantFunctions(ctx.job.metadata, ctx.room.name, ctx=ctx)
-    call_state = {
-        "user_joined": False,
-        "timeline": [{"event": "Agent Session Started", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"}]
-    }
 
     # Session ID for S3 key naming
     session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Parse metadata to get call_id safely
-    call_id = ctx.job.id
-    if ctx.job.metadata:
-        try:
-            payload = json.loads(ctx.job.metadata)
-            call_id = payload.get("call_id") or payload.get("voice_id") or ctx.job.id
-        except:
-            pass
 
     # Ensure call is tracked in Redis (critical for inbound calls that bypass the queue)
     try:
@@ -529,6 +566,8 @@ Follow these specific instructions:
         tts=tts_engine,
     )
 
+    await _telemetry("voice_engine_initialized", f"model={model_name}, voice={voice_input}")
+
     agent = Agent(
         instructions=initial_instructions,
         tools=[fnc_ctx.end_call]
@@ -726,6 +765,7 @@ Follow these specific instructions:
             logger.info("Remote participant joined. Initializing conversation...")
             call_state["user_joined"] = True
             call_state["timeline"].append({"event": "Remote Participant Joined", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"})
+            await _telemetry("participant_joined")
             await asyncio.sleep(0.5)
         
         logger.info(f"Generating greeting for {client_name}...")
@@ -782,6 +822,7 @@ Follow these specific instructions:
                 logger.info("Starting post-call processing...")
                 if "timeline" in call_state:
                     call_state["timeline"].append({"event": "Call Finalization Started", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"})
+                await _telemetry("post_processing_started")
 
                 # 1. Pre-load call metadata
                 try:
@@ -981,6 +1022,7 @@ Follow these specific instructions:
                 logger.info("Delivering post-call webhook to backend...")
                 logger.info(f"Webhook Payload:\n{json.dumps(webhook_payload)}")
                 delivered = await send_to_backend(webhook_payload)
+                await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if delivered else 'no'}")
             except Exception as e:
                 logger.error(f"Webhook delivery failed: {e}", exc_info=True)
                 delivered = False
@@ -998,6 +1040,8 @@ Follow these specific instructions:
                     logger.info(f"Freed capacity slot for call {call_id} in Redis")
             except Exception as e:
                 logger.error(f"Failed to free Redis capacity slot: {e}")
+
+            await _telemetry(f"call_complete — status={call_status}, duration={duration}s")
 
             logger.info(
                 f"Post-call processing complete | "

@@ -16,6 +16,8 @@ import asyncpg
 import redis.asyncio as redis
 from fastapi import FastAPI, Request, HTTPException
 from mantra.email_alerts import send_crash_email
+from mantra.utils import save_call_log_to_db, report_telemetry
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from mantra.utils import save_call_log_to_db
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -39,6 +41,7 @@ lk_client: api.LiveKitAPI = None           # Direct — used for Twilio, Zadarma
 plivo_client: api.LiveKitAPI = None        # Proxied — used for Plivo (India routing)
 plivo_session: aiohttp.ClientSession = None  # Owned session for plivo_client; closed manually on shutdown
 redis_client: redis.Redis = None
+http_client: httpx.AsyncClient = None      # Persistent client for health checks
 
 # ── Authentication ───────────────────────────────────────────────────────
 JWT_SECRET = os.getenv("JWT_SECRET")
@@ -52,18 +55,23 @@ ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
 
 async def get_db_connection():
     """Create a PostgreSQL connection for dashboard queries."""
-    return await asyncpg.connect(
-        user=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
-        database=os.getenv("POSTGRES_DB"),
-        host=os.getenv("POSTGRES_HOST"),
-        port=os.getenv("POSTGRES_PORT"),
-        timeout=5.0,
-    )
+    # Prefer DATABASE_URL if it's set, as it's a single source of truth.
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        return await asyncpg.connect(dsn=database_url, timeout=5.0)
+    else:
+        return await asyncpg.connect(
+            user=os.getenv("POSTGRES_USER"),
+            password=os.getenv("POSTGRES_PASSWORD"),
+            database=os.getenv("POSTGRES_DB"),
+            host=os.getenv("POSTGRES_HOST"),
+            port=os.getenv("POSTGRES_PORT"),
+            timeout=5.0,
+        )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global lk_client, plivo_client, plivo_session, redis_client
+    global lk_client, plivo_client, plivo_session, redis_client, http_client
     api_key = os.getenv("LIVEKIT_API_KEY")
     api_secret = os.getenv("LIVEKIT_API_SECRET")
     lk_url = os.getenv("LIVEKIT_URL")
@@ -99,6 +107,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}")
 
+    # Create a single, persistent httpx client for all health checks
+    http_client = httpx.AsyncClient(timeout=1.5)
+
     # ── Startup healthcheck ─────────────────────────────────────────
     logger.info("Running startup healthcheck on all dependencies...")
     if await _run_health_checks():
@@ -114,6 +125,8 @@ async def lifespan(app: FastAPI):
             await client.aclose()
     if plivo_session:
         await plivo_session.close()
+    if http_client:
+        await http_client.aclose()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -254,6 +267,11 @@ _DISPATCH_PATHS = frozenset({
 
 async def _run_health_checks() -> bool:
     """Run all service checks concurrently (Python's Promise.all via asyncio.gather)."""
+    # Allow bypassing health checks for local development/testing
+    if os.getenv("BYPASS_HEALTH_CHECKS") == "1":
+        logger.warning("BYPASS_HEALTH_CHECKS is active. Skipping all service health checks.")
+        return True
+
     checks: dict[str, bool | str] = {}
 
     async def _check(domain: str, coro, timeout: float = 1.0):
@@ -261,7 +279,7 @@ async def _run_health_checks() -> bool:
             await asyncio.wait_for(coro, timeout=timeout)
             checks[domain] = True
         except Exception as e:
-            checks[domain] = str(e)
+            checks[domain] = repr(e) # Use repr(e) to get a useful message from TimeoutError
 
     async def _check_stt():
         key = os.getenv("DEEPGRAM_API_KEY")
@@ -269,12 +287,11 @@ async def _run_health_checks() -> bool:
             checks["stt_deepgram"] = "DEEPGRAM_API_KEY not set"
             return
         try:
-            async with httpx.AsyncClient(timeout=1.0) as c:
-                r = await c.get(
-                    "https://api.deepgram.com/v1/projects",
-                    headers={"Authorization": f"Token {key}"},
-                )
-                checks["stt_deepgram"] = r.is_success
+            r = await http_client.get(
+                "https://api.deepgram.com/v1/projects",
+                headers={"Authorization": f"Token {key}"},
+            )
+            checks["stt_deepgram"] = r.is_success
         except Exception as e:
             checks["stt_deepgram"] = str(e)
 
@@ -284,12 +301,11 @@ async def _run_health_checks() -> bool:
             checks["tts_cartesia"] = "CARTESIA_API_KEY not set"
             return
         try:
-            async with httpx.AsyncClient(timeout=1.0) as c:
-                r = await c.get(
-                    "https://api.cartesia.ai",
-                    headers={"X-API-Key": key},
-                )
-                checks["tts_cartesia"] = r.status_code < 500
+            r = await http_client.get(
+                "https://api.cartesia.ai",
+                headers={"X-API-Key": key},
+            )
+            checks["tts_cartesia"] = r.status_code < 500
         except Exception as e:
             checks["tts_cartesia"] = str(e)
 
@@ -299,9 +315,8 @@ async def _run_health_checks() -> bool:
             checks["n8n_backend"] = "MANTRAASSIST_BACKEND_URL not set"
             return
         try:
-            async with httpx.AsyncClient(timeout=1.0) as c:
-                r = await c.get(f"{url}/api/v1/health")
-                checks["n8n_backend"] = r.is_success
+            r = await http_client.get(f"{url}/api/v1/health")
+            checks["n8n_backend"] = r.is_success
         except Exception as e:
             checks["n8n_backend"] = str(e)
 
@@ -326,7 +341,7 @@ async def _run_health_checks() -> bool:
             conn = await asyncio.wait_for(get_db_connection(), timeout=1.0)
             checks["postgres"] = True
         except Exception as e:
-            checks["postgres"] = str(e) or repr(e)
+            checks["postgres"] = repr(e)
         finally:
             if conn:
                 try:
@@ -355,7 +370,15 @@ async def _run_health_checks() -> bool:
         return_exceptions=True
     )
 
-    return all(v is True for v in checks.values())
+    all_ok = True
+    for service, status in checks.items():
+        if status is True:
+            logger.info(f"  - Healthcheck OK: {service}")
+        else:
+            all_ok = False
+            logger.warning(f"  - Healthcheck FAILED: {service} -> {status}")
+
+    return all_ok
 
 
 @app.get("/health")
@@ -494,9 +517,23 @@ async def handle_outbound_call_webhook(request: Request):
     event_name = payload.get("event_name", "telephony_dispatch")
     logger.info(f"Webhook received call request for event {event_name}: {json.dumps(payload, separators=(',',':'))}")
     
-    # Use call_id or voice_id from payload if available, otherwise use timestamp
+    tos_task_id = payload.get("metadata", {}).get("tos_task_id")
+    
     call_id = payload.get("call_id") or payload.get("voice_id") or payload.get("event_id") or int(time.time())
     room_name = f"call_{call_id}"
+    
+    def _telemetry(message_suffix: str):
+        if tos_task_id:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                report_telemetry(
+                    tos_task_id=tos_task_id,
+                    message=f"[UI Server] {message_suffix}",
+                    call_id=str(call_id),
+                )
+            )
+
+    _telemetry("webhook_received")
     
     # Check Redis deduplication lock to prevent concurrent duplicate webhooks for the same call_id
     if redis_client:
@@ -543,6 +580,7 @@ async def handle_outbound_call_webhook(request: Request):
             )
         )
         logger.info(f"Dispatch created: {dispatch.id}")
+        _telemetry(f"agent_dispatched — room={room_name}")
     except Exception as e:
         logger.error(f"Agent dispatch failed: {e}\n{traceback.format_exc()}")
         return JSONResponse({"error": f"Agent dispatch failed: {str(e)}"}, status_code=500)
@@ -558,6 +596,8 @@ async def handle_outbound_call_webhook(request: Request):
             proxy_msg = "proxied Plivo client" if sip_client == plivo_client else "direct LiveKit client"
             logger.info(f"Step 2: Initiating SIP call to {phone_number} via trunk {trunk_id} using {proxy_msg}" + (f" (Caller ID: {sip_number})" if sip_number else ""))
 
+            _telemetry(f"sip_call_initiating — phone={phone_number}")
+
             sip_part = await sip_client.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     sip_trunk_id=trunk_id,
@@ -571,8 +611,11 @@ async def handle_outbound_call_webhook(request: Request):
                 )
             )
             logger.info(f"SIP Participant created: {sip_part.participant_identity}")
+            _telemetry("sip_call_connected")
         except Exception as e:
             logger.error(f"SIP Call trigger failed for {room_name}: {e}\n{traceback.format_exc()}")
+            _telemetry(f"sip_call_failed — {str(e)[:100]}")
+            
 
             # Before any cleanup, check if the call already connected (room has the SIP participant).
             # This can happen when a duplicate webhook passes through after the lock expires.
@@ -636,8 +679,7 @@ async def handle_outbound_call_webhook(request: Request):
                 logger.error(f"Failed to directly save SIP error call log: {db_e}")
 
     # Fire and forget the SIP task
-    import asyncio
-    asyncio.create_task(trigger_sip())
+    asyncio.get_running_loop().create_task(trigger_sip())
 
     # Generate token for anyone needing to join/monitor the call
     token = api.AccessToken(os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET")) \

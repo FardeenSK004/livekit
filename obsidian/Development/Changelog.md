@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-26
+
+- **feat:** Added `health_gate_middleware` to block call dispatching if any critical service (LiveKit, Redis, etc.) is down.
+- **fix:** Integrated post-call data pipeline (`TELEPHONY_UI_URL`) to ensure agent call logs are correctly saved to the local database via the UI server.
+
 ## 2026-07-25
 
 - **feat:** Comprehensive `/health` readiness endpoint — returns `healthy` / `stay` only when ALL services pass
