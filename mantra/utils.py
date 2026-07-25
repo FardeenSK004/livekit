@@ -67,7 +67,7 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
         logger.warning("MANTRAASSIST_BACKEND_URL not set — skipping backend webhook")
         return False
 
-    url = f"{base_url}/webhooks/n8n"
+    url = f"{base_url}/api/v1/webhooks/n8n"
     
     timestamp = str(int(time.time()))
     
