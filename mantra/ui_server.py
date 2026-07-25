@@ -15,7 +15,7 @@ import asyncpg
 import redis.asyncio as redis
 from fastapi import FastAPI, Request, HTTPException
 from mantra.email_alerts import send_crash_email
-from mantra.utils import save_call_log_to_db
+from mantra.utils import save_call_log_to_db, report_telemetry
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from livekit import api
@@ -334,9 +334,23 @@ async def handle_outbound_call_webhook(request: Request):
     event_name = payload.get("event_name", "telephony_dispatch")
     logger.info(f"Webhook received call request for event {event_name}: {json.dumps(payload, separators=(',',':'))}")
     
-    # Use call_id or voice_id from payload if available, otherwise use timestamp
+    tos_task_id = payload.get("metadata", {}).get("tos_task_id")
+    
     call_id = payload.get("call_id") or payload.get("voice_id") or payload.get("event_id") or int(time.time())
     room_name = f"call_{call_id}"
+    
+    def _telemetry(message_suffix: str):
+        if tos_task_id:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                report_telemetry(
+                    tos_task_id=tos_task_id,
+                    message=f"[UI Server] {message_suffix}",
+                    call_id=str(call_id),
+                )
+            )
+
+    _telemetry("webhook_received")
     
     # Construct phone number in E.164 format
     country_code = payload.get("client_country_code", "").strip("+")
@@ -372,6 +386,7 @@ async def handle_outbound_call_webhook(request: Request):
             )
         )
         logger.info(f"Dispatch created: {dispatch.id}")
+        _telemetry(f"agent_dispatched — room={room_name}")
     except Exception as e:
         logger.error(f"Agent dispatch failed: {e}\n{traceback.format_exc()}")
         return JSONResponse({"error": f"Agent dispatch failed: {str(e)}"}, status_code=500)
@@ -387,6 +402,8 @@ async def handle_outbound_call_webhook(request: Request):
             proxy_msg = "proxied Plivo client" if sip_client == plivo_client else "direct LiveKit client"
             logger.info(f"Step 2: Initiating SIP call to {phone_number} via trunk {trunk_id} using {proxy_msg}" + (f" (Caller ID: {sip_number})" if sip_number else ""))
 
+            _telemetry(f"sip_call_initiating — phone={phone_number}")
+
             sip_part = await sip_client.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     sip_trunk_id=trunk_id,
@@ -400,8 +417,10 @@ async def handle_outbound_call_webhook(request: Request):
                 )
             )
             logger.info(f"SIP Participant created: {sip_part.participant_identity}")
+            _telemetry("sip_call_connected")
         except Exception as e:
             logger.error(f"SIP Call trigger failed for {room_name}: {e}\n{traceback.format_exc()}")
+            _telemetry(f"sip_call_failed — {str(e)[:100]}")
             
             # Store exact SIP failure reason in Redis for the agent to read
             if redis_client:
@@ -444,8 +463,7 @@ async def handle_outbound_call_webhook(request: Request):
                 logger.error(f"Failed to directly save SIP error call log: {db_e}")
 
     # Fire and forget the SIP task
-    import asyncio
-    asyncio.create_task(trigger_sip())
+    asyncio.get_running_loop().create_task(trigger_sip())
 
     # Generate token for anyone needing to join/monitor the call
     token = api.AccessToken(os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET")) \
