@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-25
+
+- **feat:** Comprehensive `/health` readiness endpoint — returns `healthy` / `stay` only when ALL services pass
+  - Checks: LiveKit API, Redis, PostgreSQL, Deepgram STT, Cartesia TTS, n8n backend, TOS endpoint, S3 bucket
+  - Runs all checks in parallel with individual timeouts
+  - Returns HTTP 200 + `"status": "healthy"` when every service is reachable
+  - Returns HTTP 503 + `"status": "stay"` with per-service error breakdown otherwise
+  - Files: `mantra/ui_server.py`
+
 ## 2026-07-24
 
 - **fix:** Three-layer race condition hardening for outbound call webhooks

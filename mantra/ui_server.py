@@ -10,13 +10,14 @@ from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 
 import jwt
+import httpx
 import aiohttp
 import asyncpg
 import redis.asyncio as redis
 from fastapi import FastAPI, Request, HTTPException
 from mantra.email_alerts import send_crash_email
 from mantra.utils import save_call_log_to_db
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from livekit import api
 from dotenv import load_dotenv
@@ -97,6 +98,14 @@ async def lifespan(app: FastAPI):
         logger.info("Connected to Redis")
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}")
+
+    # ── Startup healthcheck ─────────────────────────────────────────
+    logger.info("Running startup healthcheck on all dependencies...")
+    if await _run_health_checks():
+        logger.info("Startup healthcheck: ALL SERVICES HEALTHY")
+    else:
+        logger.warning("Startup healthcheck: one or more services down — refusing dispatch")
+    # ────────────────────────────────────────────────────────────────
 
     yield
 
@@ -232,10 +241,160 @@ async def console_page():
     """Serve the test console."""
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
+# ── Paths that require a clean bill of health before processing ─────────
+_DISPATCH_PATHS = frozenset({
+    "/dispatch-test",
+    "/api/v1/webhooks/telephony",
+    "/api/v1/sip/trunks/outbound",
+    "/api/v1/sip/trunks/outbound/zadarma",
+    "/api/v1/sip/trunks/outbound/twilio",
+    "/api/v1/sip/trunks/outbound/plivo",
+})
+
+
+async def _run_health_checks() -> bool:
+    """Run all service checks concurrently (Python's Promise.all via asyncio.gather)."""
+    checks: dict[str, bool | str] = {}
+
+    async def _check(domain: str, coro, timeout: float = 1.0):
+        try:
+            await asyncio.wait_for(coro, timeout=timeout)
+            checks[domain] = True
+        except Exception as e:
+            checks[domain] = str(e)
+
+    async def _check_stt():
+        key = os.getenv("DEEPGRAM_API_KEY")
+        if not key:
+            checks["stt_deepgram"] = "DEEPGRAM_API_KEY not set"
+            return
+        try:
+            async with httpx.AsyncClient(timeout=1.0) as c:
+                r = await c.get(
+                    "https://api.deepgram.com/v1/projects",
+                    headers={"Authorization": f"Token {key}"},
+                )
+                checks["stt_deepgram"] = r.is_success
+        except Exception as e:
+            checks["stt_deepgram"] = str(e)
+
+    async def _check_tts():
+        key = os.getenv("CARTESIA_API_KEY")
+        if not key:
+            checks["tts_cartesia"] = "CARTESIA_API_KEY not set"
+            return
+        try:
+            async with httpx.AsyncClient(timeout=1.0) as c:
+                r = await c.get(
+                    "https://api.cartesia.ai",
+                    headers={"X-API-Key": key},
+                )
+                checks["tts_cartesia"] = r.status_code < 500
+        except Exception as e:
+            checks["tts_cartesia"] = str(e)
+
+    async def _check_n8n():
+        url = os.getenv("MANTRAASSIST_BACKEND_URL", "").rstrip("/")
+        if not url:
+            checks["n8n_backend"] = "MANTRAASSIST_BACKEND_URL not set"
+            return
+        try:
+            async with httpx.AsyncClient(timeout=1.0) as c:
+                r = await c.get(f"{url}/api/v1/health")
+                checks["n8n_backend"] = r.is_success
+        except Exception as e:
+            checks["n8n_backend"] = str(e)
+
+    async def _check_s3():
+        bucket = os.getenv("AWS_S3_BUCKET_NAME")
+        if not bucket:
+            checks["s3"] = "AWS_S3_BUCKET_NAME not set"
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _check_s3_bucket, bucket),
+                timeout=1.0,
+            )
+            checks["s3"] = True
+        except Exception as e:
+            checks["s3"] = str(e)
+
+    async def _check_postgres():
+        conn = None
+        try:
+            conn = await asyncio.wait_for(get_db_connection(), timeout=1.0)
+            checks["postgres"] = True
+        except Exception as e:
+            checks["postgres"] = str(e) or repr(e)
+        finally:
+            if conn:
+                try:
+                    await conn.close()
+                except:
+                    pass
+
+    async def _check_redis():
+        if not redis_client:
+            checks["redis"] = "Redis client not initialised"
+            return
+        try:
+            await asyncio.wait_for(redis_client.ping(), timeout=1.0)
+            checks["redis"] = True
+        except Exception as e:
+            checks["redis"] = str(e)
+
+    await asyncio.gather(
+        _check("livekit", lk_client.room.list_rooms(api.ListRoomsRequest()), timeout=1.0),
+        _check_redis(),
+        _check_postgres(),
+        _check_stt(),
+        _check_tts(),
+        _check_n8n(),
+        _check_s3(),
+        return_exceptions=True
+    )
+
+    return all(v is True for v in checks.values())
+
+
 @app.get("/health")
 async def health():
-    """Simple health check."""
-    return {"status": "ok", "service": "ui_server"}
+    healthy = await _run_health_checks()
+    return JSONResponse(
+        content={"healthy": healthy}
+    )
+
+
+@app.middleware("http")
+async def health_gate_middleware(request: Request, call_next):
+    """Reject dispatch requests before they reach a handler if any dependency is down."""
+    path = request.url.path
+    if request.method == "POST" and path in _DISPATCH_PATHS:
+        ok = await _run_health_checks()
+        if not ok:
+            logger.warning(f"Health gate blocked {request.method} {path}")
+            return Response(status_code=503)
+    return await call_next(request)
+
+
+def _check_s3_bucket(bucket: str):
+    import boto3
+    _saved = {}
+    for _var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "PLIVO_PROXY"):
+        _val = os.environ.pop(_var, None)
+        if _val is not None:
+            _saved[_var] = _val
+    try:
+        s3 = boto3.client(
+            "s3",
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+        )
+        s3.head_bucket(Bucket=bucket)
+    finally:
+        os.environ.update(_saved)
 
 @app.post("/dispatch-test")
 async def dispatch_test(request: Request):
