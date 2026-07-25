@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-07-26
+
+- **feat:** Added `health_gate_middleware` to block call dispatching if any critical service (LiveKit, Redis, etc.) is down.
+- **fix:** Integrated post-call data pipeline (`TELEPHONY_UI_URL`) to ensure agent call logs are correctly saved to the local database via the UI server.
+
+## 2026-07-25
+
+- **feat:** Comprehensive `/health` readiness endpoint — returns `healthy` / `stay` only when ALL services pass
+  - Checks: LiveKit API, Redis, PostgreSQL, Deepgram STT, Cartesia TTS, n8n backend, TOS endpoint, S3 bucket
+  - Runs all checks in parallel with individual timeouts
+  - Returns HTTP 200 + `"status": "healthy"` when every service is reachable
+  - Returns HTTP 503 + `"status": "stay"` with per-service error breakdown otherwise
+  - Files: `mantra/ui_server.py`
+
+## 2026-07-24
+
+- **fix:** Three-layer race condition hardening for outbound call webhooks
+  - Increased Redis dedup lock TTL 30s → 600s to prevent late duplicates from passing through
+  - Added room participant check in `trigger_sip` exception handler — skips cleanup if SIP participant already in room (duplicate guard)
+  - Fixed agent `call_status` logic: only trust Redis SIP error if `user_joined` is False — prevents stale duplicate error from overriding real "Completed" status
+  - Files: `mantra/ui_server.py` (lock TTL, room check), `mantra/agent.py` (Redis trust gate)
+
 ## 2026-06-30
 
 - **doc:** Created `obsidian/` — comprehensive Obsidian knowledge base (48 files)

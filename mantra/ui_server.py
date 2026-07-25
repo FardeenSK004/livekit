@@ -10,13 +10,16 @@ from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 
 import jwt
+import httpx
 import aiohttp
 import asyncpg
 import redis.asyncio as redis
 from fastapi import FastAPI, Request, HTTPException
 from mantra.email_alerts import send_crash_email
-from mantra.utils import save_call_log_to_db
+from mantra.utils import save_call_log_to_db, report_telemetry
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from mantra.utils import save_call_log_to_db
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from livekit import api
 from dotenv import load_dotenv
@@ -29,14 +32,16 @@ logger = logging.getLogger("mantra.ui_server")
 logger.setLevel(logging.INFO)
 _handler = logging.StreamHandler(sys.stdout)
 _handler.setFormatter(logging.Formatter("%(asctime)s INFO %(name)s: %(message)s"))
-logger.addHandler(_handler)
-logger.propagate = False
+if not logger.handlers:
+    logger.addHandler(_handler)
+logger.propagate = True
 
 # Persistent LiveKit API clients
 lk_client: api.LiveKitAPI = None           # Direct — used for Twilio, Zadarma, and general operations
 plivo_client: api.LiveKitAPI = None        # Proxied — used for Plivo (India routing)
 plivo_session: aiohttp.ClientSession = None  # Owned session for plivo_client; closed manually on shutdown
 redis_client: redis.Redis = None
+http_client: httpx.AsyncClient = None      # Persistent client for health checks
 
 # ── Authentication ───────────────────────────────────────────────────────
 JWT_SECRET = os.getenv("JWT_SECRET")
@@ -50,18 +55,23 @@ ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
 
 async def get_db_connection():
     """Create a PostgreSQL connection for dashboard queries."""
-    return await asyncpg.connect(
-        user=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
-        database=os.getenv("POSTGRES_DB"),
-        host=os.getenv("POSTGRES_HOST"),
-        port=os.getenv("POSTGRES_PORT"),
-        timeout=5.0,
-    )
+    # Prefer DATABASE_URL if it's set, as it's a single source of truth.
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        return await asyncpg.connect(dsn=database_url, timeout=5.0)
+    else:
+        return await asyncpg.connect(
+            user=os.getenv("POSTGRES_USER"),
+            password=os.getenv("POSTGRES_PASSWORD"),
+            database=os.getenv("POSTGRES_DB"),
+            host=os.getenv("POSTGRES_HOST"),
+            port=os.getenv("POSTGRES_PORT"),
+            timeout=5.0,
+        )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global lk_client, plivo_client, plivo_session, redis_client
+    global lk_client, plivo_client, plivo_session, redis_client, http_client
     api_key = os.getenv("LIVEKIT_API_KEY")
     api_secret = os.getenv("LIVEKIT_API_SECRET")
     lk_url = os.getenv("LIVEKIT_URL")
@@ -97,6 +107,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}")
 
+    # Create a single, persistent httpx client for all health checks
+    http_client = httpx.AsyncClient(timeout=1.5)
+
+    # ── Startup healthcheck ─────────────────────────────────────────
+    logger.info("Running startup healthcheck on all dependencies...")
+    if await _run_health_checks():
+        logger.info("Startup healthcheck: ALL SERVICES HEALTHY")
+    else:
+        logger.warning("Startup healthcheck: one or more services down — refusing dispatch")
+    # ────────────────────────────────────────────────────────────────
+
     yield
 
     for client in [lk_client, plivo_client]:
@@ -104,6 +125,8 @@ async def lifespan(app: FastAPI):
             await client.aclose()
     if plivo_session:
         await plivo_session.close()
+    if http_client:
+        await http_client.aclose()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -231,10 +254,170 @@ async def console_page():
     """Serve the test console."""
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
+# ── Paths that require a clean bill of health before processing ─────────
+_DISPATCH_PATHS = frozenset({
+    "/dispatch-test",
+    "/api/v1/webhooks/telephony",
+    "/api/v1/sip/trunks/outbound",
+    "/api/v1/sip/trunks/outbound/zadarma",
+    "/api/v1/sip/trunks/outbound/twilio",
+    "/api/v1/sip/trunks/outbound/plivo",
+})
+
+
+async def _run_health_checks() -> bool:
+    """Run all service checks concurrently (Python's Promise.all via asyncio.gather)."""
+    # Allow bypassing health checks for local development/testing
+    if os.getenv("BYPASS_HEALTH_CHECKS") == "1":
+        logger.warning("BYPASS_HEALTH_CHECKS is active. Skipping all service health checks.")
+        return True
+
+    checks: dict[str, bool | str] = {}
+
+    async def _check(domain: str, coro, timeout: float = 1.0):
+        try:
+            await asyncio.wait_for(coro, timeout=timeout)
+            checks[domain] = True
+        except Exception as e:
+            checks[domain] = repr(e) # Use repr(e) to get a useful message from TimeoutError
+
+    async def _check_stt():
+        key = os.getenv("DEEPGRAM_API_KEY")
+        if not key:
+            checks["stt_deepgram"] = "DEEPGRAM_API_KEY not set"
+            return
+        try:
+            r = await http_client.get(
+                "https://api.deepgram.com/v1/projects",
+                headers={"Authorization": f"Token {key}"},
+            )
+            checks["stt_deepgram"] = r.is_success
+        except Exception as e:
+            checks["stt_deepgram"] = str(e)
+
+    async def _check_tts():
+        key = os.getenv("CARTESIA_API_KEY")
+        if not key:
+            checks["tts_cartesia"] = "CARTESIA_API_KEY not set"
+            return
+        try:
+            r = await http_client.get(
+                "https://api.cartesia.ai",
+                headers={"X-API-Key": key},
+            )
+            checks["tts_cartesia"] = r.status_code < 500
+        except Exception as e:
+            checks["tts_cartesia"] = str(e)
+
+    async def _check_n8n():
+        url = os.getenv("MANTRAASSIST_BACKEND_URL", "").rstrip("/")
+        if not url:
+            checks["n8n_backend"] = "MANTRAASSIST_BACKEND_URL not set"
+            return
+        try:
+            r = await http_client.get(f"{url}/api/v1/health")
+            checks["n8n_backend"] = r.is_success
+        except Exception as e:
+            checks["n8n_backend"] = str(e)
+
+    async def _check_s3():
+        bucket = os.getenv("AWS_S3_BUCKET_NAME")
+        if not bucket:
+            checks["s3"] = "AWS_S3_BUCKET_NAME not set"
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _check_s3_bucket, bucket),
+                timeout=1.0,
+            )
+            checks["s3"] = True
+        except Exception as e:
+            checks["s3"] = str(e)
+
+    async def _check_postgres():
+        conn = None
+        try:
+            conn = await asyncio.wait_for(get_db_connection(), timeout=1.0)
+            checks["postgres"] = True
+        except Exception as e:
+            checks["postgres"] = repr(e)
+        finally:
+            if conn:
+                try:
+                    await conn.close()
+                except:
+                    pass
+
+    async def _check_redis():
+        if not redis_client:
+            checks["redis"] = "Redis client not initialised"
+            return
+        try:
+            await asyncio.wait_for(redis_client.ping(), timeout=1.0)
+            checks["redis"] = True
+        except Exception as e:
+            checks["redis"] = str(e)
+
+    await asyncio.gather(
+        _check("livekit", lk_client.room.list_rooms(api.ListRoomsRequest()), timeout=1.0),
+        _check_redis(),
+        _check_postgres(),
+        _check_stt(),
+        _check_tts(),
+        _check_n8n(),
+        _check_s3(),
+        return_exceptions=True
+    )
+
+    all_ok = True
+    for service, status in checks.items():
+        if status is True:
+            logger.info(f"  - Healthcheck OK: {service}")
+        else:
+            all_ok = False
+            logger.warning(f"  - Healthcheck FAILED: {service} -> {status}")
+
+    return all_ok
+
+
 @app.get("/health")
 async def health():
-    """Simple health check."""
-    return {"status": "ok", "service": "ui_server"}
+    healthy = await _run_health_checks()
+    return JSONResponse(
+        content={"healthy": healthy}
+    )
+
+
+@app.middleware("http")
+async def health_gate_middleware(request: Request, call_next):
+    """Reject dispatch requests before they reach a handler if any dependency is down."""
+    path = request.url.path
+    if request.method == "POST" and path in _DISPATCH_PATHS:
+        ok = await _run_health_checks()
+        if not ok:
+            logger.warning(f"Health gate blocked {request.method} {path}")
+            return Response(status_code=503)
+    return await call_next(request)
+
+
+def _check_s3_bucket(bucket: str):
+    import boto3
+    _saved = {}
+    for _var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "PLIVO_PROXY"):
+        _val = os.environ.pop(_var, None)
+        if _val is not None:
+            _saved[_var] = _val
+    try:
+        s3 = boto3.client(
+            "s3",
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            region_name=os.getenv("AWS_REGION", "us-east-1"),
+        )
+        s3.head_bucket(Bucket=bucket)
+    finally:
+        os.environ.update(_saved)
 
 @app.post("/dispatch-test")
 async def dispatch_test(request: Request):
@@ -334,9 +517,34 @@ async def handle_outbound_call_webhook(request: Request):
     event_name = payload.get("event_name", "telephony_dispatch")
     logger.info(f"Webhook received call request for event {event_name}: {json.dumps(payload, separators=(',',':'))}")
     
-    # Use call_id or voice_id from payload if available, otherwise use timestamp
+    tos_task_id = payload.get("metadata", {}).get("tos_task_id")
+    
     call_id = payload.get("call_id") or payload.get("voice_id") or payload.get("event_id") or int(time.time())
     room_name = f"call_{call_id}"
+    
+    def _telemetry(message_suffix: str):
+        if tos_task_id:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                report_telemetry(
+                    tos_task_id=tos_task_id,
+                    message=f"[UI Server] {message_suffix}",
+                    call_id=str(call_id),
+                )
+            )
+
+    _telemetry("webhook_received")
+    
+    # Check Redis deduplication lock to prevent concurrent duplicate webhooks for the same call_id
+    if redis_client:
+        lock_acquired = await redis_client.set(f"lock:call:{call_id}", "1", nx=True, ex=600)
+        if not lock_acquired:
+            logger.warning(f"Duplicate telephony webhook hit ignored for call_id: {call_id}")
+            return JSONResponse({
+                "status": "ignored",
+                "message": f"Duplicate request for call_id {call_id} already processing",
+                "room": room_name
+            }, status_code=200)
     
     # Construct phone number in E.164 format
     country_code = payload.get("client_country_code", "").strip("+")
@@ -372,6 +580,7 @@ async def handle_outbound_call_webhook(request: Request):
             )
         )
         logger.info(f"Dispatch created: {dispatch.id}")
+        _telemetry(f"agent_dispatched — room={room_name}")
     except Exception as e:
         logger.error(f"Agent dispatch failed: {e}\n{traceback.format_exc()}")
         return JSONResponse({"error": f"Agent dispatch failed: {str(e)}"}, status_code=500)
@@ -387,6 +596,8 @@ async def handle_outbound_call_webhook(request: Request):
             proxy_msg = "proxied Plivo client" if sip_client == plivo_client else "direct LiveKit client"
             logger.info(f"Step 2: Initiating SIP call to {phone_number} via trunk {trunk_id} using {proxy_msg}" + (f" (Caller ID: {sip_number})" if sip_number else ""))
 
+            _telemetry(f"sip_call_initiating — phone={phone_number}")
+
             sip_part = await sip_client.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     sip_trunk_id=trunk_id,
@@ -400,9 +611,33 @@ async def handle_outbound_call_webhook(request: Request):
                 )
             )
             logger.info(f"SIP Participant created: {sip_part.participant_identity}")
+            _telemetry("sip_call_connected")
         except Exception as e:
             logger.error(f"SIP Call trigger failed for {room_name}: {e}\n{traceback.format_exc()}")
+            _telemetry(f"sip_call_failed — {str(e)[:100]}")
             
+
+            # Before any cleanup, check if the call already connected (room has the SIP participant).
+            # This can happen when a duplicate webhook passes through after the lock expires.
+            call_already_connected = False
+            try:
+                participants = await lk_client.room.list_participants(
+                    api.ListParticipantsRequest(room=room_name)
+                )
+                for p in participants.participants:
+                    if p.identity == f"sip_{call_id}":
+                        call_already_connected = True
+                        logger.info(
+                            f"SIP participant {p.identity} already in room {room_name} — "
+                            f"this is a duplicate trigger_sip, skipping cleanup"
+                        )
+                        break
+            except Exception as check_err:
+                logger.warning(f"Could not check room participants for {room_name}: {check_err}")
+
+            if call_already_connected:
+                return
+
             # Store exact SIP failure reason in Redis for the agent to read
             if redis_client:
                 err_str = str(e).lower()
@@ -444,8 +679,7 @@ async def handle_outbound_call_webhook(request: Request):
                 logger.error(f"Failed to directly save SIP error call log: {db_e}")
 
     # Fire and forget the SIP task
-    import asyncio
-    asyncio.create_task(trigger_sip())
+    asyncio.get_running_loop().create_task(trigger_sip())
 
     # Generate token for anyone needing to join/monitor the call
     token = api.AccessToken(os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET")) \
@@ -668,6 +902,17 @@ async def create_and_call_plivo(request: Request):
         # 3. Trigger Agent Dispatch — use direct client (no proxy needed for LiveKit Cloud)
         call_id = payload.get("call_id") or payload.get("voice_id") or int(time.time())
         room_name = f"call_{call_id}"
+        
+        # Check Redis deduplication lock to prevent concurrent duplicate calls for the same call_id
+        if redis_client:
+            lock_acquired = await redis_client.set(f"lock:call:{call_id}", "1", nx=True, ex=600)
+            if not lock_acquired:
+                logger.warning(f"Duplicate Plivo call request ignored for call_id: {call_id}")
+                return JSONResponse({
+                    "status": "ignored",
+                    "message": f"Duplicate request for call_id {call_id} already processing",
+                    "room": room_name
+                }, status_code=200)
 
         logger.info(f"Dispatching agent to room {room_name}")
         await lk_client.agent_dispatch.create_dispatch(

@@ -67,7 +67,7 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
         logger.warning("MANTRAASSIST_BACKEND_URL not set — skipping backend webhook")
         return False
 
-    url = f"{base_url}/webhooks/n8n"
+    url = f"{base_url}/api/v1/webhooks/n8n"
     
     timestamp = str(int(time.time()))
     
@@ -461,6 +461,40 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
         except:
             pass
         return sentiment_score, next_call_on, custom_fields
+
+
+async def report_telemetry(
+    tos_task_id: str,
+    message: str,
+    call_id: str = None,
+    level: str = "info",
+    tos_token: str = None,
+) -> bool:
+    tos_url = os.getenv("TOS_ENDPOINT", "").rstrip("/")
+    if not tos_url:
+        return False
+    url = f"{tos_url}/api/telemetry/{tos_task_id}/log"
+    token = tos_token or os.getenv("TOS_SERVICE_SECRET", "")
+
+    body = {"level": level, "message": message}
+    if call_id:
+        body["call_id"] = str(call_id)
+
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json=body, headers=headers)
+            if not resp.is_success:
+                logger.warning(f"TOS telemetry {resp.status_code} for task {tos_task_id}: {message}")
+                return False
+            logger.info(f"TOS telemetry OK ({resp.status_code}) for task {tos_task_id}: {message}")
+            return True
+    except Exception as e:
+        logger.warning(f"TOS telemetry error for task {tos_task_id}: {e}")
+        return False
 
 
 def normalize_to_iso8601(dt_str: Optional[str]) -> Optional[str]:

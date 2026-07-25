@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 import redis.asyncio as redis
 from livekit import api
+from mantra.utils import report_telemetry
 
 # Load environment variables
 load_dotenv(".env.local")
@@ -136,8 +137,18 @@ async def main():
                         payload = json.loads(call_entry)
                         call_id = payload.get("call_id") or payload.get("voice_id")
                         room_name = payload.get("_resolved_room_name", f"call_{call_id}")
+                        tos_task_id = payload.get("metadata", {}).get("tos_task_id")
 
                         logger.info(f"Dequeued call {call_id}. Capacity before: {active_count}. Available: {available_capacity}")
+
+                        if tos_task_id:
+                            asyncio.create_task(
+                                report_telemetry(
+                                    tos_task_id=tos_task_id,
+                                    message=f"[Dispatcher] call_dequeued — call_id={call_id}",
+                                    call_id=str(call_id),
+                                )
+                            )
 
                         # 4. State Update
                         await redis_client.hset("calls:active", call_id, room_name)
@@ -147,13 +158,28 @@ async def main():
                         try:
                             await dispatch_call(lk_client, payload)
                             await redis_client.set(f"calls:status:{call_id}", "in_progress")
+                            if tos_task_id:
+                                asyncio.create_task(
+                                    report_telemetry(
+                                        tos_task_id=tos_task_id,
+                                        message=f"[Dispatcher] call_dispatched — call_id={call_id}",
+                                        call_id=str(call_id),
+                                    )
+                                )
                         except Exception as e:
                             # Re-queue on failure and free up capacity
                             logger.error(f"Failed to dispatch {call_id}. Re-queueing...")
                             await redis_client.hdel("calls:active", call_id)
-                            # Increment score to push it back slightly, or keep same score
                             await redis_client.zadd("queue:pending", {call_entry: score + 10})
                             await redis_client.set(f"calls:status:{call_id}", "failed_dispatch_requeued")
+                            if tos_task_id:
+                                asyncio.create_task(
+                                    report_telemetry(
+                                        tos_task_id=tos_task_id,
+                                        message=f"[Dispatcher] dispatch_failed — {str(e)[:100]}, call_id={call_id}",
+                                        call_id=str(call_id),
+                                    )
+                                )
             except Exception as e:
                 logger.error(f"Dispatcher loop error: {e}")
             

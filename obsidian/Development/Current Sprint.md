@@ -4,13 +4,19 @@
 > **Last Updated:** 2026-06-30  
 > **Status:** Active maintenance + incremental features
 
+## Recently Completed
+
+- [x] Comprehensive `/health` readiness endpoint — all-service gate before accepting calls from MA
+
 ## In Progress
 
 - [ ] Migrate remaining `mantra/agent.py` tool callbacks to separate module
 - [ ] Set up automated test suite (currently manual only)
 
-## Recently Completed
+## Previously Completed
 
+- [x] Race condition fix v2: lock TTL 30→600s + duplicate room guard + agent Redis trust fix — 2026-07-24
+- [x] Race condition fix v1: Redis dedup lock + null safety + logger fix — 2026-07-24
 - [x] Cartesia TTS migration to LiveKit Inference — 2026-06
 - [x] Dynamic tone/style configurations for agent prompts — 2026-06
 - [x] `end_call` tool with graceful disconnect — 2026-05
