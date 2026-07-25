@@ -22,8 +22,9 @@ Models pre-cached during build (Silero VAD, HuggingFace, Torch).
 ### Entrypoint (`entrypoint.sh`)
 
 Two modes:
-- `agent` — `uv run python -m mantra.agent start`
-- `ui` — `uv run python -m mantra.ui_server`
+- `agent` — `uv run python -m app.agent.entrypoint start`
+- `ui` — `uv run python -m app.main`
+- `dispatcher` — `uv run python -m app.routines`
 
 ### Local Development (`dev.sh`)
 

@@ -28,16 +28,29 @@ dependencies = [
     "pypdf>=3.17.0",
     "trafilatura>=1.8.0",
     "prometheus-fastapi-instrumentator>=8.0.2",
+    "pydantic-settings>=2.0.0",
+    "colorama>=0.4.6",
+    "aiohttp>=3.13.5",
+    "numpy>=1.26.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["mantra*"]
-exclude = ["static*", "recordings*", "massist*"]
+include = ["app*", "mcp*"]
+exclude = ["static*", "recordings*", "massist*", "tests*", "mantra*"]
 
 [project.scripts]
-mantra-agent = "mantra.agent:run_agent"
-mantra-ui = "mantra.ui_server:main"
+mantra-agent = "app.agent.entrypoint:run_agent"
+mantra-ui = "app.main:main"
+app-agent = "app.agent.entrypoint:run_agent"
+app-ui = "app.main:main"
+app-dispatcher = "app.routines.__main__:main"
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -51,3 +64,7 @@ torch = { index = "pytorch-cpu" }
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]

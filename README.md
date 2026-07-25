@@ -48,7 +48,8 @@ The agent is integrated with a SIP-based outbound system. Trigger calls by sendi
    _This script runs both the Voice Agent and the UI Server._
 
 3. **Access the Interface:**
-   Visit `http://localhost:8081` to monitor and trigger tests.
+   Visit `http://localhost:8081` to monitor and trigger tests.  
+   If port `8081` is already in use (e.g. phpMyAdmin), run with `PORT=8091 ./dev.sh` and open `http://localhost:8091`.
 
 ### Infrastructure & Logging
 
@@ -58,7 +59,7 @@ This project relies on an isolated database environment to store call logs, tran
   - **Required:** `pgvector` extension must be installed on the PostgreSQL server.
     - Ubuntu/Debian: `sudo apt-get install postgresql-16-pgvector`
     - Or compile from source: https://github.com/pgvector/pgvector
-  - Run the KB migration once: `python mantra/migrations/001_kb_pages.py`
+  - Run the KB migration once: `uv run python scripts/migrate_kb_pages.py` (or apply `migrations/*.sql`)
 - **Redis:** Used for capacity management and connection state routing, running locally on port `6379`.
 - **Logging Pipeline:** Call timelines, statuses, recording URLs, and detailed JSON payloads are automatically saved into the isolated `call_logs_db` after every call.
 
@@ -133,9 +134,10 @@ The container connects to an external PostgreSQL. Ensure the server has:
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-Then run the migration:
+Then run migrations (SQL under `migrations/`, or the helper scripts):
 ```bash
-docker run --env-file .env.local lkt-mantra python mantra/migrations/001_kb_pages.py
+# Prefer applying migrations/*.sql against your Postgres, or:
+docker run --env-file .env.local lkt-mantra uv run python scripts/migrate_kb_pages.py
 ```
 
 ---
@@ -143,28 +145,32 @@ docker run --env-file .env.local lkt-mantra python mantra/migrations/001_kb_page
 ## 📁 Project Structure
 
 ```
-lkt/
-├── mantra/
-│   ├── agent.py              # Voice agent (STT→LLM→TTS + KB tool)
-│   ├── ui_server.py          # FastAPI dashboard + KB endpoints
-│   ├── knowledge_base.py     # KB core: chunking, embeddings, vector search
-│   ├── utils.py              # Recording, S3, DB logging, analysis
-│   ├── dispatcher.py         # Redis queue → LiveKit dispatch
-│   ├── email_alerts.py       # SMTP crash notifications
-│   └── migrations/
-│       └── 001_kb_pages.py   # KB schema + pgvector setup
-├── static/
-│   ├── dashboard.html        # Dashboard UI (with KB upload tabs)
-│   ├── dashboard.js          # Dashboard logic
-│   ├── index.html            # Test console
-│   └── login.html            # Auth page
+livekit/
+├── app/                      # Application package (replaces legacy mantra/)
+│   ├── main.py               # FastAPI app factory + lifespan
+│   ├── agent/                # Voice agent entrypoint, tools, finalize
+│   ├── routers/              # HTTP routes (SIP, webhooks, dashboard, KB, …)
+│   ├── services/             # LiveKit, Redis, DB, auth, SIP, S3, webhooks
+│   ├── kb/                   # KB engine, chunker, retriever
+│   ├── dispatcher/           # Queue → LiveKit dispatch
+│   ├── routines/             # Dispatcher loop + zombie cleanup
+│   ├── config/               # Settings, constants, prompts loader
+│   ├── models/               # Pydantic schemas
+│   └── static/               # Copy of UI assets (served from repo-root static/ too)
+├── static/                   # Dashboard, console, login, KB chat UI
+├── migrations/               # SQL: kb_pages, call_logs, org_configs
+├── prompts/                  # System / handoff / guardrail markdown prompts
+├── config/                   # inbound_mappings.json, voices.json
 ├── mcp/
 │   └── server.py             # MCP Postgres server
-├── pyproject.toml            # Python deps (uv)
+├── scripts/                  # Migration helpers
+├── tests/                    # pytest suite
+├── pyproject.toml            # Python deps (uv); scripts: mantra-agent, app-ui, …
 ├── uv.lock
 ├── Dockerfile
 ├── entrypoint.sh
 ├── dev.sh
+├── report.md                 # Latest restructure verification report
 └── README.md
 ```
 

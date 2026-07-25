@@ -19,7 +19,7 @@
 - `call_id` — Unique call identifier (from payload or auto-generated)
 - `room_name` — LiveKit room: `call_{call_id}` or `test_{call_id}`
 - `trunk_id` — SIP trunk identifier
-- Module loggers: `mantra.{module_name}`
+- Module loggers: `app.{module_name}` (e.g. `app.agent.entrypoint`, `app.main`)
 
 ## Process Boundaries
 

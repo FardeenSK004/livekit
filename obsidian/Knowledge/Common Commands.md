@@ -4,22 +4,25 @@
 
 ```bash
 # Install dependencies
-uv sync
+uv sync --group dev
 
-# Launch dev environment
+# Launch dev environment (agent + UI + dispatcher + MCP)
 ./dev.sh
 
 # Run agent only
-uv run python -m mantra.agent dev
+uv run python -m app.agent.entrypoint dev
 
 # Run UI server only
-uv run python -m mantra.ui_server
+uv run python -m app.main
 
 # Run dispatcher
-uv run python -m mantra.dispatcher
+uv run python -m app.routines
 
 # Run MCP server
 uv run python mcp/server.py
+
+# Run tests
+uv run python -m pytest tests/ -v
 ```
 
 ## Docker
@@ -33,6 +36,9 @@ docker run --env-file .env.local mantra-agent agent
 
 # Run UI
 docker run --env-file .env.local -p 8081:8081 mantra-agent ui
+
+# Run dispatcher
+docker run --env-file .env.local mantra-agent dispatcher
 ```
 
 ## Testing (Manual)

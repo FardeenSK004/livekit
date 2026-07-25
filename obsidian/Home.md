@@ -1,9 +1,9 @@
 # Mantra Voice Agent — Knowledge Base
 
 > **Version:** 0.1.0  
-> **Package:** `livekit-agent`  
+> **Package:** `livekit-agent` (`app/`)  
 > **Repository:** `git@github.com:FardeenSK004/livekit.git` (fork of Mantracare-Org/livekit)  
-> **Last Updated:** 2026-06-30
+> **Last Updated:** 2026-07-25
 
 ---
 
@@ -15,8 +15,9 @@
 | 🌐 APIs | [[Architecture/APIs.md\|API Reference]] |
 | 🗄️ Database | [[Architecture/Database.md\|Database Schema]] |
 | ⚙️ Infrastructure | [[Architecture/Infrastructure.md\|Infrastructure]] |
+| 🔧 Restructure | [[Architecture/Restructure Plan.md\|Restructure Plan]] · [[Development/Restructure Implementation.md\|Implementation]] · [[Development/Restructure Verification Report.md\|Verification Report]] |
 | 🎯 Features | [[Features/Feature Index.md\|Feature Index]] |
-| 📋 Development | [[Development/TODO.md\|TODO]] · [[Development/Changelog.md\|Changelog]] · [[Development/Bugs.md\|Bugs]] |
+| 📋 Development | [[Development/TODO.md\|TODO]] · [[Development/Changelog.md\|Changelog]] · [[Development/Bugs.md\|Bugs]] · [[Development/Current Sprint.md\|Current Sprint]] |
 | 🧠 Knowledge | [[Knowledge/Coding Standards.md\|Coding Standards]] · [[Knowledge/Conventions.md\|Conventions]] |
 | 📖 Context | [[Context/Project Summary.md\|Project Summary]] · [[Context/Stack.md\|Stack]] · [[Context/Repository Map.md\|Repository Map]] |
 
@@ -40,18 +41,19 @@ Telephony Provider → Webhook → FastAPI → Redis Queue → Dispatcher → Li
 
 | Metric | Value |
 |--------|-------|
-| Python modules | 7 (`mantra/`) |
-| Frontend files | 5 (`static/`) |
+| Package | `app/` (production; restructure complete on `feature/restructure`) |
+| Frontend files | `static/` (+ copy under `app/static/`) |
 | MCP server | 1 (`mcp/server.py`) |
-| Total source lines | ~6,206 |
-| Core agent file | `mantra/agent.py` — 1,513 lines |
-| API server file | `mantra/ui_server.py` — 2,143 lines |
-| KB module | `mantra/knowledge_base.py` — 461 lines |
+| Agent entrypoint | `app/agent/entrypoint.py` |
+| API server | `app/main.py` + `app/routers/*` |
+| KB module | `app/kb/` |
 
 ---
 
 ## Recent Changelog
 
+- **2026-07-25:** Final restructure verification — **GO WITH CAVEATS** (39/39 endpoint smoke; see [[Development/Restructure Verification Report.md|Verification Report]] / `report.md`)
+- **2026-07-25:** Restructure cutover complete — `mantra/` removed; production entrypoints point at `app.*`
 - **2026-06-30:** Cartesia TTS migrated to LiveKit Inference, removed redundant API key management, added env var fallbacks for MAX_CONCURRENCY
 - **2026-06:** Dynamic tone/style configurations for agent prompts, emotional tone optimization for Cartesia
 - **2026-05:** `end_call` tool with graceful disconnect, automated crash email notifications, webhook-based call log storage
@@ -61,6 +63,6 @@ Telephony Provider → Webhook → FastAPI → Redis Queue → Dispatcher → Li
 ## Repository Status
 
 - **Deployment:** LiveKit Cloud (`mantraassist-0ek43ife`)
-- **Testing:** Manual only (no automated test suite)
+- **Testing:** `uv run python -m pytest tests/ -v`
 - **Docs:** Obsidian vault at `obsidian/`
-- **Planning:** `.planning/codebase/` contains pre-vault architecture docs
+- **Active branch work:** `feature/restructure` — Phases 0–8 complete; final verification done (GO WITH CAVEATS)

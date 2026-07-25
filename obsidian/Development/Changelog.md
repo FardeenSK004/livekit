@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-07-25
+
+- **fix:** Dashboard APIs now require JWT (`Depends(require_auth)` on `/api/v1/dashboard/*`) — restructure had left `require_auth` unused
+- **fix:** Telephony webhook returns 400 on invalid JSON instead of unhandled 500
+- **verify:** Final restructure verification on `feature/restructure` — **GO WITH CAVEATS**; unit 7/7, import smoke OK, UI/agent/dispatcher start, endpoint smoke **39/39** after auth/JSON fixes
+- **doc:** Added durable verification report — `report.md` (repo root) + [[Development/Restructure Verification Report.md|Restructure Verification Report]]; linked from Home, Current Sprint, Implementation, Plan
+- **doc:** README structure/Docker migration paths updated to `app/` + `migrations/*.sql` (removed stale `mantra/` tree)
+- **refactor:** Completed codebase restructure on `feature/restructure` — `app/` replaces `mantra/`
+  - Phases 1–3: config, models, services
+  - Phase 4: Full UI routers + `app/main.py` (55 routes, production path parity)
+  - Phase 5: Full agent port (`app.agent.entrypoint`, LiveKit `agent_name=mantra-agent`)
+  - Phase 6: Dispatcher + zombie cleanup (`python -m app.routines`)
+  - Phase 7: KB engine/chunker/retriever/ingestion under `app/kb/`
+  - Phase 8: pytest suite, entrypoint cutover (`mantra-agent`/`mantra-ui` → `app.*`), static copied to `app/static/`, `mantra/` deleted
+- **deps:** Added `pytest` / `pytest-asyncio` (dev), `numpy`; package discovery is `app*` + `mcp*` only
+- **doc:** Updated Restructure Plan/Implementation, Current Sprint, Home, Common Commands, Overview
+
 ## 2026-07-24
 
 - **fix:** Raised concurrency limits — `AgentServer(num_idle_processes)` 1→20, `livekit.toml` replicas 1→2, `MAX_CONCURRENCY`/`LIVEKIT_MAX_ROOMS`/`AGENT_MAX_WORKERS` 5→20 across `.env`, `.env.local`. Root cause: agent deployment was pinned to 1 replica with 1 idle worker, capping effective concurrency at ~1-2 calls regardless of service-side limits.

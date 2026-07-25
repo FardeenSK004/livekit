@@ -11,7 +11,7 @@
 ## High Priority
 
 - [ ] Extract LLM prompts from `agent.py` into separate config/prompts module
-- [ ] Set up automated test suite (pytest for utils, integration test for call flow)
+- [x] Set up automated test suite (pytest for utils/routers/kb; expand integration coverage) — 2026-07-25
 - [ ] Add input validation to all webhook endpoints
 - [ ] Implement Redis Pub/Sub for dispatcher (replace 0.5s polling)
 - [ ] **KB: Implement vector/embedding search** — Add `pgvector` extension, OpenAI embedding generation, hybrid search fallback

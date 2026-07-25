@@ -4,7 +4,7 @@
 cleanup() {
     echo ""
     echo "Stopping services..."
-    kill $MCP_PID $AGENT_PID $UI_PID 2>/dev/null
+    kill $MCP_PID $AGENT_PID $UI_PID $DISPATCHER_PID 2>/dev/null
     exit
 }
 
@@ -16,12 +16,16 @@ uv run python mcp/server.py &
 MCP_PID=$!
 
 echo "Starting LiveKit Agent (dev mode)..."
-uv run python -m mantra.agent dev &
+uv run python -m app.agent.entrypoint dev &
 AGENT_PID=$!
 
 echo "Starting UI Server (FastAPI)..."
-uv run python -m mantra.ui_server &
+uv run python -m app.main &
 UI_PID=$!
+
+echo "Starting Call Dispatcher..."
+uv run python -m app.routines &
+DISPATCHER_PID=$!
 
 # Get local IP address (works on Linux/macOS)
 LOCAL_IP=$(hostname -I | awk '{print $1}')
@@ -50,4 +54,4 @@ echo ""
 echo "Press Ctrl+C to stop all services."
 
 # Wait for background processes to finish
-wait $MCP_PID $AGENT_PID $UI_PID
+wait $MCP_PID $AGENT_PID $UI_PID $DISPATCHER_PID
