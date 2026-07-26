@@ -190,6 +190,7 @@ class AssistantFunctions:
                 payload = json.loads(job_metadata)
                 self.call_id = str(payload.get("call_id") or payload.get("voice_id") or "")
                 self.tos_task_id = payload.get("metadata", {}).get("tos_task_id")
+                self.tos_task_id = payload.get("tos_task_id") or payload.get("metadata", {}).get("tos_task_id")
             except Exception:
                 pass
 
@@ -279,6 +280,7 @@ async def entrypoint(ctx: JobContext):
             payload = json.loads(ctx.job.metadata)
             call_id = payload.get("call_id") or payload.get("voice_id") or ctx.job.id
             tos_task_id = payload.get("metadata", {}).get("tos_task_id")
+            tos_task_id = payload.get("tos_task_id") or payload.get("metadata", {}).get("tos_task_id")
         except:
             pass
 
@@ -311,27 +313,7 @@ async def entrypoint(ctx: JobContext):
     # Session ID for S3 key naming
     session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Ensure call is tracked in Redis (critical for inbound calls that bypass the queue)
-    try:
-        redis_url = os.getenv("REDIS_URL")
-        import redis.asyncio as redis
-        r = redis.from_url(redis_url, decode_responses=True)
-        # If it's an inbound call, it won't be in the hash yet.
-        is_tracked = await r.hexists("calls:active", call_id)
-        if not is_tracked:
-            MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", os.getenv("CARTESIA_MAX_CONCURRENCY", "5")))
-            active_count = await r.hlen("calls:active")
-            if active_count >= MAX_CONCURRENCY:
-                logger.warning(f"Capacity full ({active_count}/{MAX_CONCURRENCY}). Rejecting inbound call {call_id}.")
-                await r.aclose()
-                await ctx.room.disconnect()
-                return
-            await r.hset("calls:active", call_id, ctx.room.name)
-            await r.set(f"calls:status:{call_id}", "in_progress_inbound")
-            logger.info(f"Registered inbound call {call_id} in Redis calls:active")
-        await r.aclose()
-    except Exception as e:
-        logger.error(f"Failed to register active call in Redis: {e}")
+    # NOTE: Redis logic for concurrency management and call tracking has been removed.
 
     # Fully in-memory recorder — no disk I/O
     recorder = SessionRecorder()
@@ -814,6 +796,7 @@ Follow these specific instructions:
             recording_url = ""
             transcript_data = ""
             summary_text = ""
+            tos_sent = False
             duration = 0
             call_status = "Error"
             webhook_payload = None
@@ -840,24 +823,8 @@ Follow these specific instructions:
                         break
 
                 call_id = call_payload.get("call_id") or call_payload.get("voice_id") or ctx.job.id
-                
-                # Always check if there was a SIP-level error in Redis first
-                redis_status = None
-                try:
-                    redis_url = os.getenv("REDIS_URL")
-                    import redis.asyncio as redis
-                    r = redis.from_url(redis_url, decode_responses=True)
-                    redis_status = await r.get(f"sip_error_status:{call_id}")
-                    await r.aclose()
-                except Exception as redis_err:
-                    logger.error(f"Failed to fetch precise SIP status from Redis: {redis_err}")
-                
-                if redis_status and not call_state["user_joined"]:
-                    # Only trust Redis SIP error if the user never joined.
-                    # If the user joined and spoke, the call connected — ignore stale Redis status
-                    # left by a duplicate webhook's trigger_sip exception handler.
-                    call_status = redis_status
-                elif not call_state["user_joined"]:
+
+                if not call_state["user_joined"]:
                     # Fallback: if it waited less than 25s before terminating, it's Busy/Rejected.
                     # If it waited more than 25s, it's a No Answer timeout.
                     elapsed_time = asyncio.get_event_loop().time() - entrypoint_start_time
@@ -1022,24 +989,12 @@ Follow these specific instructions:
                 logger.info("Delivering post-call webhook to backend...")
                 logger.info(f"Webhook Payload:\n{json.dumps(webhook_payload)}")
                 delivered = await send_to_backend(webhook_payload)
+                tos_sent = True
                 await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if delivered else 'no'}")
             except Exception as e:
                 logger.error(f"Webhook delivery failed: {e}", exc_info=True)
                 delivered = False
 
-            # 9. Free active call slot in Redis
-            try:
-                call_id = call_payload.get("call_id")
-                if call_id:
-                    redis_url = os.getenv("REDIS_URL")
-                    import redis.asyncio as redis
-                    r = redis.from_url(redis_url, decode_responses=True)
-                    await r.hdel("calls:active", call_id)
-                    await r.set(f"calls:status:{call_id}", "completed")
-                    await r.aclose()
-                    logger.info(f"Freed capacity slot for call {call_id} in Redis")
-            except Exception as e:
-                logger.error(f"Failed to free Redis capacity slot: {e}")
 
             await _telemetry(f"call_complete — status={call_status}, duration={duration}s")
 
@@ -1050,7 +1005,8 @@ Follow these specific instructions:
                 f"Status: {webhook_payload.get('data', {}).get('call_status', 'N/A')} | "
                 f"Duration: {duration}s | "
                 f"S3: {'✓' if recording_url else '✗'} | "
-                f"Backend: {'✓' if delivered else '✗'}"
+                f"Backend: {'✓' if delivered else '✗'} | "
+                f"TOS: {'✓' if tos_sent else '✗'}"
             )
 
         await asyncio.shield(finalize())

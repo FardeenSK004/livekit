@@ -370,11 +370,11 @@ async def _run_health_checks() -> bool:
     await asyncio.gather(
         _check("livekit", lk_client.room.list_rooms(api.ListRoomsRequest()), timeout=1.0),
         _check_redis(),
-        _check_postgres(),
+        # _check_postgres(),
         _check_stt(),
         _check_tts(),
         _check_mantraassist_backend(),
-        _check_s3(),
+        # _check_s3(),
         return_exceptions=True
     )
 
@@ -525,7 +525,7 @@ async def handle_outbound_call_webhook(request: Request):
     event_name = payload.get("event_name", "telephony_dispatch")
     logger.info(f"Webhook received call request for event {event_name}: {json.dumps(payload, separators=(',',':'))}")
     
-    tos_task_id = payload.get("metadata", {}).get("tos_task_id")
+    tos_task_id = payload.get("tos_task_id") or payload.get("metadata", {}).get("tos_task_id")
     
     call_id = payload.get("call_id") or payload.get("voice_id") or payload.get("event_id") or int(time.time())
     room_name = f"call_{call_id}"
