@@ -2,6 +2,19 @@
 
 ## 2026-07-26
 
+### TOS Telemetry Cleanup
+- **feat:** `report_telemetry()` now accepts optional `data` dict for structured payloads
+- **feat:** Post-call processing sends rich TOS payload with `s3_recording`, `has_transcript`, `summary`, `new_stage_id`, `call_status`, `duration_seconds`, `backend_delivered`, `next_call_on`, appointment fields
+- **refactor:** Stripped verbose debug logging from `report_telemetry()` (no more request body/headers printed)
+- **refactor:** Stage telemetry messages use natural language (`"Call ended by agent"`, `"Customer joined the call"`, `"Agent voice engine ready"`)
+- **chore:** Removed `log_io.py` colorama logging + `colorama` dependency (clean for production)
+
+### Timezone Fix
+- **fix:** `next_call_on` (scheduled call time) now sent in UTC in both `agent.py` and `utils.py` fallbacks
+- **fix:** `email_alerts.py` crash timestamp uses local time (was labelled `UTC` but showed local)
+
+## Earlier 2026-07-26
+
 ### TOS Telemetry & Health Gate
 
 - **feat:** Added `report_telemetry()` to `mantra/utils.py` — POSTs structured telemetry logs to TOS endpoint (`/api/telemetry/{task_id}/log`). Used across all three services.

@@ -1,11 +1,13 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-06-30  
+> **Last Updated:** 2026-07-26  
 > **Status:** Active maintenance + incremental features
 
 ## Recently Completed
 
+- [x] TOS telemetry cleanup — structured `data` payload, natural language stage messages, stripped verbose logging
+- [x] Timezone fix — `next_call_on` sent in UTC for scheduled times, rest stays local
 - [x] TOS telemetry pipeline — `report_telemetry()` in utils.py, integrated across agent/dispatcher/ui_server
 - [x] Health gate middleware — blocks dispatch on dependency failure (HTTP 503)
 - [x] Startup healthcheck — parallel checks on all services at boot
