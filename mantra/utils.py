@@ -70,6 +70,8 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
     url = f"{base_url}/api/v1/webhooks/n8n"
     
     timestamp = str(int(time.time()))
+
+    timestamp_iso = datetime.datetime.utcfromtimestamp(int(timestamp)).strftime("%Y-%m-%dT%H:%M:%S")
     
     if not payload:
         payload_str = '{}'
@@ -83,6 +85,7 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
         "Content-Type": "application/json",
         "x-timestamp": timestamp,
         "x-source": "n8n",
+        "x-timestamp-iso": timestamp_iso
     }
     
     if webhook_secret:
@@ -505,7 +508,7 @@ async def report_telemetry(
 
 
 def normalize_to_iso8601(dt_str: Optional[str]) -> Optional[str]:
-    """Convert 'YYYY-MM-DD HH:MM:SS' to ISO-8601 'YYYY-MM-DDTHH:MM:SS.000Z'.
+    """Convert 'YYYY-MM-DD HH:MM:SS' to local ISO-8601 'YYYY-MM-DDTHH:MM:SS' (no offset).
 
     Returns None if input is None/empty. Passes through unparseable strings unchanged.
     """
@@ -513,6 +516,6 @@ def normalize_to_iso8601(dt_str: Optional[str]) -> Optional[str]:
         return None
     try:
         dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        return dt.strftime("%Y-%m-%dT%H:%M:%S")
     except (ValueError, TypeError):
         return dt_str

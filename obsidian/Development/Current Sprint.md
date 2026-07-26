@@ -15,6 +15,10 @@
 - [x] Room participant duplicate guard in SIP failure handler
 - [x] `send_to_backend` URL fix (`/webhooks/n8n` → `/api/v1/webhooks/n8n`)
 
+## Recently Completed
+
+- [x] Post-call data & timestamps — TOS delivery fix, `next_call_on` format, explicit timestamp fields for n8n
+
 ## In Progress
 
 - [ ] Migrate remaining `mantra/agent.py` tool callbacks to separate module
