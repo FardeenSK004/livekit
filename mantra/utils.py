@@ -472,7 +472,9 @@ async def report_telemetry(
 ) -> bool:
     tos_url = os.getenv("TOS_ENDPOINT", "").rstrip("/")
     if not tos_url:
+        logger.error("TOS_ENDPOINT environment variable not set. Cannot send telemetry.")
         return False
+
     url = f"{tos_url}/api/telemetry/{tos_task_id}/log"
     token = tos_token or os.getenv("TOS_SERVICE_SECRET", "")
 
@@ -483,17 +485,36 @@ async def report_telemetry(
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+        logger.info("TOS telemetry request will be sent with an Authorization header.")
+    else:
+        logger.warning("TOS_SERVICE_SECRET is not set. Sending telemetry request without Authorization.")
+
+    logger.info(f"--- Preparing to send TOS Telemetry ---")
+    logger.info(f"TOS Endpoint: {tos_url}")
+    logger.info(f"Full URL: {url}")
+    logger.info(f"Request Body: {json.dumps(body)}")
+    logger.info(f"Request Headers: {json.dumps(headers)}")
+    logger.info(f"-----------------------------------------")
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(proxy=None, timeout=10.0) as client:
             resp = await client.post(url, json=body, headers=headers)
+            logger.info(f"TOS telemetry response received with status code: {resp.status_code}")
+            logger.info(f"TOS telemetry response body: {resp.text}")
+
             if not resp.is_success:
-                logger.warning(f"TOS telemetry {resp.status_code} for task {tos_task_id}: {message}")
+                logger.warning(f"TOS telemetry call failed with status {resp.status_code} for task {tos_task_id}.")
                 return False
-            logger.info(f"TOS telemetry OK ({resp.status_code}) for task {tos_task_id}: {message}")
+
+            logger.info(f"TOS telemetry sent successfully for task {tos_task_id}.")
             return True
+    except httpx.RequestError as e:
+        logger.error(f"An HTTP request error occurred during TOS telemetry call: {e.__class__.__name__}")
+        logger.error(f"Request URL: {e.request.url if e.request else 'N/A'}")
+        logger.error(f"This could be a DNS issue, a firewall block, a proxy error, or a timeout. Details: {e}", exc_info=False)
+        return False
     except Exception as e:
-        logger.warning(f"TOS telemetry error for task {tos_task_id}: {e}")
+        logger.error(f"An unexpected error occurred during TOS telemetry call for task {tos_task_id}: {e}", exc_info=True)
         return False
 
 
