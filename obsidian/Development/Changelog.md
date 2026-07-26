@@ -2,8 +2,23 @@
 
 ## 2026-07-26
 
-- **feat:** Added `health_gate_middleware` to block call dispatching if any critical service (LiveKit, Redis, etc.) is down.
-- **fix:** Integrated post-call data pipeline (`TELEPHONY_UI_URL`) to ensure agent call logs are correctly saved to the local database via the UI server.
+### TOS Telemetry & Health Gate
+
+- **feat:** Added `report_telemetry()` to `mantra/utils.py` — POSTs structured telemetry logs to TOS endpoint (`/api/telemetry/{task_id}/log`). Used across all three services.
+  - `AssistantFunctions.__init__` now parses `tos_task_id` from `job_metadata` and provides `_telemetry()` helper for tool callbacks.
+  - Agent `entrypoint()` now reports: `agent_started`, `room_connected`, `participant_joined`, `voice_engine_initialized`, `post_processing_started`, `data_sent_to_backend`, `call_complete`.
+  - Dispatcher reports: `call_dequeued`, `call_dispatched`, `dispatch_failed`.
+  - UI server reports: `webhook_received`, `agent_dispatched`, `sip_call_initiating`, `sip_call_connected`, `sip_call_failed`.
+- **feat:** Added `health_gate_middleware` to `ui_server.py` — blocks dispatch requests (`POST /dispatch-test`, `/api/v1/webhooks/telephony`, SIP trunk endpoints) with HTTP 503 if any critical service is down.
+- **feat:** Comprehensive startup healthcheck — runs parallel checks on LiveKit, Redis, Deepgram, Cartesia, MantraAssist backend, PostgreSQL, S3 on server start.
+- **feat:** Redis deduplication lock (`lock:call:{call_id}`, TTL 600s) on `handle_outbound_call_webhook` and `create_and_call_plivo` to prevent concurrent duplicate webhooks.
+- **feat:** Room participant check in SIP failure handler — before cleanup, verifies SIP participant isn't already in room (duplicate guard from race condition fix v2).
+- **fix:** `send_to_backend` URL corrected from `/webhooks/n8n` to `/api/v1/webhooks/n8n`.
+- **refactor:** Removed Redis concurrency management (`calls:active`, `calls:status`) from `agent.py` — call tracking responsibility shifted to dispatcher + telemetry.
+- **refactor:** Added persistent `httpx.AsyncClient` to UI server lifespan for all health checks.
+- **refactor:** `get_db_connection` now prefers `DATABASE_URL` env var over individual PG env vars.
+- **chore:** Logger handler guard in `ui_server.py` — prevents duplicate handler attachment.
+- **chore:** `logger.propagate` set to `True` in `ui_server.py` for consistent log visibility.
 
 ## 2026-07-25
 

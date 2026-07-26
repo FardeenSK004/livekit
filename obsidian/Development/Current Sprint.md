@@ -6,7 +6,12 @@
 
 ## Recently Completed
 
-- [x] Comprehensive `/health` readiness endpoint — all-service gate before accepting calls from MA
+- [x] TOS telemetry pipeline — `report_telemetry()` in utils.py, integrated across agent/dispatcher/ui_server
+- [x] Health gate middleware — blocks dispatch on dependency failure (HTTP 503)
+- [x] Startup healthcheck — parallel checks on all services at boot
+- [x] Redis dedup lock on webhook endpoints — prevents duplicate call processing
+- [x] Room participant duplicate guard in SIP failure handler
+- [x] `send_to_backend` URL fix (`/webhooks/n8n` → `/api/v1/webhooks/n8n`)
 
 ## In Progress
 
