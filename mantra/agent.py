@@ -194,7 +194,7 @@ class AssistantFunctions:
             except Exception:
                 pass
 
-    def _telemetry(self, message: str, call_id: str = None):
+    def _telemetry(self, message: str, call_id: str = None, data: dict = None):
         if self.tos_task_id:
             cid = call_id or self.call_id or ""
             create_bg_task(
@@ -202,13 +202,14 @@ class AssistantFunctions:
                     tos_task_id=self.tos_task_id,
                     message=f"[Agent Worker] {message}",
                     call_id=cid,
+                    data=data,
                 )
             )
 
     @llm.function_tool(description="End the call. Call this tool when the conversation is over — the user said goodbye, is not interested, or there is nothing left to discuss.")
     async def end_call(self):
         logger.info("Agent decided to end the call via function tool. Waiting for speech to finish before disconnecting.")
-        self._telemetry("call_ended")
+        self._telemetry("Call ended by agent")
         async def graceful_disconnect():
             # Wait for the agent to finish speaking her goodbye, with a safety cap
             if self.session:
@@ -287,16 +288,14 @@ async def entrypoint(ctx: JobContext):
     call_state["tos_task_id"] = tos_task_id
     call_state["call_id"] = str(call_id)
 
-    async def _telemetry(status: str, detail: str = ""):
+    async def _telemetry(status: str, detail: str = "", data: dict = None):
         _tos_task_id = call_state.get("tos_task_id")
         _cid = call_state.get("call_id")
         if _tos_task_id:
             msg = f"[Agent Worker] {status}"
             if detail:
                 msg += f" — {detail}"
-            if _cid:
-                msg += f" — call_id={_cid}" if not detail else f", call_id={_cid}"
-            create_bg_task(report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid))
+            create_bg_task(report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data))
 
     await _telemetry("agent_started", f"room={ctx.room.name}")
     await ctx.connect()
@@ -548,7 +547,7 @@ Follow these specific instructions:
         tts=tts_engine,
     )
 
-    await _telemetry("voice_engine_initialized", f"model={model_name}, voice={voice_input}")
+    await _telemetry("Agent voice engine ready", f"model={model_name}")
 
     agent = Agent(
         instructions=initial_instructions,
@@ -747,7 +746,7 @@ Follow these specific instructions:
             logger.info("Remote participant joined. Initializing conversation...")
             call_state["user_joined"] = True
             call_state["timeline"].append({"event": "Remote Participant Joined", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"})
-            await _telemetry("participant_joined")
+            await _telemetry("Customer joined the call")
             await asyncio.sleep(0.5)
         
         logger.info(f"Generating greeting for {client_name}...")
@@ -805,7 +804,7 @@ Follow these specific instructions:
                 logger.info("Starting post-call processing...")
                 if "timeline" in call_state:
                     call_state["timeline"].append({"event": "Call Finalization Started", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"})
-                await _telemetry("post_processing_started")
+                await _telemetry("Post-call processing started")
 
                 # 1. Pre-load call metadata
                 try:
@@ -893,7 +892,7 @@ Follow these specific instructions:
                     new_stage_id = not_answering_id
                     
                     # Set next_call_on to 24 hours from now
-                    current_time = datetime.datetime.now()
+                    current_time = datetime.datetime.utcnow()
                     tomorrow = current_time + datetime.timedelta(hours=24)
                     next_call_on = tomorrow.strftime("%Y-%m-%d %H:%M:%S")
                 else:
@@ -990,13 +989,27 @@ Follow these specific instructions:
                 logger.info(f"Webhook Payload:\n{json.dumps(webhook_payload)}")
                 delivered = await send_to_backend(webhook_payload)
                 tos_sent = True
-                await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if delivered else 'no'}")
+
+                post_call_data = {
+                    "call_status": call_status,
+                    "duration_seconds": duration,
+                    "s3_recording": recording_url if recording_url else "",
+                    "has_transcript": bool(transcript_data),
+                    "summary": summary_text[:500] if summary_text else "",
+                    "previous_stage_id": current_stage_id,
+                    "new_stage_id": new_stage_id,
+                    "call_id": str(ctx.job.id),
+                    "client_id": str(call_payload.get("lead_id", "")),
+                    "backend_delivered": delivered,
+                    "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else "",
+                    "appointment_date_time": client_custom_fields.get("appointment_date_time", ""),
+                    "doctor": client_custom_fields.get("doctor", ""),
+                    "hospital_location": client_custom_fields.get("hospital_location", ""),
+                }
+                await _telemetry("Post-call processing complete", data=post_call_data)
             except Exception as e:
                 logger.error(f"Webhook delivery failed: {e}", exc_info=True)
                 delivered = False
-
-
-            await _telemetry(f"call_complete — status={call_status}, duration={duration}s")
 
             logger.info(
                 f"Post-call processing complete | "

@@ -419,7 +419,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
 
         target_stage_ids = [sid for sid in [not_answering_id, follow_up_id] if sid is not None]
         if new_stage_id is not None and new_stage_id in target_stage_ids and not next_call_on:
-            tomorrow = current_time + datetime.timedelta(hours=24)
+            tomorrow = datetime.datetime.utcnow() + datetime.timedelta(hours=24)
             next_call_on = tomorrow.strftime("%Y-%m-%d %H:%M:%S")
 
         return {
@@ -469,6 +469,7 @@ async def report_telemetry(
     call_id: str = None,
     level: str = "info",
     tos_token: str = None,
+    data: dict = None,
 ) -> bool:
     tos_url = os.getenv("TOS_ENDPOINT", "").rstrip("/")
     if not tos_url:
@@ -481,40 +482,25 @@ async def report_telemetry(
     body = {"level": level, "message": message}
     if call_id:
         body["call_id"] = str(call_id)
+    if data:
+        body["data"] = data
 
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-        logger.info("TOS telemetry request will be sent with an Authorization header.")
-    else:
-        logger.warning("TOS_SERVICE_SECRET is not set. Sending telemetry request without Authorization.")
-
-    logger.info(f"--- Preparing to send TOS Telemetry ---")
-    logger.info(f"TOS Endpoint: {tos_url}")
-    logger.info(f"Full URL: {url}")
-    logger.info(f"Request Body: {json.dumps(body)}")
-    logger.info(f"Request Headers: {json.dumps(headers)}")
-    logger.info(f"-----------------------------------------")
 
     try:
         async with httpx.AsyncClient(proxy=None, timeout=10.0) as client:
             resp = await client.post(url, json=body, headers=headers)
-            logger.info(f"TOS telemetry response received with status code: {resp.status_code}")
-            logger.info(f"TOS telemetry response body: {resp.text}")
-
             if not resp.is_success:
-                logger.warning(f"TOS telemetry call failed with status {resp.status_code} for task {tos_task_id}.")
+                logger.warning(f"TOS telemetry failed with status {resp.status_code} for task {tos_task_id}.")
                 return False
-
-            logger.info(f"TOS telemetry sent successfully for task {tos_task_id}.")
             return True
     except httpx.RequestError as e:
-        logger.error(f"An HTTP request error occurred during TOS telemetry call: {e.__class__.__name__}")
-        logger.error(f"Request URL: {e.request.url if e.request else 'N/A'}")
-        logger.error(f"This could be a DNS issue, a firewall block, a proxy error, or a timeout. Details: {e}", exc_info=False)
+        logger.error(f"TOS telemetry request error for task {tos_task_id}: {e}")
         return False
     except Exception as e:
-        logger.error(f"An unexpected error occurred during TOS telemetry call for task {tos_task_id}: {e}", exc_info=True)
+        logger.error(f"TOS telemetry error for task {tos_task_id}: {e}", exc_info=True)
         return False
 
 
