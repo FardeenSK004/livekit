@@ -505,10 +505,44 @@ async def handle_call_log_webhook(request: Request):
             recording_url=recording_url
         )
         logger.info(f"Successfully saved call log for {call_id} to database.")
-        return JSONResponse({"status": "success", "message": "Call log saved to database"})
     except Exception as e:
         logger.error(f"Failed to save call log to database: {e}\n{traceback.format_exc()}")
         return JSONResponse({"error": f"Database insertion failed: {str(e)}"}, status_code=500)
+
+    # Forward post-call data to TOS via telemetry (UI server can reach TOS)
+    try:
+        meta = data.get("metadata", {})
+        tos_task_id = meta.get("tos_task_id") if isinstance(meta, dict) else None
+        if tos_task_id:
+            post_call_data = {
+                "call_status": data.get("call_status") or status,
+                "duration_seconds": data.get("call_duration_seconds", 0),
+                "has_transcript": bool(data.get("call_transcript")),
+                "summary": (data.get("ai_summary") or data.get("summary") or "")[:500],
+                "previous_stage_id": data.get("previous_stage_id"),
+                "new_stage_id": data.get("new_stage_id"),
+                "call_id": call_id,
+                "client_id": str(data.get("client_id", "")),
+                "next_call_on": data.get("next_call_on", ""),
+                "called_on": data.get("called_on", ""),
+                "appointment_date_time": data.get("client_custom_fields", {}).get("appointment_date_time", "") if isinstance(data.get("client_custom_fields"), dict) else "",
+                "doctor": data.get("client_custom_fields", {}).get("doctor", "") if isinstance(data.get("client_custom_fields"), dict) else "",
+                "hospital_location": data.get("client_custom_fields", {}).get("hospital_location", "") if isinstance(data.get("client_custom_fields"), dict) else "",
+                "call_initiated_at": data.get("call_initiated_at", ""),
+                "agent_joined_at": data.get("agent_joined_at", ""),
+                "human_joined_at": data.get("human_joined_at", ""),
+            }
+            await report_telemetry(
+                tos_task_id=str(tos_task_id),
+                message="[UI Server] Post-call processing complete",
+                call_id=call_id,
+                data=post_call_data,
+            )
+            logger.info(f"Forwarded post-call telemetry to TOS for task {tos_task_id}")
+    except Exception as e:
+        logger.error(f"Failed to forward post-call telemetry to TOS: {e}")
+
+    return JSONResponse({"status": "success", "message": "Call log saved to database"})
 
 
 @app.post("/api/v1/webhooks/telephony")
