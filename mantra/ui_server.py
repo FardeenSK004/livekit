@@ -576,6 +576,13 @@ async def handle_outbound_call_webhook(request: Request):
     provider = await _get_provider_from_trunk(trunk_id)
     logger.info(f"Provider detected: {provider}")
 
+    # Stamp call_initiated_at before dispatching so the agent gets it
+    payload_meta = payload.get("metadata")
+    if not isinstance(payload_meta, dict):
+        payload_meta = {}
+    payload_meta["call_initiated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    payload["metadata"] = payload_meta
+
     # Trigger agent dispatch — always use lk_client (direct, no proxy)
     # LiveKit Cloud API calls don't need the Indian proxy; region pinning is on the trunk itself
     try:

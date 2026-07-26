@@ -1,6 +1,6 @@
 # Post-Call Processing
 
-**Files:** `mantra/agent.py` (lines 711-951) + `mantra/utils.py`
+**Files:** `mantra/agent.py`, `mantra/utils.py`
 
 ## Pipeline (in `agent.py` `finalize()`)
 
@@ -9,10 +9,10 @@
 3. **Stop recording & upload to S3** — Mix tracks → trim silence → MP3 → S3
 4. **Build transcript** — JSON array of `{user/bot: message}`
 5. **LLM analysis** — `analyze_call()` generates summary, stage transition, sentiment, appointment data
-6. **Build webhook payload** — Full call data envelope
+6. **Build webhook payload** — Full call data envelope with `call_initiated_at`, `agent_joined_at`, `human_joined_at` timestamp fields
 7. **Send to backend** — HMAC-signed POST to MantraAssist `/webhooks/n8n`
 8. **Save to PostgreSQL** — `save_call_log_to_db()` upsert
-9. **Free Redis capacity** — Remove from `calls:active`, set status to `completed`
+9. **TOS telemetry** — `[Agent Worker] Post-call processing complete` sent synchronously (waited, not fire-and-forget)
 
 ## SessionRecorder (`utils.py`)
 

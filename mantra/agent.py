@@ -271,6 +271,9 @@ async def entrypoint(ctx: JobContext):
 
     call_state = {
         "user_joined": False,
+        "agent_joined_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "human_joined_at": None,
+        "call_initiated_at": None,
         "timeline": [{"event": "Agent Session Started", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"}]
     }
 
@@ -282,20 +285,26 @@ async def entrypoint(ctx: JobContext):
             call_id = payload.get("call_id") or payload.get("voice_id") or ctx.job.id
             tos_task_id = payload.get("metadata", {}).get("tos_task_id")
             tos_task_id = payload.get("tos_task_id") or payload.get("metadata", {}).get("tos_task_id")
+            metadata = payload.get("metadata", {})
+            if isinstance(metadata, dict):
+                call_state["call_initiated_at"] = metadata.get("call_initiated_at")
         except:
             pass
 
     call_state["tos_task_id"] = tos_task_id
     call_state["call_id"] = str(call_id)
 
-    async def _telemetry(status: str, detail: str = "", data: dict = None):
+    async def _telemetry(status: str, detail: str = "", data: dict = None, wait: bool = False):
         _tos_task_id = call_state.get("tos_task_id")
         _cid = call_state.get("call_id")
         if _tos_task_id:
             msg = f"[Agent Worker] {status}"
             if detail:
                 msg += f" — {detail}"
-            create_bg_task(report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data))
+            if wait:
+                await report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data)
+            else:
+                create_bg_task(report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data))
 
     await _telemetry("agent_started", f"room={ctx.room.name}")
     await ctx.connect()
@@ -745,6 +754,7 @@ Follow these specific instructions:
                 
             logger.info("Remote participant joined. Initializing conversation...")
             call_state["user_joined"] = True
+            call_state["human_joined_at"] = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             call_state["timeline"].append({"event": "Remote Participant Joined", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"})
             await _telemetry("Customer joined the call")
             await asyncio.sleep(0.5)
@@ -891,10 +901,15 @@ Follow these specific instructions:
                             break
                     new_stage_id = not_answering_id
                     
-                    # Set next_call_on to 24 hours from now
-                    current_time = datetime.datetime.utcnow()
-                    tomorrow = current_time + datetime.timedelta(hours=24)
-                    next_call_on = tomorrow.strftime("%Y-%m-%d %H:%M:%S")
+                    # Set next_call_on using timezone-aware calculation
+                    from mantra.calculate_call_time import calculate_next_call_on
+                    next_call_on = calculate_next_call_on(
+                        country_iso=call_payload.get("client_country_iso"),
+                        client_timezone=call_payload.get("client_timezone"),
+                        preferred_calling_time=call_payload.get("preferred_calling_time"),
+                        skip_off_days=call_payload.get("skip_off_day_calls", False),
+                        fallback_hours=24,
+                    )
                 else:
                     try:
                         if llm_engine and history_snapshot:
@@ -947,7 +962,10 @@ Follow these specific instructions:
                         "client_phone": call_payload.get("client_phone") or call_payload.get("phone"),
                         "trunk_id": call_payload.get("trunk_id"),
                         "url": "",
-                        "timeline": call_state.get("timeline", [])
+                        "timeline": call_state.get("timeline", []),
+                        "call_initiated_at": call_state.get("call_initiated_at") or "",
+                        "agent_joined_at": call_state.get("agent_joined_at") or "",
+                        "human_joined_at": call_state.get("human_joined_at") or "",
                     }
                 }
 
@@ -1005,8 +1023,11 @@ Follow these specific instructions:
                     "appointment_date_time": client_custom_fields.get("appointment_date_time", ""),
                     "doctor": client_custom_fields.get("doctor", ""),
                     "hospital_location": client_custom_fields.get("hospital_location", ""),
+                    "call_initiated_at": call_state.get("call_initiated_at") or "",
+                    "agent_joined_at": call_state.get("agent_joined_at") or "",
+                    "human_joined_at": call_state.get("human_joined_at") or "",
                 }
-                await _telemetry("Post-call processing complete", data=post_call_data)
+                await _telemetry("Post-call processing complete", data=post_call_data, wait=True)
             except Exception as e:
                 logger.error(f"Webhook delivery failed: {e}", exc_info=True)
                 delivered = False
