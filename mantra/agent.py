@@ -791,13 +791,24 @@ Follow these specific instructions:
         
         # 3. Shielded finalization
         async def finalize():
-            recording_url = ""
-            transcript_data = ""
-            summary_text = ""
+            recording_url = None
+            transcript_data = None
+            summary_text = None
             tos_sent = False
-            duration = 0
-            call_status = "Error"
-            webhook_payload = None
+            duration = None
+            call_status = "Failed"
+            next_call_on = None
+            current_stage_id = None
+            new_stage_id = None
+            client_custom_fields = {}
+            call_payload = {}
+
+            # Parse job metadata before try so client_id / call_id survive a crash
+            try:
+                call_payload = json.loads(ctx.job.metadata) if ctx.job.metadata else {}
+            except Exception as e:
+                logger.error(f"Failed to parse metadata: {e}")
+                call_payload = {}
 
             try:
                 logger.info("Starting post-call processing...")
@@ -806,11 +817,6 @@ Follow these specific instructions:
                 await _telemetry("Post-call processing started")
 
                 # 1. Pre-load call metadata
-                try:
-                    call_payload = json.loads(ctx.job.metadata) if ctx.job.metadata else {}
-                except Exception as e:
-                    logger.error(f"Failed to parse metadata: {e}")
-                    call_payload = {}
 
                 # Determine call status based on whether the user joined and actually spoke
                 user_spoke = False
@@ -823,8 +829,6 @@ Follow these specific instructions:
                 call_id = call_payload.get("call_id") or call_payload.get("voice_id") or ctx.job.id
 
                 if not call_state["user_joined"]:
-                    # Fallback: if it waited less than 25s before terminating, it's Busy/Rejected.
-                    # If it waited more than 25s, it's a No Answer timeout.
                     elapsed_time = asyncio.get_event_loop().time() - entrypoint_start_time
                     if elapsed_time >= 25.0:
                         call_status = "No Answer"
@@ -844,7 +848,7 @@ Follow these specific instructions:
                             call_id = call_payload.get("call_id") or call_payload.get("voice_id") or ctx.job.id
                             s3_key = f"recordings/{call_id}.mp3"
                             loop = asyncio.get_running_loop()
-                            recording_url = await loop.run_in_executor(None, upload_to_s3, mp3_bytes, s3_key) or ""
+                            recording_url = await loop.run_in_executor(None, upload_to_s3, mp3_bytes, s3_key)
                             logger.info(f"S3 recording: {'uploaded' if recording_url else 'upload failed'}")
                         else:
                             logger.info("No audio data captured for recording")
@@ -863,15 +867,12 @@ Follow these specific instructions:
                 # 4. Calculate duration
                 if hasattr(recorder, "recording_duration_seconds"):
                     duration = int(recorder.recording_duration_seconds)
-                else:
-                    duration = 0
-
 
                 # 5. Run unified analysis to generate summary, stage transition, and metadata
                 current_stage_id = call_payload.get("stage_id")
                 stage_details = call_payload.get("stageDetails", [])
                 
-                summary_text = ""
+                summary_text = None
                 new_stage_id = current_stage_id
                 next_call_on = None
                 client_custom_fields = call_payload.get("client_custom_fields", {})
@@ -881,7 +882,7 @@ Follow these specific instructions:
                 if call_status in ["Busy", "Incomplete", "No Answer"]:
                     logger.info(f"Call status is {call_status}. Skipping LLM analysis and applying 'Not Answering' logic.")
                     summary_text = f"Call failed with status: {call_status}. The user did not speak or answer."
-                    duration = 0
+            duration = 0
                     not_answering_id = current_stage_id
                     for stage in stage_details:
                         desc = stage.get("description", "").lower()
@@ -890,7 +891,6 @@ Follow these specific instructions:
                             break
                     new_stage_id = not_answering_id
                     
-                    # Set next_call_on using timezone-aware calculation
                     from mantra.calculate_call_time import calculate_next_call_on
                     next_call_on = calculate_next_call_on(
                         country_iso=call_payload.get("client_country_iso"),
@@ -926,54 +926,33 @@ Follow these specific instructions:
                     except Exception as e:
                         logger.error(f"Analysis or summary generation failed: {e}", exc_info=True)
 
-                # 6. Build webhook payload
-                webhook_payload = {
-                    "event": "CALL_DATA_UPDATE",
-                    "data": {
-                        "client_id": call_payload.get("lead_id"),
-                        "call_id": call_payload.get("call_id") or call_payload.get("voice_id"),
-                        "call_status": call_status,
-                        "status": call_status,
-                        "call_transcript": transcript_data,
-                        "ai_summary": summary_text,
-                        "summary": summary_text,
-                        "recording_url": recording_url,
-                        "call_duration_seconds": duration,
-                        "next_call_on": normalize_to_iso8601(next_call_on),
-                        "called_on": call_state.get("call_initiated_at") or "",
-                        "ai_call_id": ctx.job.id,
-                        "previous_stage_id": current_stage_id,
-                        "new_stage_id": new_stage_id,
-                        "process_id": call_payload.get("process_id"),
-                        "notes": "",
-                        "metadata": call_payload.get("metadata", {}),
-                        "client_custom_fields": client_custom_fields,
-                        "call_custom_fields": call_payload.get("call_custom_fields", {}),
-                        "client_phone": call_payload.get("client_phone") or call_payload.get("phone"),
-                        "trunk_id": call_payload.get("trunk_id"),
-                        "url": "",
-                        "timeline": call_state.get("timeline", []),
-                        "call_initiated_at": call_state.get("call_initiated_at") or "",
-                        "agent_joined_at": call_state.get("agent_joined_at") or "",
-                        "human_joined_at": call_state.get("human_joined_at") or "",
-                    }
-                }
-
             except Exception as e:
                 logger.error(f"Pipeline error in finalize: {e}", exc_info=True)
 
+            # 6. Build webhook payload — same structure regardless of errors
+            webhook_payload = {
+                "event": "CALL_DATA_UPDATE",
+                "data": {
+                    "client_id": call_payload.get("lead_id"),
+                    "call_id": call_payload.get("call_id") or call_payload.get("voice_id"),
+                    "call_status": call_status,
+                    "call_transcript": transcript_data,
+                    "ai_summary": summary_text,
+                    "recording_url": recording_url,
+                    "call_duration_seconds": duration,
+                    "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else None,
+                    "called_on": call_state.get("call_initiated_at") or None,
+                    "ai_call_id": ctx.job.id,
+                    "process_id": call_payload.get("process_id"),
+                    "notes": None,
+                    "metadata": call_payload.get("metadata", {}),
+                    "client_custom_fields": client_custom_fields or {},
+                    "call_custom_fields": call_payload.get("call_custom_fields", {}),
+                }
+            }
+
             # 8. Send to MantraAssist backend and save to local DB
             try:
-                if webhook_payload is None:
-                    webhook_payload = {
-                        "event": "CALL_DATA_UPDATE",
-                        "data": {
-                            "ai_call_id": ctx.job.id,
-                            "call_status": "Error",
-                            "status": "Error",
-                            "notes": "Post-call pipeline encountered an error — minimal payload sent",
-                        }
-                    }
 
                 # Save to local Postgres DB via UI Server webhook (bypassing cloud SG blocks)
                 try:
@@ -997,31 +976,13 @@ Follow these specific instructions:
                 logger.info(f"Webhook Payload:\n{json.dumps(webhook_payload)}")
                 delivered = await send_to_backend(webhook_payload)
                 tos_sent = True
-
-                post_call_data = {
-                    "call_status": call_status,
-                    "duration_seconds": duration,
-                    "s3_recording": recording_url if recording_url else "",
-                    "has_transcript": bool(transcript_data),
-                    "summary": summary_text[:500] if summary_text else "",
-                    "previous_stage_id": current_stage_id,
-                    "new_stage_id": new_stage_id,
-                    "call_id": str(ctx.job.id),
-                    "client_id": str(call_payload.get("lead_id", "")),
-                    "backend_delivered": delivered,
-                    "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else "",
-                    "called_on": call_state.get("call_initiated_at") or "",
-                    "appointment_date_time": client_custom_fields.get("appointment_date_time", ""),
-                    "doctor": client_custom_fields.get("doctor", ""),
-                    "hospital_location": client_custom_fields.get("hospital_location", ""),
-                    "called_on": call_state.get("call_initiated_at") or "",
-                    "agent_joined_at": call_state.get("agent_joined_at") or "",
-                    "human_joined_at": call_state.get("human_joined_at") or "",
-                }
-                await _telemetry("Post-call processing complete", data=post_call_data)
+                await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if delivered else 'no'}")
             except Exception as e:
                 logger.error(f"Webhook delivery failed: {e}", exc_info=True)
                 delivered = False
+
+
+            await _telemetry(f"call_complete — status={call_status}, duration={duration}s")
 
             logger.info(
                 f"Post-call processing complete | "
