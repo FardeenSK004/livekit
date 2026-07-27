@@ -795,20 +795,13 @@ Follow these specific instructions:
             transcript_data = None
             summary_text = None
             tos_sent = False
-            duration = None
+            duration = 0
             call_status = "Failed"
             next_call_on = None
             current_stage_id = None
             new_stage_id = None
             client_custom_fields = {}
             call_payload = {}
-
-            # Parse job metadata before try so client_id / call_id survive a crash
-            try:
-                call_payload = json.loads(ctx.job.metadata) if ctx.job.metadata else {}
-            except Exception as e:
-                logger.error(f"Failed to parse metadata: {e}")
-                call_payload = {}
 
             try:
                 logger.info("Starting post-call processing...")
@@ -817,6 +810,11 @@ Follow these specific instructions:
                 await _telemetry("Post-call processing started")
 
                 # 1. Pre-load call metadata
+                try:
+                    call_payload = json.loads(ctx.job.metadata) if ctx.job.metadata else {}
+                except Exception as e:
+                    logger.error(f"Failed to parse metadata: {e}")
+                    call_payload = {}
 
                 # Determine call status based on whether the user joined and actually spoke
                 user_spoke = False
@@ -882,7 +880,7 @@ Follow these specific instructions:
                 if call_status in ["Busy", "Incomplete", "No Answer"]:
                     logger.info(f"Call status is {call_status}. Skipping LLM analysis and applying 'Not Answering' logic.")
                     summary_text = f"Call failed with status: {call_status}. The user did not speak or answer."
-            duration = 0
+                    duration = 0
                     not_answering_id = current_stage_id
                     for stage in stage_details:
                         desc = stage.get("description", "").lower()
@@ -890,15 +888,6 @@ Follow these specific instructions:
                             not_answering_id = stage.get("stage_id")
                             break
                     new_stage_id = not_answering_id
-                    
-                    from mantra.calculate_call_time import calculate_next_call_on
-                    next_call_on = calculate_next_call_on(
-                        country_iso=call_payload.get("client_country_iso"),
-                        client_timezone=call_payload.get("client_timezone"),
-                        preferred_calling_time=call_payload.get("preferred_calling_time"),
-                        skip_off_days=call_payload.get("skip_off_day_calls", False),
-                        fallback_hours=24,
-                    )
                 else:
                     try:
                         if llm_engine and history_snapshot:
@@ -944,7 +933,7 @@ Follow these specific instructions:
                     "called_on": call_state.get("call_initiated_at") or None,
                     "ai_call_id": ctx.job.id,
                     "process_id": call_payload.get("process_id"),
-                    "notes": None,
+                    "new_stage_id": new_stage_id,
                     "metadata": call_payload.get("metadata", {}),
                     "client_custom_fields": client_custom_fields or {},
                     "call_custom_fields": call_payload.get("call_custom_fields", {}),
