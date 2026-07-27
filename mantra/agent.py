@@ -180,6 +180,7 @@ class AssistantFunctions:
         self.job_metadata = job_metadata
         self.room_name = room_name
         self.handoff_triggered = False
+        self._end_call_triggered = False
         self.agent = None
         self.session = None
         self.ctx = ctx
@@ -208,24 +209,19 @@ class AssistantFunctions:
 
     @llm.function_tool(description="End the call. Call this tool when the conversation is over — the user said goodbye, is not interested, or there is nothing left to discuss.")
     async def end_call(self):
-        logger.info("Agent decided to end the call via function tool. Waiting for speech to finish before disconnecting.")
+        logger.info("Agent decided to end the call via function tool. Disconnecting shortly.")
         self._telemetry("Call ended by agent")
+        self._end_call_triggered = True
         async def graceful_disconnect():
-            # Wait for the agent to finish speaking her goodbye, with a safety cap
-            if self.session:
-                try:
-                    await asyncio.wait_for(self.session.wait_for_inactive(), timeout=12.0)
-                    logger.info("Agent finished speaking. Pausing briefly before disconnect.")
-                except asyncio.TimeoutError:
-                    logger.warning("Agent did not finish speaking within 12s. Disconnecting anyway.")
-            else:
-                await asyncio.sleep(4.0)
-            # Small human-like pause after the last word before hanging up
-            await asyncio.sleep(1.0)
+            # Brief pause to let current TTS finish, then disconnect decisively
+            # Using fixed sleep instead of wait_for_inactive() because the agent
+            # may keep generating responses (silence prompts, etc.) preventing
+            # the session from ever becoming idle.
+            await asyncio.sleep(3.0)
             if self.ctx:
                 await _force_disconnect_room(self.ctx)
         self._disconnect_task = create_bg_task(graceful_disconnect())
-        return "Call is ending. Say a brief, warm goodbye now."
+        return ""
 
     # @llm.ai_callable(description="Transfer the call to a human assistant when requested or if the issue is too complex.")
     # async def transfer_to_human(
@@ -502,7 +498,7 @@ Follow these specific instructions:
     else:
         logger.info("Using OpenAI LLM")
         llm_engine = openai.LLM(model="gpt-4o-mini")
-    # TTS via LiveKit's built-in inference — no external provider needed
+    # TTS via LiveKit Inference — Cartesia provider
     language = "en"
         
     if language:
@@ -512,7 +508,7 @@ Follow these specific instructions:
     logger.info(f"TTS Voice: {voice_id} | Speed: {voice_speed}")
 
     tts_engine = inference.TTS(
-        model="sonic-3",
+        model="cartesia/sonic-3",
         voice=voice_id,
         language=language,
         extra_kwargs={
@@ -1018,7 +1014,7 @@ Follow these specific instructions:
                     "appointment_date_time": client_custom_fields.get("appointment_date_time", ""),
                     "doctor": client_custom_fields.get("doctor", ""),
                     "hospital_location": client_custom_fields.get("hospital_location", ""),
-                    "call_initiated_at": call_state.get("call_initiated_at") or "",
+                    "called_on": call_state.get("call_initiated_at") or "",
                     "agent_joined_at": call_state.get("agent_joined_at") or "",
                     "human_joined_at": call_state.get("human_joined_at") or "",
                 }

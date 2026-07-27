@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-27
+
+### TTS Fix & Payload Cleanup
+- **fix:** TTS model changed from `cartesia/sonic-3` to `sonic-3` (LiveKit native inference, no Cartesia dependency)
+- **fix:** Removed `emotion` extra_kwarg from TTS config (not supported by LiveKit inference)
+- **fix:** Removed Cartesia API health check (TTS now uses LiveKit inference only)
+- **fix:** Reverted TOS `Post-call processing complete` telemetry back to fire-and-forget (`create_bg_task`) — synchronous wait caused unnecessary blocking
+- **feat:** Added `called_on` field to both n8n webhook payload and TOS telemetry data (maps from `call_initiated_at`)
+- **chore:** Added payload body logging in `send_to_backend()` for easier debugging
+
 ## 2026-07-26
 
 ### Post-Call Data & Timestamps

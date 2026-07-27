@@ -18,6 +18,7 @@
 ## Recently Completed
 
 - [x] Post-call data & timestamps — TOS delivery fix, `next_call_on` format, explicit timestamp fields for n8n
+- [x] TTS model fix — `sonic-3` (LiveKit native), removed Cartesia health check and TTS dependencies
 
 ## In Progress
 
