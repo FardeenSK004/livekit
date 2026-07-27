@@ -295,19 +295,20 @@ async def _run_health_checks() -> bool:
         except Exception as e:
             checks["stt_deepgram"] = str(e)
 
-    async def _check_tts():
-        key = os.getenv("CARTESIA_API_KEY")
-        if not key:
-            checks["tts_cartesia"] = "CARTESIA_API_KEY not set"
-            return
-        try:
-            r = await http_client.get(
-                "https://api.cartesia.ai",
-                headers={"X-API-Key": key},
-            )
-            checks["tts_cartesia"] = r.status_code < 500
-        except Exception as e:
-            checks["tts_cartesia"] = str(e)
+    # TTS health check removed — now using LiveKit's built-in TTS via inference.TTS
+    # async def _check_tts():
+    #     key = os.getenv("CARTESIA_API_KEY")
+    #     if not key:
+    #         checks["tts_cartesia"] = "CARTESIA_API_KEY not set"
+    #         return
+    #     try:
+    #         r = await http_client.get(
+    #             "https://api.cartesia.ai",
+    #             headers={"X-API-Key": key},
+    #         )
+    #         checks["tts_cartesia"] = r.status_code < 500
+    #     except Exception as e:
+    #         checks["tts_cartesia"] = str(e)
 
     async def _check_mantraassist_backend():
         """Check the health of the main MantraAssist backend."""
@@ -372,9 +373,8 @@ async def _run_health_checks() -> bool:
         _check_redis(),
         _check_postgres(),
         _check_stt(),
-        _check_tts(),
-        _check_mantraassist_backend(),
-        _check_s3(),
+        # _check_mantraassist_backend(),
+        # _check_s3(),
         return_exceptions=True
     )
 

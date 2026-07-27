@@ -294,17 +294,14 @@ async def entrypoint(ctx: JobContext):
     call_state["tos_task_id"] = tos_task_id
     call_state["call_id"] = str(call_id)
 
-    async def _telemetry(status: str, detail: str = "", data: dict = None, wait: bool = False):
+    async def _telemetry(status: str, detail: str = "", data: dict = None):
         _tos_task_id = call_state.get("tos_task_id")
         _cid = call_state.get("call_id")
         if _tos_task_id:
             msg = f"[Agent Worker] {status}"
             if detail:
                 msg += f" — {detail}"
-            if wait:
-                await report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data)
-            else:
-                create_bg_task(report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data))
+            create_bg_task(report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data))
 
     await _telemetry("agent_started", f"room={ctx.room.name}")
     await ctx.connect()
@@ -505,25 +502,21 @@ Follow these specific instructions:
     else:
         logger.info("Using OpenAI LLM")
         llm_engine = openai.LLM(model="gpt-4o-mini")
-    # TTS via LiveKit Inference — no separate Cartesia API key needed.
-    # LiveKit Inference authenticates using LIVEKIT_API_KEY + LIVEKIT_API_SECRET.
-    # Voice UUIDs are unchanged — all standard Cartesia voices are supported.
+    # TTS via LiveKit's built-in inference — no external provider needed
     language = "en"
         
     if language:
         language = str(language).lower()
 
     logger.info(f"TTS Language resolved to: '{language}' (None means auto-detect)")
-    logger.info("TTS Backend: LiveKit Inference (cartesia/sonic-3)")
     logger.info(f"TTS Voice: {voice_id} | Speed: {voice_speed}")
 
     tts_engine = inference.TTS(
-        model="cartesia/sonic-3",
+        model="sonic-3",
         voice=voice_id,
         language=language,
         extra_kwargs={
             "speed": voice_speed,
-            "emotion": ["calmness:high", "positivity:high"],
         }
     )
 
@@ -951,6 +944,7 @@ Follow these specific instructions:
                         "recording_url": recording_url,
                         "call_duration_seconds": duration,
                         "next_call_on": normalize_to_iso8601(next_call_on),
+                        "called_on": call_state.get("call_initiated_at") or "",
                         "ai_call_id": ctx.job.id,
                         "previous_stage_id": current_stage_id,
                         "new_stage_id": new_stage_id,
@@ -1020,6 +1014,7 @@ Follow these specific instructions:
                     "client_id": str(call_payload.get("lead_id", "")),
                     "backend_delivered": delivered,
                     "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else "",
+                    "called_on": call_state.get("call_initiated_at") or "",
                     "appointment_date_time": client_custom_fields.get("appointment_date_time", ""),
                     "doctor": client_custom_fields.get("doctor", ""),
                     "hospital_location": client_custom_fields.get("hospital_location", ""),
@@ -1027,7 +1022,7 @@ Follow these specific instructions:
                     "agent_joined_at": call_state.get("agent_joined_at") or "",
                     "human_joined_at": call_state.get("human_joined_at") or "",
                 }
-                await _telemetry("Post-call processing complete", data=post_call_data, wait=True)
+                await _telemetry("Post-call processing complete", data=post_call_data)
             except Exception as e:
                 logger.error(f"Webhook delivery failed: {e}", exc_info=True)
                 delivered = False
