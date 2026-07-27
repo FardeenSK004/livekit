@@ -13,6 +13,7 @@ from livekit import api
 from app.config import settings
 from app.services.inbound_setup import setup_inbound_sip_process
 from app.services.livekit import livekit_service
+from app.services.redis import redis_service
 from app.services.sip import normalize_numbers, sip_service
 from app.services.sip_providers import (
     build_plivo_xml,
@@ -284,7 +285,7 @@ async def plivo_xml(request: Request):
 
     clean_to = normalize_phone_number(to_number) if to_number != "unknown" else ""
     sip_domain = livekit_service.get_sip_domain()
-    req_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "localhost:8081"
+    req_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "localhost:8082"
     req_scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     action_url = f"{req_scheme}://{req_host}/api/v1/sip/plivo-dial-status"
     xml_content = build_plivo_xml(sip_trunk_id, sip_domain, action_url, clean_to)
@@ -459,6 +460,14 @@ async def create_and_call_plivo(request: Request):
         )
         call_id = payload.get("call_id") or payload.get("voice_id") or int(time.time())
         room_name = f"call_{call_id}"
+
+        if not await redis_service.acquire_lock(f"lock:call:{call_id}", ttl=600):
+            logger.warning("Duplicate Plivo call request ignored for call_id: %s", call_id)
+            return JSONResponse({
+                "status": "ignored",
+                "message": f"Duplicate request for call_id {call_id} already processing",
+                "room": room_name,
+            }, status_code=200)
 
         await livekit_service.create_agent_dispatch(room_name, payload)
 

@@ -13,8 +13,10 @@ import redis.asyncio as redis
 
 from app.config import settings
 from app.recording.session_recorder import SessionRecorder
+from app.services.calculate_call_time import calculate_next_call_on
 from app.services.datetime_utils import normalize_to_iso8601
 from app.services.s3 import s3_service
+from app.services.telemetry import report_telemetry
 from app.services.webhook import webhook_service
 
 logger = logging.getLogger("app.agent.finalize")
@@ -39,9 +41,26 @@ async def finalize_call(
     webhook_payload = None
     call_payload: dict[str, Any] = {}
     delivered = False
+    tos_sent = False
 
     try:
         logger.info("Starting post-call processing...")
+
+        _tos_task_id = call_state.get("tos_task_id")
+        _cid = call_state.get("call_id")
+
+        async def _telemetry(status: str, detail: str = "", data: dict | None = None, wait: bool = False):
+            if _tos_task_id:
+                msg = f"[Agent Worker] {status}"
+                if detail:
+                    msg += f" — {detail}"
+                if wait:
+                    await report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data)
+                else:
+                    asyncio.create_task(report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data))
+
+        await _telemetry("Post-call processing started")
+
         if "timeline" in call_state:
             call_state["timeline"].append(
                 {
@@ -75,12 +94,15 @@ async def finalize_call(
         )
 
         redis_status = await _fetch_sip_error_status(str(call_id))
-        call_status = _determine_call_status(
-            redis_status=redis_status,
-            user_joined=call_state.get("user_joined", False),
-            user_spoke=user_spoke,
-            entrypoint_start_time=entrypoint_start_time,
-        )
+        if redis_status and not call_state.get("user_joined", False):
+            call_status = redis_status
+        else:
+            call_status = _determine_call_status(
+                redis_status=redis_status,
+                user_joined=call_state.get("user_joined", False),
+                user_spoke=user_spoke,
+                entrypoint_start_time=entrypoint_start_time,
+            )
 
         try:
             await recorder.stop_recording()
@@ -151,9 +173,13 @@ async def finalize_call(
                     break
             new_stage_id = not_answering_id
 
-            current_time = datetime.datetime.now()
-            tomorrow = current_time + datetime.timedelta(hours=24)
-            next_call_on = tomorrow.strftime("%Y-%m-%d %H:%M:%S")
+            next_call_on = calculate_next_call_on(
+                country_iso=call_payload.get("client_country_iso"),
+                client_timezone=call_payload.get("client_timezone"),
+                preferred_calling_time=call_payload.get("preferred_calling_time"),
+                skip_off_days=call_payload.get("skip_off_day_calls", False),
+                fallback_hours=24,
+            )
         else:
             try:
                 if llm_engine and history_snapshot:
@@ -232,6 +258,9 @@ async def finalize_call(
                 "trunk_id": call_payload.get("trunk_id"),
                 "url": "",
                 "timeline": call_state.get("timeline", []),
+                "call_initiated_at": call_state.get("call_initiated_at") or "",
+                "agent_joined_at": call_state.get("agent_joined_at") or "",
+                "human_joined_at": call_state.get("human_joined_at") or "",
             },
         }
 
@@ -290,30 +319,46 @@ async def finalize_call(
         logger.info("Delivering post-call webhook to backend...")
         logger.info("Webhook Payload:\n%s", json.dumps(webhook_payload))
         delivered = await webhook_service.send(webhook_payload)
+
+        post_call_data = {
+            "call_id": str(call_payload.get("call_id", call_payload.get("voice_id", call_state.get("call_id", "")))),
+            "client_id": str(call_payload.get("lead_id", "")),
+            "backend_delivered": delivered,
+            "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else "",
+            "appointment_date_time": client_custom_fields.get("appointment_date_time", ""),
+            "doctor": client_custom_fields.get("doctor", ""),
+            "hospital_location": client_custom_fields.get("hospital_location", ""),
+            "call_initiated_at": call_state.get("call_initiated_at") or "",
+            "agent_joined_at": call_state.get("agent_joined_at") or "",
+            "human_joined_at": call_state.get("human_joined_at") or "",
+        }
+        await _telemetry("Post-call processing complete", data=post_call_data, wait=True)
+        tos_sent = True
     except Exception as e:
         logger.error("Webhook delivery failed: %s", e, exc_info=True)
         delivered = False
 
     try:
-        call_id = call_payload.get("call_id")
-        if call_id:
+        cid = call_payload.get("call_id") or call_state.get("call_id")
+        if cid:
             r = redis.from_url(settings.REDIS_URL, decode_responses=True)
-            await r.hdel("calls:active", call_id)
-            await r.set(f"calls:status:{call_id}", "completed")
+            await r.hdel("calls:active", cid)
+            await r.set(f"calls:status:{cid}", "completed")
             await r.aclose()
-            logger.info("Freed capacity slot for call %s in Redis", call_id)
+            logger.info("Freed capacity slot for call %s in Redis", cid)
     except Exception as e:
         logger.error("Failed to free Redis capacity slot: %s", e)
 
     logger.info(
         "Post-call processing complete | Call ID: %s | Lead: %s | Status: %s | "
-        "Duration: %ss | S3: %s | Backend: %s",
+        "Duration: %ss | S3: %s | Backend: %s | TOS: %s",
         ctx.job.id,
         webhook_payload.get("data", {}).get("client_id", "N/A"),
         webhook_payload.get("data", {}).get("call_status", "N/A"),
         duration,
         "yes" if recording_url else "no",
         "yes" if delivered else "no",
+        "yes" if tos_sent else "no",
     )
 
 

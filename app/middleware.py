@@ -1,4 +1,4 @@
-"""Global exception handler and request logging middleware."""
+"""Global exception handler, health gate, and request logging middleware."""
 
 from __future__ import annotations
 
@@ -6,10 +6,11 @@ import logging
 import time
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.alerter.email import send_crash_email
+from app.routers.health import _run_health_checks
 
 logger = logging.getLogger("app.main")
 
@@ -62,6 +63,25 @@ def register_middleware(app: FastAPI) -> None:
                 )
             },
         )
+
+    _DISPATCH_PATHS = frozenset({
+        "/dispatch-test",
+        "/api/v1/webhooks/telephony",
+        "/api/v1/sip/trunks/outbound",
+        "/api/v1/sip/trunks/outbound/zadarma",
+        "/api/v1/sip/trunks/outbound/twilio",
+        "/api/v1/sip/trunks/outbound/plivo",
+    })
+
+    @app.middleware("http")
+    async def health_gate_middleware(request: Request, call_next):
+        path = request.url.path
+        if request.method == "POST" and path in _DISPATCH_PATHS:
+            ok = await _run_health_checks()
+            if not ok:
+                logger.warning("Health gate blocked %s %s", request.method, path)
+                return Response(status_code=503)
+        return await call_next(request)
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next):

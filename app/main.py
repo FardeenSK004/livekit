@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config.logging import setup_logger
 from app.middleware import register_middleware
 from app.routers import auth, dashboard, dispatch, health, kb, org, pages, sip, webhooks
+from app.routers.health import _run_health_checks
 from app.services import db_service, livekit_service, redis_service
 from app.services.s3 import s3_service
 
@@ -35,6 +36,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("S3 start failed (non-fatal): %s", e)
     logger.info("All services started")
+
+    logger.info("Running startup healthcheck on all dependencies...")
+    if await _run_health_checks():
+        logger.info("Startup healthcheck: ALL SERVICES HEALTHY")
+    else:
+        logger.warning("Startup healthcheck: one or more services down — refusing dispatch")
+
     yield
     logger.info("Shutting down services...")
     await livekit_service.stop()
@@ -71,7 +79,7 @@ app = create_app()
 def main():
     import uvicorn
 
-    port = int(os.getenv("PORT", "8081"))
+    port = int(os.getenv("PORT", "8082"))
     logger.info("UI Server starting on http://0.0.0.0:%s", port)
     uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True, access_log=False)
 

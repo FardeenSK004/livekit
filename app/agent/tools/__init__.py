@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Annotated, Optional
 
@@ -11,6 +12,7 @@ from app.agent.tools.end_call import execute_end_call
 from app.agent.tools.handoff import execute_handoff
 from app.agent.tools.search_kb import execute_search
 from app.kb.retriever import KnowledgeRetriever
+from app.services.telemetry import report_telemetry
 
 logger = logging.getLogger("app.agent.tools")
 
@@ -40,6 +42,27 @@ class AssistantFunctions:
         self._create_bg_task = create_bg_task
         self._force_disconnect = force_disconnect
         self._disconnect_task = None
+        self.call_id = None
+        self.tos_task_id = None
+        if job_metadata:
+            try:
+                payload = json.loads(job_metadata)
+                self.call_id = str(payload.get("call_id") or payload.get("voice_id") or "")
+                self.tos_task_id = payload.get("tos_task_id") or payload.get("metadata", {}).get("tos_task_id")
+            except Exception:
+                pass
+
+    def _telemetry(self, message: str, call_id: str | None = None, data: dict | None = None):
+        if self.tos_task_id:
+            cid = call_id or self.call_id or ""
+            self._create_bg_task(
+                report_telemetry(
+                    tos_task_id=self.tos_task_id,
+                    message=f"[Agent Worker] {message}",
+                    call_id=cid,
+                    data=data,
+                )
+            )
 
     async def _get_retriever(self) -> KnowledgeRetriever:
         if self._retriever is None:
@@ -120,6 +143,7 @@ class AssistantFunctions:
         )
     )
     async def end_call(self):
+        self._telemetry("Call ended by agent")
         return await execute_end_call(
             session=self.session,
             ctx=self.ctx,

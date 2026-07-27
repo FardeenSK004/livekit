@@ -49,5 +49,5 @@ def setup_logger(
         )
     )
     logger.addHandler(_handler)
-    logger.propagate = False
+    logger.propagate = True
     return logger

@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     MANTRAASSIST_BACKEND_URL: str = ""
     MANTRAASSIST_WEBHOOK_SECRET: str = ""
 
+    # ── TOS Telemetry ──────────────────────────────────────────────────
+    TOS_ENDPOINT: str = ""
+    TOS_SERVICE_SECRET: str = ""
+
     # ── SMTP Alerts ────────────────────────────────────────────────────
     SMTP_HOST: str = ""
     SMTP_PORT: str = "587"
@@ -104,7 +108,7 @@ class Settings(BaseSettings):
     LOCAL_INBOUND_MAPPINGS: bool = False
 
     # ── Server ─────────────────────────────────────────────────────────
-    PORT: int = 8081
+    PORT: int = 8082
 
     # ── Feature Flags / OTEL ───────────────────────────────────────────
     LIVEKIT_AGENTS_INFERENCE: bool = False

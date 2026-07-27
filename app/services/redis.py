@@ -85,6 +85,11 @@ class RedisService:
     async def get_provider_trunk_mapping(self, provider: str, phone_number: str) -> Optional[str]:
         return await self.client.get(f"{provider}:sip_trunk:{phone_number}")
 
+    # ── Distributed Locks ──────────────────────────────────────────────
+    async def acquire_lock(self, key: str, ttl: int = 30) -> bool:
+        result = await self.client.set(key, "1", nx=True, ex=ttl)
+        return result is not None
+
     # ── SIP Error Status ───────────────────────────────────────────────
     async def set_sip_error(self, call_id: str, error: str, ttl: int = 300):
         key = f"sip_error_status:{call_id}"

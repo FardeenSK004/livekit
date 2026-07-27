@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import hashlib
 import hmac
 import json
@@ -20,7 +21,7 @@ class WebhookService:
     async def send(
         self,
         payload: dict,
-        endpoint: str = "/webhooks/n8n",
+        endpoint: str = "/api/v1/webhooks/n8n",
         max_retries: int = 3,
     ) -> bool:
         """POST payload with mantra-compatible HMAC signing.
@@ -34,12 +35,14 @@ class WebhookService:
 
         url = f"{base_url}{endpoint}"
         timestamp = str(int(time.time()))
+        timestamp_iso = datetime.datetime.utcfromtimestamp(int(timestamp)).strftime("%Y-%m-%dT%H:%M:%S")
         body = json.dumps(payload, separators=(",", ":")) if payload else "{}"
         data_to_sign = f"{body}.{timestamp}"
 
         headers = {
             "Content-Type": "application/json",
             "x-timestamp": timestamp,
+            "x-timestamp-iso": timestamp_iso,
             "x-source": "n8n",
         }
 

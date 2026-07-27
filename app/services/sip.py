@@ -93,6 +93,21 @@ class SipService:
         await redis_service.set_sip_error(call_id, error)
 
     async def handle_sip_failure(self, call_id: str, room_name: str, error: Exception):
+        try:
+            participants = await livekit_service.client.room.list_participants(
+                api.ListParticipantsRequest(room=room_name)
+            )
+            for p in participants.participants:
+                if p.identity == f"sip_{call_id}":
+                    logger.info(
+                        "SIP participant %s already in room %s — duplicate trigger_sip, skipping cleanup",
+                        p.identity,
+                        room_name,
+                    )
+                    return
+        except Exception as check_err:
+            logger.warning("Could not check room participants for %s: %s", room_name, check_err)
+
         status_guess = classify_sip_error(str(error))
         try:
             await redis_service.set_sip_error(str(call_id), status_guess)

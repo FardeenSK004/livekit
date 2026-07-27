@@ -51,6 +51,7 @@ from app.agent.tools import AssistantFunctions, get_agent_tools
 from app.config import settings
 from app.config.logging import setup_logger
 from app.recording.session_recorder import SessionRecorder
+from app.services.telemetry import report_telemetry
 
 load_dotenv()
 load_dotenv(".env.local", override=True)
@@ -147,18 +148,45 @@ async def entrypoint(ctx: JobContext):
     session_mgr = SessionManager(call_id=ctx.job.id, room_name=ctx.room.name)
     call_state = session_mgr.call_state
 
+    call_state["agent_joined_at"] = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    call_state["human_joined_at"] = None
+    call_state["call_initiated_at"] = None
+
+    tos_task_id = None
     call_id = ctx.job.id
     if ctx.job.metadata:
         try:
             payload = json.loads(ctx.job.metadata)
             _effective_call_metadata = dict(payload)
             call_id = payload.get("call_id") or payload.get("voice_id") or ctx.job.id
+            tos_task_id = payload.get("tos_task_id") or payload.get("metadata", {}).get("tos_task_id")
+            metadata = payload.get("metadata", {})
+            if isinstance(metadata, dict):
+                call_state["call_initiated_at"] = metadata.get("call_initiated_at")
         except Exception:
             pass
+
+    call_state["tos_task_id"] = tos_task_id
+    call_state["call_id"] = str(call_id)
 
     await _register_inbound_call_in_redis(ctx, call_id)
 
     recorder = SessionRecorder()
+
+    async def _telemetry(status: str, detail: str = "", data: dict | None = None, wait: bool = False):
+        _tos_task_id = call_state.get("tos_task_id")
+        _cid = call_state.get("call_id")
+        if _tos_task_id:
+            msg = f"[Agent Worker] {status}"
+            if detail:
+                msg += f" — {detail}"
+            if wait:
+                await report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data)
+            else:
+                create_bg_task(report_telemetry(tos_task_id=_tos_task_id, message=msg, call_id=_cid, data=data))
+
+    await _telemetry("agent_started", f"room={ctx.room.name}")
+    await _telemetry("room_connected", f"room={ctx.room.name}")
 
     fnc_ctx = AssistantFunctions(
         ctx.job.metadata,
@@ -242,6 +270,8 @@ async def entrypoint(ctx: JobContext):
     llm_engine = create_llm(payload if payload else {})
     tts_engine = create_tts(voice_id, voice_speed, language="en")
     session = create_agent_session(llm_engine, tts_engine)
+
+    await _telemetry("Agent voice engine ready", f"model={model_name}")
 
     try:
         mcp_server = lk_mcp.CstdioServerParameters(
@@ -339,7 +369,9 @@ async def entrypoint(ctx: JobContext):
 
             logger.info("Remote participant joined. Initializing conversation...")
             call_state["user_joined"] = True
+            call_state["human_joined_at"] = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             session_mgr.append_timeline("Remote Participant Joined")
+            await _telemetry("Customer joined the call")
             await asyncio.sleep(0.5)
 
         logger.info("Generating greeting for %s...", client_name)
