@@ -9,16 +9,16 @@
 
 ## Quick Links
 
-| Area | Document |
-|------|----------|
-| 🏛️ Architecture | [[Architecture/Overview.md\|Overview]] · [[Architecture/Components.md\|Components]] · [[Architecture/Data Flow.md\|Data Flow]] |
-| 🌐 APIs | [[Architecture/APIs.md\|API Reference]] |
-| 🗄️ Database | [[Architecture/Database.md\|Database Schema]] |
-| ⚙️ Infrastructure | [[Architecture/Infrastructure.md\|Infrastructure]] |
-| 🎯 Features | [[Features/Feature Index.md\|Feature Index]] |
-| 📋 Development | [[Development/TODO.md\|TODO]] · [[Development/Changelog.md\|Changelog]] · [[Development/Bugs.md\|Bugs]] |
-| 🧠 Knowledge | [[Knowledge/Coding Standards.md\|Coding Standards]] · [[Knowledge/Conventions.md\|Conventions]] |
-| 📖 Context | [[Context/Project Summary.md\|Project Summary]] · [[Context/Stack.md\|Stack]] · [[Context/Repository Map.md\|Repository Map]] |
+| Area              | Document                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 🏛️ Architecture   | [[Architecture/Overview.md\|Overview]] · [[Architecture/Components.md\|Components]] · [[Architecture/Data Flow.md\|Data Flow]] |
+| 🌐 APIs           | [[Architecture/APIs.md\|API Reference]]                                                                                        |
+| 🗄️ Database       | [[Architecture/Database.md\|Database Schema]]                                                                                  |
+| ⚙️ Infrastructure | [[Architecture/Infrastructure.md\|Infrastructure]]                                                                             |
+| 🎯 Features       | [[Features/Feature Index.md\|Feature Index]]                                                                                   |
+| 📋 Development    | [[Development/TODO.md\|TODO]] · [[Development/Changelog.md\|Changelog]] · [[Development/Bugs.md\|Bugs]]                        |
+| 🧠 Knowledge      | [[Knowledge/Coding Standards.md\|Coding Standards]] · [[Knowledge/Conventions.md\|Conventions]]                                |
+| 📖 Context        | [[Context/Project Summary.md\|Project Summary]] · [[Context/Stack.md\|Stack]] · [[Context/Repository Map.md\|Repository Map]]  |
 
 ---
 
@@ -38,14 +38,15 @@ Telephony Provider → Webhook → FastAPI → Redis Queue → Dispatcher → Li
 
 ## Key Stats
 
-| Metric | Value |
-|--------|-------|
-| Python modules | 6 (`mantra/`) |
-| Frontend files | 5 (`static/`) |
-| MCP server | 1 (`mcp/server.py`) |
-| Total source lines | ~5,200+ |
-| Core agent file | `mantra/agent.py` — ~1,008 lines |
-| API server file | `mantra/ui_server.py` — ~1,120 lines |
+| Metric             | Value                                  |
+| ------------------ | -------------------------------------- |
+| Python modules     | 7 (`mantra/`)                          |
+| Frontend files     | 5 (`static/`)                          |
+| MCP server         | 1 (`mcp/server.py`)                    |
+| Total source lines | ~6,206                                 |
+| Core agent file    | `mantra/agent.py` — 1,513 lines        |
+| API server file    | `mantra/ui_server.py` — 2,143 lines    |
+| KB module          | `mantra/knowledge_base.py` — 461 lines |
 
 ---
 
