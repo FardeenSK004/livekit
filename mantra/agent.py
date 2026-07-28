@@ -102,6 +102,9 @@ load_dotenv(
 )  # Load .env.local (LiveKit, etc.) and override if needed
 
 
+AGENT_NAME = os.getenv("AGENT_NAME", "mantra-agent")
+logger.info(f"Agent name configured as: {AGENT_NAME}")
+
 server = AgentServer(num_idle_processes=20)
 
 # --- Transfer/Handoff Configuration ---
@@ -462,7 +465,7 @@ class AssistantFunctions:
     #     return "I am connecting you to a human assistant now. Please stay on the line. I will remain on the call to record and summarize our conversation."
 
 
-@server.rtc_session(agent_name="mantra-agent")
+@server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext):
     entrypoint_start_time = asyncio.get_event_loop().time()
     logger.info(f"Entrypoint reached for room: {ctx.room.name}")

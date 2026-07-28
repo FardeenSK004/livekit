@@ -15,8 +15,8 @@ echo "Starting MCP Database Server..."
 uv run python mcp/server.py &
 MCP_PID=$!
 
-echo "Starting LiveKit Agent (dev mode)..."
-uv run python -m mantra.agent dev &
+echo "Starting LiveKit Agent (dev mode) as 'mantra-agent-dev'..."
+AGENT_NAME=mantra-agent-dev uv run python -m mantra.agent dev &
 AGENT_PID=$!
 
 echo "Starting UI Server (FastAPI)..."

@@ -728,6 +728,7 @@ async def dispatch_test(request: Request):
         f"Manual dispatch request with payload: {json.dumps(payload, separators=(',', ':'))}"
     )
 
+    agent_name = payload.pop("agent_name", "mantra-agent")
     # Generate a unique room name for this test session using the call_id if provided
     call_id = payload.get("call_id") or int(time.time())
     room_name = f"test_{call_id}"
@@ -736,7 +737,7 @@ async def dispatch_test(request: Request):
         # Create dispatch with payload as metadata
         dispatch = await lk_client.agent_dispatch.create_dispatch(
             api.CreateAgentDispatchRequest(
-                room=room_name, agent_name="mantra-agent", metadata=json.dumps(payload)
+                room=room_name, agent_name=agent_name, metadata=json.dumps(payload)
             )
         )
         logger.info(
@@ -784,6 +785,7 @@ async def test_inbound_call(request: Request):
     
     logger.info(f"Test inbound call request: {json.dumps(payload, indent=2)}")
     
+    agent_name = payload.pop("agent_name", "mantra-agent")
     call_id = int(time.time())
     room_name = f"test_inbound_{call_id}"
     
@@ -796,11 +798,11 @@ async def test_inbound_call(request: Request):
     
     # 1. Trigger agent dispatch
     try:
-        logger.info(f"Dispatching agent to room {room_name}")
+        logger.info(f"Dispatching agent '{agent_name}' to room {room_name}")
         dispatch = await lk_client.agent_dispatch.create_dispatch(
             api.CreateAgentDispatchRequest(
                 room=room_name,
-                agent_name="mantra-agent",
+                agent_name=agent_name,
                 metadata=json.dumps(payload)
             )
         )
