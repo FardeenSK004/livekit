@@ -1678,6 +1678,7 @@ async def _setup_inbound_sip_process(payload: dict | None) -> JSONResponse:
                     trunk=api.SIPInboundTrunkInfo(
                         name=name,
                         numbers=[number, clean_number],
+                        allowed_addresses=["0.0.0.0/0"],
                     )
                 )
             )
