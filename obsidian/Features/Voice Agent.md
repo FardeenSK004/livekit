@@ -13,7 +13,7 @@ The core real-time voice AI agent. Connects to LiveKit rooms, handles the full S
    - `openai` → GPT-4o-mini (default)
    - `gemini` → Gemini 2.5 Flash
    - `deepseek` → DeepSeek v4 Flash (via OpenAI-compatible API)
-3. **TTS:** Cartesia Sonic-3 with FallbackAdapter (multiple API keys for rate limit cycling)
+3. **TTS:** LiveKit Inference Sonic-3 (native LiveKit TTS, no Cartesia dependency)
 4. **VAD:** Silero (`min_speech_duration=0.08`, `min_silence_duration=0.15`)
 5. **Turn Detection:** MultilingualModel
 

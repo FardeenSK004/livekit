@@ -3,7 +3,7 @@
 > **Version:** 0.2.1  
 > **Package:** `livekit-agent`  
 > **Repository:** `git@github.com:FardeenSK004/livekit.git` (fork of Mantracare-Org/livekit)  
-> **Last Updated:** 2026-07-26
+> **Last Updated:** 2026-07-27
 
 ---
 
@@ -52,6 +52,7 @@ Telephony Provider → Webhook → FastAPI → Redis Queue → Dispatcher → Li
 
 ## Recent Changelog
 
+- **2026-07-27:** TTS migration to LiveKit native `sonic-3` (removed Cartesia dependency), TOS telemetry refinement, directional farewell detection
 - **2026-07-26:** TOS telemetry pipeline across agent/dispatcher/ui_server, health gate middleware blocking dispatch on dependency failure, Redis dedup lock on webhooks, startup healthcheck
 - **2026-06-30:** Cartesia TTS migrated to LiveKit Inference, removed redundant API key management, added env var fallbacks for MAX_CONCURRENCY
 - **2026-06:** Dynamic tone/style configurations for agent prompts, emotional tone optimization for Cartesia

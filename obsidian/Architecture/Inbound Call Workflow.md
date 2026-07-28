@@ -28,7 +28,7 @@ Step 4: KB & PROMPT SCOPING
 Step 5: REAL-TIME CONVERSATION (STT → LLM → TTS)
   ├── STT: Deepgram Nova-3 (Hinglish/Multilingual)
   ├── LLM: DeepSeek / GPT-4o-mini
-  ├── TTS: Cartesia Sonic-3
+  ├── TTS: LiveKit Inference Sonic-3
   └── Tool: `search_knowledge_base` (PostgreSQL Full-Text Search via `kb_pages` filtered by `kb_id`)
 
 Step 6: POST-CALL PROCESSING

@@ -1,26 +1,15 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-07-23  
-> **Status:** Plivo inbound call fix — migrated from Application XML to Zentrunk SIP trunking
-> **Last Updated:** 2026-07-26  
-> **Status:** Active maintenance + incremental features
+> **Last Updated:** 2026-07-27  
+> **Status:** Active maintenance, TTS migration to LiveKit native `sonic-3`, TOS telemetry refinement & stability
 
 ## Recently Completed
 
-- [x] TOS telemetry cleanup — structured `data` payload, natural language stage messages, stripped verbose logging
-- [x] Timezone fix — `next_call_on` sent in UTC for scheduled times, rest stays local
-- [x] TOS telemetry pipeline — `report_telemetry()` in utils.py, integrated across agent/dispatcher/ui_server
-- [x] Health gate middleware — blocks dispatch on dependency failure (HTTP 503)
-- [x] Startup healthcheck — parallel checks on all services at boot
-- [x] Redis dedup lock on webhook endpoints — prevents duplicate call processing
-- [x] Room participant duplicate guard in SIP failure handler
-- [x] `send_to_backend` URL fix (`/webhooks/n8n` → `/api/v1/webhooks/n8n`)
-
-## Recently Completed
-
-- [x] Post-call data & timestamps — TOS delivery fix, `next_call_on` format, explicit timestamp fields for n8n
-- [x] TTS model fix — `sonic-3` (LiveKit native), removed Cartesia health check and TTS dependencies
+- [x] TTS migration to LiveKit native `sonic-3` (removed Cartesia dependency & health check)
+- [x] TOS telemetry refinement — fire-and-forget post-processing, explicit `called_on` timestamp mapping
+- [x] Directional farewell detection & webhook events in agent logic
+- [x] SIP inbound trunk security update — allow all IP addresses for SIP inbound trunks
 
 ## In Progress
 
