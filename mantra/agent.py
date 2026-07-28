@@ -295,6 +295,24 @@ class AssistantFunctions:
             self._retriever = KnowledgeRetriever(kb)
         return self._retriever
 
+    @property
+    def used_kb_process_ids(self) -> list[str]:
+        if self._retriever is None:
+            return []
+        seen = set()
+        result = []
+        for meta in self._retriever.accessed_pages_meta:
+            raw = meta.get("process_id")
+            if isinstance(raw, list):
+                for pid in raw:
+                    if pid and pid not in seen:
+                        seen.add(pid)
+                        result.append(pid)
+            elif raw and raw not in seen:
+                seen.add(raw)
+                result.append(raw)
+        return result
+
     @llm.function_tool(
         description="Transfer the call to a human agent in a specific department when the user requests it, "
                     "you cannot resolve their issue, or they seem frustrated. "
@@ -1226,6 +1244,16 @@ Follow these specific instructions:
                 except Exception as e:
                     logger.error(f"Failed to parse call metadata: {e}")
                     call_payload = {}
+
+                # For inbound calls, get process_id from the KB document actually used during the call
+                if call_payload.get("direction") == "inbound":
+                    try:
+                        used_pids = fnc_ctx.used_kb_process_ids
+                        if used_pids:
+                            call_payload["process_id"] = used_pids[0]
+                            logger.info(f"Using KB-tracked process_id for inbound: {used_pids[0]}")
+                    except Exception as e:
+                        logger.error(f"Failed to extract KB usage metadata: {e}")
 
                 # Determine call status based on whether the user joined and actually spoke
                 user_spoke = False

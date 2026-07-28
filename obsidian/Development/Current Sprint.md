@@ -6,6 +6,7 @@
 
 ## Recently Completed
 
+- [x] Inbound KB document tracking — `CALL_DATA_INBOUND_UPDATE` now carries `process_id` from the specific KB document the agent searched during the call (not org-level config)
 - [x] TTS migration to LiveKit native `sonic-3` (removed Cartesia dependency & health check)
 - [x] TOS telemetry refinement — fire-and-forget post-processing, explicit `called_on` timestamp mapping
 - [x] Directional farewell detection & webhook events in agent logic

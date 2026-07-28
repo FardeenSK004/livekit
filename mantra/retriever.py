@@ -8,6 +8,7 @@ class KnowledgeRetriever:
     def __init__(self, kb: PostgresKnowledgeBase):
         self.kb = kb
         self.session_cache = {}
+        self.accessed_pages_meta: list[dict] = []
 
     async def retrieve(self, query: str, kb_ids: List[str], top_k: int = 3, tags: List[str] = None) -> str:
         """
@@ -40,6 +41,9 @@ class KnowledgeRetriever:
                 formatted_result = "--- RELEVANT KNOWLEDGE BASE INFORMATION ---\n\n"
                 for i, page in enumerate(results, 1):
                     formatted_result += f"Source {i} [{page.title}]:\n{page.content_in_text}\n\n"
+                for page in results:
+                    if page.page_meta:
+                        self.accessed_pages_meta.append(page.page_meta)
             
             # Cache the result
             self.session_cache[cache_key] = formatted_result
