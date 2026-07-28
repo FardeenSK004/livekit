@@ -929,7 +929,8 @@ Follow these specific instructions:
                         )
 
     # Safety net: if the LLM says goodbye but forgets to call end_call, force disconnect
-    FAREWELL_PHRASES = [
+    # Inbound calls use "thank you for calling" as a greeting — exclude it from detection
+    INBOUND_FAREWELL_PHRASES = [
         "goodbye",
         "good bye",
         "bye bye",
@@ -937,15 +938,18 @@ Follow these specific instructions:
         "have a great day",
         "have a good day",
         "have a nice day",
-        "thanks for calling",
-        "thank you for calling",
         "talk to you later",
         "see you later",
+    ]
+    OUTBOUND_FAREWELL_PHRASES = INBOUND_FAREWELL_PHRASES + [
+        "thanks for calling",
+        "thank you for calling",
     ]
 
     async def farewell_safety_net():
         """Detect if the agent said goodbye without calling end_call, and force disconnect."""
         await asyncio.sleep(10.0)  # Let the conversation warm up first
+        farewell_phrases = INBOUND_FAREWELL_PHRASES if is_inbound else OUTBOUND_FAREWELL_PHRASES
         while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
             await asyncio.sleep(3.0)
             if not (session and hasattr(session, "history") and session.history):
@@ -959,7 +963,7 @@ Follow these specific instructions:
                 role = getattr(last_msg, "role", "")
                 content = str(getattr(last_msg, "content", "")).lower()
                 if role == "assistant" and any(
-                    phrase in content for phrase in FAREWELL_PHRASES
+                    phrase in content for phrase in farewell_phrases
                 ):
                     logger.warning(
                         "Safety net: Agent said goodbye but end_call was never invoked. Force disconnecting."
@@ -1350,8 +1354,9 @@ Follow these specific instructions:
                 logger.error(f"Pipeline error in finalize: {e}", exc_info=True)
 
             # 6. Build webhook payload — same structure regardless of errors
+            event_name = "CALL_DATA_INBOUND_UPDATE" if call_payload.get("direction") == "inbound" else "CALL_DATA_UPDATE"
             webhook_payload = {
-                "event": "CALL_DATA_UPDATE",
+                "event": event_name,
                 "data": {
                     "client_id": call_payload.get("lead_id"),
                     "call_id": call_payload.get("call_id") or call_payload.get("voice_id"),
