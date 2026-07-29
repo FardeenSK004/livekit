@@ -240,6 +240,42 @@ Content-Type: application/json
 
 
 ### ────────────────────────────────────────────
+### 4c. Voicelink trunk (provision only)
+POST http://localhost:8081/api/v1/sip/trunks/outbound/voicelink
+Content-Type: application/json
+
+{
+  "trunk": {
+    "name": "voicelink-test-trunk",
+    "address": "voicelink.sip.example.com",
+    "numbers": ["+911234567890"],
+    "authUsername": "vl_username",
+    "authPassword": "vl_password"
+  }
+}
+
+### 4d. Voicelink trunk (flat payload)
+POST http://localhost:8081/api/v1/sip/trunks/outbound/voicelink
+Content-Type: application/json
+
+{
+  "name": "voicelink-flat-trunk",
+  "address": "voicelink.sip.example.com",
+  "numbers": ["+911234567890"],
+  "authUsername": "vl_username",
+  "authPassword": "vl_password"
+}
+
+### 4e. Voicelink trunk (existing trunk_id)
+POST http://localhost:8081/api/v1/sip/trunks/outbound/voicelink
+Content-Type: application/json
+
+{
+  "trunk_id": "ST_xxxxx"
+}
+
+
+### ────────────────────────────────────────────
 ### 5. OUTBOUND TRUNK CRUD
 ### ────────────────────────────────────────────
 
