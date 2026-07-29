@@ -86,8 +86,28 @@ class KnowledgeBase(ABC):
         pass
 
     @abstractmethod
-    async def delete_by_document(self, kb_id: str, document_id: str) -> int:
-        """Delete all pages for a specific document. Returns count."""
+    async def delete_by_document(self, org_id: str, document_id: str) -> int:
+        """Delete all pages for a specific document across all KBs for an org. Returns count."""
+        pass
+
+    @abstractmethod
+    async def get_or_create_collection(self, org_id: str, document_id: str, name: str = "") -> dict:
+        """Find or create a KB collection for (org_id, document_id). Returns collection dict."""
+        pass
+
+    @abstractmethod
+    async def list_collections(self, org_id: str) -> list[dict]:
+        """List all KB collections for an org."""
+        pass
+
+    @abstractmethod
+    async def delete_collection(self, collection_id: str) -> bool:
+        """Delete a collection and all its pages. Returns True if deleted."""
+        pass
+
+    @abstractmethod
+    async def get_kb_ids_for_org(self, org_id: str) -> list[str]:
+        """Get all KB IDs (collection UUIDs) for an org, including org_id fallback."""
         pass
 
     async def close(self):
@@ -217,15 +237,67 @@ class PostgresKnowledgeBase(KnowledgeBase):
             return int(result.split()[-1]) if result.startswith("DELETE") else 0
 
 
-    async def delete_by_document(self, kb_id: str, document_id: str) -> int:
+    async def delete_by_document(self, org_id: str, document_id: str) -> int:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             result = await conn.execute(
-                "DELETE FROM kb_pages WHERE kb_id = $1 AND page_meta->>'document_id' = $2",
-                kb_id.replace("\x00", ""),
+                "DELETE FROM kb_pages WHERE page_meta->>'document_id' = $1",
                 document_id.replace("\x00", ""),
             )
-            return int(result.split()[-1]) if result.startswith("DELETE") else 0
+            deleted_pages = int(result.split()[-1]) if result.startswith("DELETE") else 0
+            await conn.execute(
+                "DELETE FROM kb_collections WHERE org_id = $1 AND document_id = $2",
+                org_id.replace("\x00", ""),
+                document_id.replace("\x00", ""),
+            )
+            return deleted_pages
+
+    async def get_or_create_collection(self, org_id: str, document_id: str, name: str = "") -> dict:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO kb_collections (org_id, document_id, name)
+                VALUES ($1, $2, COALESCE(NULLIF($3, ''), $2))
+                ON CONFLICT (org_id, document_id) DO UPDATE SET
+                    name = EXCLUDED.name
+                RETURNING id, org_id, document_id, name, description, created_at
+                """,
+                org_id, document_id, name,
+            )
+            return dict(row)
+
+    async def list_collections(self, org_id: str) -> list[dict]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, org_id, document_id, name, description, created_at FROM kb_collections WHERE org_id = $1 ORDER BY created_at",
+                org_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def delete_collection(self, collection_id: str) -> bool:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM kb_pages WHERE kb_id = $1", collection_id
+                )
+                result = await conn.execute(
+                    "DELETE FROM kb_collections WHERE id = $1", uuid.UUID(collection_id)
+                )
+            return result != "DELETE 0"
+
+    async def get_kb_ids_for_org(self, org_id: str) -> list[str]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id FROM kb_collections WHERE org_id = $1", org_id
+            )
+            kb_ids = [str(r["id"]) for r in rows]
+            if org_id not in kb_ids:
+                kb_ids.append(org_id)
+            return kb_ids
 
     async def close(self):
         if self._pool:
@@ -431,7 +503,6 @@ async def ingest_file(
     page_meta: Optional[dict] = None
 ) -> dict:
     """Ingest a file into the knowledge base."""
-    # Extract text
     if filename.endswith(".pdf"):
         text = await extract_pdf_text(file_bytes)
     elif filename.endswith((".txt", ".md")):
@@ -452,10 +523,8 @@ async def ingest_text(
     page_meta: Optional[dict] = None,
 ) -> dict:
     """Ingest raw text into the knowledge base."""
-    # Chunk adaptively
     chunks = adaptive_chunk(content_in_text)
 
-    # Store pages
     page_ids = []
     for i, chunk in enumerate(chunks):
         meta = {

@@ -3,6 +3,7 @@ import sys
 import logging
 import json
 import time
+import uuid
 import hashlib
 import traceback
 import asyncio
@@ -553,32 +554,33 @@ async def api_kb_chat(request: Request):
 
 
 @app.post("/api/v1/kb/ingest")
-async def ingest_kb_data(
-    org_id: str = Form(...),
-    file: UploadFile = File(None),
-    text: str = Form(None),
-    process_id: str = Form(None),
-    stage_id: str = Form(None),
-    tags_name: str = Form(None),
-    category_name: str = Form(None),
-    document_id: str = Form(None)
-):
+async def ingest_kb_data(request: Request):
     """
     Ingest endpoint for MantraAssist KB data.
     Receives either a file or text content, and stores it in PostgreSQL.
     """
-    logger.info(
-        f"Received KB Ingest Request - org_id: '{org_id}', "
-        f"filename: '{file.filename if file else 'None'}', "
-        f"has_text: {text is not None}, "
-        f"text_preview: {repr(text[:100]) if text else 'None'}, "
-        f"process_id: '{process_id}', stage_id: '{stage_id}', "
-        f"tags_name: '{tags_name}', category_name: '{category_name}', "
-        f"document_id: '{document_id}'"
-    )
+    form = await request.form()
+    raw = {}
+    for k, v in form.items():
+        if isinstance(v, UploadFile):
+            raw[k] = f"UploadFile({v.filename})"
+        else:
+            raw[k] = v
+    print(f"RAW FORM: {raw}")
+
+    org_id = form.get("org_id")
+    upload_file = form.get("file")
+    text = form.get("text")
+    tags_name = form.get("tags_name")
+    document_id = form.get("document_id")
+    process_stage_data = form.get("process_stage_data")
+
+    if not org_id:
+        return JSONResponse({"status_code": 400, "status": "error", "error": "org_id is required"}, status_code=400)
+
     from mantra.knowledge_base import PostgresKnowledgeBase, ingest_file, ingest_text
 
-    if not file and not text:
+    if not upload_file and not text:
         return JSONResponse({"status_code": 400, "status": "error", "error": "Either file or text must be provided"}, status_code=400)
 
     dsn = (
@@ -587,7 +589,7 @@ async def ingest_kb_data(
     )
 
     s3_url = None
-    if file and file.filename:
+    if upload_file:
         s3_bucket = os.getenv("AWS_S3_BUCKET_NAME") or os.getenv("AWS_BUCKET_NAME")
         s3_access_key = os.getenv("AWS_ACCESS_KEY_ID")
         s3_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -597,15 +599,15 @@ async def ingest_kb_data(
             try:
                 import boto3
                 import time
-                file_bytes_for_s3 = await file.read()
-                await file.seek(0)
+                file_bytes_for_s3 = await upload_file.read()
+                await upload_file.seek(0)
                 s3_client = boto3.client(
                     "s3",
                     aws_access_key_id=s3_access_key,
                     aws_secret_access_key=s3_secret_key,
                     region_name=s3_region
                 )
-                s3_key = f"kb/{org_id}/{int(time.time())}_{file.filename}"
+                s3_key = f"kb/{org_id}/{int(time.time())}_{upload_file.filename}"
                 s3_client.put_object(
                     Bucket=s3_bucket,
                     Key=s3_key,
@@ -613,7 +615,7 @@ async def ingest_kb_data(
                     ACL="public-read",
                 )
                 s3_url = f"https://{s3_bucket}.s3.{s3_region}.amazonaws.com/{s3_key}"
-                logger.info(f"Uploaded {file.filename} to S3: {s3_url}")
+                logger.info(f"Uploaded {upload_file.filename} to S3: {s3_url}")
             except Exception as e:
                 logger.error(f"S3 upload error: {e}")
                 return JSONResponse({"status_code": 500, "status": "error", "error": f"Failed to upload to S3: {str(e)}"}, status_code=500)
@@ -625,46 +627,59 @@ async def ingest_kb_data(
             return [v.strip() for v in val.split(",")] if val else None
 
         page_meta = {
-            "process_id": parse_list(process_id),
-            "stage_id": parse_list(stage_id),
             "tags_name": parse_list(tags_name),
-            "category_name": parse_list(category_name),
             "s3_url": s3_url,
-            "document_id": document_id
+            "document_id": document_id,
         }
+        if process_stage_data:
+            try:
+                page_meta["process_stage_data"] = json.loads(process_stage_data)
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse process_stage_data as JSON: {process_stage_data}")
+                page_meta["process_stage_data"] = process_stage_data
         page_meta = {k: v for k, v in page_meta.items() if v is not None}
 
         kb = PostgresKnowledgeBase(dsn)
-        
-        # If document_id is provided, automatically delete old chunks to handle updates cleanly
+
+        # Resolve the document_id for collection naming
+        doc_id = document_id or (upload_file.filename if upload_file else "text_ingestion")
+
+        # If document_id provided, delete old chunks across all KBs (handles backward compat cleanly)
         if document_id:
             try:
                 deleted_count = await kb.delete_by_document(org_id, document_id)
                 logger.info(f"Deleted {deleted_count} old chunks for document {document_id}")
             except Exception as e:
                 logger.error(f"Failed to delete old chunks for document {document_id}: {e}")
-        
-        if file and file.filename:
-            file_bytes = await file.read()
+
+        # Get or create a KB collection for this (org_id, document_id)
+        collection = await kb.get_or_create_collection(
+            org_id, doc_id, name=upload_file.filename if upload_file else doc_id
+        )
+        collection_id = str(collection["id"])
+        logger.info(f"Using KB collection {collection_id} for org {org_id} document {doc_id}")
+
+        if upload_file:
+            file_bytes = await upload_file.read()
             await ingest_file(
                 kb=kb,
-                kb_id=org_id,
+                kb_id=collection_id,
                 file_bytes=file_bytes,
-                filename=file.filename,
+                filename=upload_file.filename,
                 page_meta=page_meta
             )
         elif text:
             await ingest_text(
                 kb=kb,
-                kb_id=org_id,
+                kb_id=collection_id,
                 content_in_text=text,
                 title=document_id or "Text Ingestion",
                 source_type="text",
                 page_meta=page_meta
             )
-            
+
         await kb.close()
-        
+
         return JSONResponse({
             "status_code": 200,
             "status": "success",

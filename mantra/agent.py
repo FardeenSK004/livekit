@@ -168,11 +168,18 @@ async def _resolve_from_db(phone_number: str) -> dict | None:
             if result.get('transfer_numbers') and isinstance(result['transfer_numbers'], str):
                 try: result['transfer_numbers'] = json.loads(result['transfer_numbers'])
                 except: pass
-            
-            # The agent expects a certain dictionary format, let's make sure it matches what the backend would return
+
+            # Get all KB collection IDs for this org (includes org_id fallback for legacy data)
+            try:
+                kb_ids = await kb.get_kb_ids_for_org(result["org_id"])
+            except Exception as e:
+                logger.error(f"Failed to fetch kb_ids for org {result.get('org_id')}: {e}")
+                kb_ids = [result.get("org_id")]
+
             return {
                 "org_id": result.get("org_id"),
-                "kb_id": result.get("org_id"), # In our design, kb_id is org_id
+                "kb_id": result.get("org_id"),
+                "kb_ids": kb_ids,
                 "kb_tags": result.get("kb_tags", []),
                 "prompt": result.get("prompt"),
                 "voice": result.get("voice"),
@@ -311,6 +318,31 @@ class AssistantFunctions:
             elif raw and raw not in seen:
                 seen.add(raw)
                 result.append(raw)
+            psd = meta.get("process_stage_data")
+            if isinstance(psd, list):
+                for entry in psd:
+                    pid = entry.get("id")
+                    if pid is not None:
+                        pid_str = str(pid)
+                        if pid_str not in seen:
+                            seen.add(pid_str)
+                            result.append(pid_str)
+        return result
+
+    @property
+    def used_process_stage_data(self) -> list:
+        if self._retriever is None:
+            return []
+        seen_ids = set()
+        result = []
+        for meta in self._retriever.accessed_pages_meta:
+            psd = meta.get("process_stage_data")
+            if isinstance(psd, list):
+                for entry in psd:
+                    pid = entry.get("id")
+                    if pid is not None and pid not in seen_ids:
+                        seen_ids.add(pid)
+                        result.append(entry)
         return result
 
     @llm.function_tool(
@@ -1317,8 +1349,12 @@ Follow these specific instructions:
                 current_stage_id = call_payload.get("stage_id")
                 stage_details = call_payload.get("stageDetails", [])
 
+                # Get process_stage_data from KB pages accessed during the call
+                kb_process_stage_data = fnc_ctx.used_process_stage_data if hasattr(fnc_ctx, 'used_process_stage_data') else None
+
                 summary_text = None
                 new_stage_id = current_stage_id
+                derived_process_id = None
                 next_call_on = None
                 client_custom_fields = call_payload.get("client_custom_fields", {})
                 if not isinstance(client_custom_fields, dict):
@@ -1354,9 +1390,11 @@ Follow these specific instructions:
                                 stage_details=stage_details,
                                 duration=duration,
                                 client_country_code=client_country_code,
+                                process_stage_data=kb_process_stage_data,
                             )
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]
+                            derived_process_id = analysis.get("process_id")
                             next_call_on = analysis["next_call_on"]
 
                             if analysis.get("appointment_date_time"):
@@ -1371,7 +1409,7 @@ Follow these specific instructions:
                                 ]
 
                             logger.info(
-                                f"Analysis completed. New Stage ID: {new_stage_id}, Next Call On: {next_call_on}"
+                                f"Analysis completed. Process: {derived_process_id}, New Stage ID: {new_stage_id}, Next Call On: {next_call_on}"
                             )
                         else:
                             logger.warning(
@@ -1389,21 +1427,14 @@ Follow these specific instructions:
             webhook_payload = {
                 "event": event_name,
                 "data": {
-                    "client_id": call_payload.get("lead_id"),
-                    "call_id": call_payload.get("call_id") or call_payload.get("voice_id"),
-                    "call_status": call_status,
                     "call_transcript": transcript_data,
                     "ai_summary": summary_text,
                     "recording_url": recording_url,
                     "call_duration_seconds": duration,
                     "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else None,
                     "called_on": call_state.get("call_initiated_at") or None,
-                    "ai_call_id": ctx.job.id,
-                    "process_id": call_payload.get("process_id"),
+                    "process_id": str(derived_process_id) if derived_process_id else (call_payload.get("process_id")),
                     "new_stage_id": new_stage_id,
-                    "metadata": call_payload.get("metadata", {}),
-                    "client_custom_fields": client_custom_fields or {},
-                    "call_custom_fields": call_payload.get("call_custom_fields", {}),
                 }
             }
 

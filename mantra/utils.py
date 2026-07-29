@@ -330,6 +330,7 @@ class SessionRecorder:
         stage_details: List[dict],
         duration: int,
         client_country_code: str = "",
+        process_stage_data: Optional[list] = None,
     ) -> dict:
         # Fallback values
         fallback_stage_id = current_stage_id
@@ -372,6 +373,22 @@ class SessionRecorder:
         current_time = datetime.datetime.now()
         current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
 
+        process_block = ""
+        if process_stage_data:
+            process_block = f"""
+--- AVAILABLE PROCESSES (with stages) ---
+{json.dumps(process_stage_data, indent=2)}
+
+The call conversation relates to one of these processes. Analyze the transcript and determine:
+  - Which process (by `id`) the call is about. Pick the process whose name/description best matches the topic discussed.
+  - Which stage (by `id`) within that process best reflects the outcome of the call.
+"""
+        else:
+            process_block = f"""
+--- AVAILABLE CRM STAGES ---
+{json.dumps(stage_details, indent=2)}
+"""
+
         prompt = f"""
 You are an expert analyst for a care support and CRM system. Analyze the phone call transcript and metadata below.
 
@@ -380,10 +397,7 @@ Current Date and Time (Server Time - IST): {current_time_str}
 Call Duration: {duration} seconds
 Current Stage ID: {current_stage_id}
 Client Country Code: {client_country_code}
-
---- AVAILABLE CRM STAGES ---
-{json.dumps(stage_details, indent=2)}
-
+{process_block}
 --- TRANSCRIPT ---
 {transcript_text}
 
@@ -393,8 +407,9 @@ Client Country Code: {client_country_code}
    - The details discussed in the call.
    - The conclusion (e.g. appointment booked, callback scheduled, disconnected, not interested).
    - Any other important patient details based on the transcript.
-2. Determine the correct Next Stage ID (`new_stage_id`) from the AVAILABLE CRM STAGES above.
-   - Select the stage ID whose description best matches the outcome of the call.
+2. Determine the correct process_id and next stage_id.
+   - If processes are available (with their stages), select the process_id whose name best matches the call topic, then select the stage_id within that process whose description best matches the call outcome.
+   - If only stages are available (no processes), select the stage_id whose description best matches the call outcome.
    - If the patient confirmed/booked an appointment, select the stage for "confirmed the appointment".
    - If the patient asked to call back or follow up later, select the stage for "follow up or call later".
    - If the patient showed interest but didn't book yet, select the stage for "shown interest".
@@ -411,6 +426,7 @@ Client Country Code: {client_country_code}
 You MUST return your response as a valid JSON object with the following schema:
 {{
   "summary": "string (a single paragraph call summary)",
+  "process_id": integer or null (the selected process ID from AVAILABLE PROCESSES, or null if no processes available),
   "new_stage_id": integer (the selected stage ID from the list),
   "next_call_on": "string or null",
   "appointment_date_time": "string or null",

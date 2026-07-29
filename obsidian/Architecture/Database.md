@@ -22,19 +22,39 @@ The application uses a single table `call_logs` in an isolated database.
 
 ### Table: `kb_pages`
 
-Vector-enabled table for Knowledge Base documents (uses `pgvector`).
+Full-Text Search table for Knowledge Base document chunks (uses PostgreSQL `tsvector`).
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | UUID PRIMARY KEY | Auto-generated UUID |
-| `kb_id` | TEXT | Maps to `org_id`. Identifies which org the document belongs to. |
+| `kb_id` | TEXT | Collection UUID (maps to `kb_collections.id`) or org ID for legacy data. Which KB collection this chunk belongs to. |
 | `title` | TEXT | Document title |
-| `content` | TEXT | Markdown content of the document |
-| `source_type` | TEXT | e.g. `website`, `document`, `manual` |
-| `embedding` | VECTOR(1536) | OpenAI embedding vector |
-| `page_meta` | JSONB | Additional metadata (e.g., tags, URLs) |
-| `content_in_text` | TEXT | Plain text representation for indexing |
+| `content` | TEXT | Original source (filename or URL) |
+| `source_type` | TEXT | e.g. `file`, `text`, `url` |
+| `page_meta` | JSONB | Metadata: strategy, chunk_index, document_id, tags_name, process_id, stage_id, s3_url |
+| `content_in_text` | TEXT | Plain text content of the chunk (what the LLM sees) |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | Record creation timestamp |
+| `text_search` | tsvector (generated) | `to_tsvector('simple', title || ' ' || content_in_text)` — auto-populated |
+
+**Indexes:** B-tree on `(kb_id)`, GIN on `(text_search)` for FTS.
+
+### Table: `kb_collections`
+
+Groups KB pages into named collections per org. One collection = one document.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PRIMARY KEY | Auto-generated UUID, used as `kb_pages.kb_id` |
+| `org_id` | TEXT NOT NULL | Organization that owns this collection |
+| `document_id` | TEXT NOT NULL | Unique document identifier per org |
+| `name` | TEXT | Display name (filename or doc ID) |
+| `description` | TEXT | Optional description |
+| `created_at` | TIMESTAMPTZ DEFAULT NOW() | Creation timestamp |
+
+**Constraints:** `UNIQUE(org_id, document_id)` — one collection per document per org.
+**Indexes:** B-tree on `(org_id)`.
+
+### Table: `org_configs`
 
 ### Table: `org_configs`
 
@@ -58,6 +78,17 @@ Maps an inbound phone number to an organization and provides its specific agent 
 | `is_active` | BOOLEAN | Whether this mapping is currently active |
 | `created_at` | TIMESTAMPTZ | Creation timestamp |
 | `updated_at` | TIMESTAMPTZ | Last update timestamp |
+
+### KB Resolution Flow
+
+When an inbound call arrives, the agent resolves KB scope for the org:
+
+1. Look up `org_configs` by phone number → get `org_id`
+2. Query `kb_collections WHERE org_id = ?` → get all collection UUIDs
+3. Include the `org_id` itself as a fallback (backward compat with legacy data)
+4. Search `kb_pages WHERE kb_id = ANY([collection_uuids..., org_id])`
+
+This means one org = multiple KBs (collections). Each ingested document creates its own collection, and the agent searches across all collections for that org.
 
 ### Connection
 

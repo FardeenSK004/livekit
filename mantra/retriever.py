@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import List
 from mantra.knowledge_base import PostgresKnowledgeBase
@@ -41,6 +42,9 @@ class KnowledgeRetriever:
                 formatted_result = "--- RELEVANT KNOWLEDGE BASE INFORMATION ---\n\n"
                 for i, page in enumerate(results, 1):
                     formatted_result += f"Source {i} [{page.title}]:\n{page.content_in_text}\n\n"
+                    meta = page.page_meta or {}
+                    if meta.get("process_stage_data"):
+                        formatted_result += f"Process context: {json.dumps(meta['process_stage_data'])}\n\n"
                 for page in results:
                     if page.page_meta:
                         self.accessed_pages_meta.append(page.page_meta)
