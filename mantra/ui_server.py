@@ -1285,7 +1285,7 @@ async def _update_plivo_sip_forwarding(phone_number: str, sip_uri: str) -> dict:
                 break
         
         if not uri_uuid:
-            uri_data = {"uri": origination_host}
+            uri_data = {"uri": origination_host, "name": trunk_label}
             async with session.post(f"{base_url}/Zentrunk/URI/", headers=headers, json=uri_data) as resp:
                 result_text = await resp.text()
                 result = json.loads(result_text) if result_text else {}
