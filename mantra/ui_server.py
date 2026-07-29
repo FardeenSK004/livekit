@@ -909,6 +909,83 @@ async def create_inbound_trunk(request: Request):
         logger.error(f"Failed to create inbound trunk: {e}\n{traceback.format_exc()}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.post("/api/v1/sip/trunks/inbound/voicelink")
+async def create_voicelink_inbound_trunk(request: Request):
+    payload = await request.json()
+    if not payload:
+        return JSONResponse({"error": "No payload provided"}, status_code=400)
+
+    logger.info(f"Creating Voicelink inbound trunk: {json.dumps(payload, indent=2)}")
+
+    name = payload.get("name")
+    numbers = payload.get("numbers")
+    allowed_addresses = payload.get("allowedAddresses") or payload.get("allowed_addresses")
+
+    if not all([name, numbers]):
+        return JSONResponse({"error": "Missing required fields: name, numbers"}, status_code=400)
+
+    if isinstance(numbers, str):
+        numbers = [n.strip() for n in numbers.split(",") if n.strip()]
+    elif not isinstance(numbers, list):
+        numbers = [str(numbers)]
+
+    if isinstance(allowed_addresses, str):
+        allowed_addresses = [a.strip() for a in allowed_addresses.split(",") if a.strip()]
+
+    try:
+        trunk_request = api.CreateSIPInboundTrunkRequest(
+            trunk=api.SIPInboundTrunkInfo(
+                name=name,
+                numbers=numbers,
+                allowed_addresses=allowed_addresses or [],
+            )
+        )
+        trunk = await lk_client.sip.create_inbound_trunk(trunk_request)
+        trunk_id = trunk.sip_trunk_id
+        logger.info(f"Voicelink inbound trunk created: {trunk_id}")
+
+        dispatch_payload = {
+            **payload,
+            "trunk_id": trunk_id,
+            "direction": "inbound",
+        }
+
+        rule_name = payload.get("rule_name", f"voicelink_rule_{trunk_id}")
+        room_prefix = payload.get("room_prefix", "inbound_")
+
+        req = api.CreateSIPDispatchRuleRequest(
+            name=rule_name,
+            metadata=json.dumps(dispatch_payload),
+            rule=api.SIPDispatchRule(
+                dispatch_rule_individual=api.SIPDispatchRuleIndividual(
+                    room_prefix=room_prefix
+                )
+            ),
+            room_config=api.RoomConfiguration(
+                agents=[
+                    api.RoomAgentDispatch(
+                        agent_name="mantra-agent",
+                        metadata=json.dumps(dispatch_payload)
+                    )
+                ]
+            ),
+            trunk_ids=[trunk_id]
+        )
+        rule = await lk_client.sip.create_sip_dispatch_rule(req)
+        logger.info(f"Dispatch rule created: {rule.sip_dispatch_rule_id}")
+
+        return JSONResponse({
+            "status": "success",
+            "sip_trunk_id": trunk_id,
+            "sip_dispatch_rule_id": rule.sip_dispatch_rule_id,
+            "name": name,
+            "numbers": list(trunk.numbers),
+            "allowed_addresses": allowed_addresses,
+        })
+    except Exception as e:
+        logger.error(f"Failed to create Voicelink inbound trunk: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 @app.get("/api/v1/sip/trunks/inbound")
 async def list_sip_inbound_trunks():
@@ -2237,7 +2314,7 @@ async def create_voicelink_sip_trunk(request: Request):
     """
     payload = await request.json()
     if not payload:
-        return JSONResponse({"error: No payload provided"},
+        return JSONResponse({"error": "No payload provided"},
         status_code=400)
 
     if voicelink_client is None:
@@ -2245,35 +2322,33 @@ async def create_voicelink_sip_trunk(request: Request):
         return JSONResponse({"error": "VoiceLink not available"}, status_code=503)
 
     try:
-        trunk_data = payload.get("trunk")
-        if trunk_data:
-            logger.info("Provisioning new SIP trunk (VoiceLink) before call!! ")
+        def _src(src):
+            return dict(
+                name=src.get("name"),
+                address=src.get("address"),
+                numbers=src.get("numbers"),
+                auth_username=src.get("authUsername") or src.get("auth_username") or src.get("auth_user"),
+                auth_password=src.get("authPassword") or src.get("auth_password") or src.get("auth_pass"),
+            )
+
+        sources = {
+            "nested": payload.get("trunk"),
+            "flat": payload if "numbers" in payload and (
+                "authUsername" in payload or "auth_username" in payload or "auth_user" in payload
+            ) else None,
+        }
+        matched = next((k for k, v in sources.items() if v), None)
+
+        if matched:
+            logger.info(f"Provisioning new SIP trunk (VoiceLink) — {matched} payload")
             trunk = await _create_sip_outbound_trunk(
-                name=trunk_data.get("name"),
-                address=trunk_data.get("address"),
-                numbers=trunk_data.get("numbers"),
-                auth_username=trunk_data.get("authUsername") or trunk_data.get("auth_username"),
-                auth_password=trunk_data.get("authPassword") or trunk_data.get("auth_pass"),
-                client=voicelink_client,
-                destination_country="in",)
-                
-            trunk_id = trunk.sip_trunk_id
-        elif "numbers" in payload and ("authUsername" in payload or "auth_username" in payload or "auth_user" in payload ):
-            logger.info("Flat trunk payload detected. Provisioning Voicelink Trunk!~!")
-            trunk = await _create_sip_outbound_trunk(
-                name=payload.get("name"),
-                address=payload.get("address"),
-                numbers=payload.get("numbers"),
-                auth_username=payload.get("authUsername") or payload.get("auth_username") or payload.get ("auth_user"),
-                auth_password=payload.get("authPassword") or payload.get("auth_password") or payload.get("auth_pass"),
+                **_src(sources[matched]),
                 client=voicelink_client,
                 destination_country="in",
             )
             trunk_id = trunk.sip_trunk_id
         else:
-            trunk_id = (
-                payload.get("trunk_id") or payload.get("call_from_id")
-                        )
+            trunk_id = payload.get("trunk_id") or payload.get("call_from_id")
 
         if not trunk_id:
             return JSONResponse(
@@ -2286,6 +2361,9 @@ async def create_voicelink_sip_trunk(request: Request):
             "sip_trunk_id": trunk_id,
             "provider": "voicelink",
         }
+    except Exception as e:
+        logger.error(f"Failed to create voicelink trunk: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 
