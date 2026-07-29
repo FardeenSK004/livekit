@@ -1458,7 +1458,7 @@ async def _update_plivo_sip_forwarding(phone_number: str, sip_uri: str) -> dict:
                 break
         
         if not uri_uuid:
-            uri_data = {"uri": origination_host}
+            uri_data = {"uri": origination_host, "name": trunk_label}
             async with session.post(f"{base_url}/Zentrunk/URI/", headers=headers, json=uri_data) as resp:
                 result_text = await resp.text()
                 result = json.loads(result_text) if result_text else {}
@@ -2040,8 +2040,8 @@ async def handle_outbound_call_webhook(request: Request):
             "status": "success",
             "message": f"Agent dispatched for {event_name}",
             "client_name": payload.get("client_name", "Unknown"),
-            "purpose": payload.get("prompt", "Voice interaction")[:100]
-            + ("..." if len(payload.get("prompt", "")) > 100 else ""),
+            "purpose": (payload.get("prompt") or "Voice interaction")[:100]
+            + ("..." if len((payload.get("prompt") or "")) > 100 else ""),
             "room": room_name,
             "token": token.to_jwt(),
             "url": os.getenv("LIVEKIT_URL"),
