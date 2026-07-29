@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-Toggle the Zadarma SIP dispatch rule between production and dev agent names.
+Toggle SIP dispatch rules between production and dev agent names for all providers (Plivo, Twilio, Zadarma, etc.).
 
 USAGE:
-    python tools/toggle-dev-dispatch.py on     # Switch to mantra-agent-dev
-    python tools/toggle-dev-dispatch.py off    # Restore to mantra-agent (prod)
-    python tools/toggle-dev-dispatch.py status # Show current rule
+    python tools/toggle-dev-dispatch.py status                         # Show all inbound dispatch rules and their status
+    python tools/toggle-dev-dispatch.py on [--provider plivo|twilio|zadarma] [--trunk-id ST_xxx] [--all]
+    python tools/toggle-dev-dispatch.py off [--provider plivo|twilio|zadarma] [--trunk-id ST_xxx] [--all]
+
+Examples:
+    python tools/toggle-dev-dispatch.py on --all                         # Toggle ALL rules to dev
+    python tools/toggle-dev-dispatch.py on --provider zadarma            # Toggle only Zadarma rules to dev
+    python tools/toggle-dev-dispatch.py on --provider plivo              # Toggle only Plivo rules to dev
+    python tools/toggle-dev-dispatch.py on zadarma                       # Shortcut: positional provider works too
 
 Requires LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET in .env.local
 """
@@ -18,10 +24,6 @@ from dotenv import load_dotenv
 load_dotenv(".env.local")
 
 from livekit import api
-
-# The dispatch rule for the Zadarma inbound trunk
-ZADARMA_TRUNK_ID = "ST_wCjxf77iMhPM"
-BACKUP_FILE = ".dispatch-rule-backup.json"
 
 
 def get_lk_client():
@@ -37,193 +39,317 @@ def get_lk_client():
     return api.LiveKitAPI(url=api_url, api_key=api_key, api_secret=api_secret)
 
 
-async def find_zadarma_rule(lk_client):
-    resp = await lk_client.sip.list_dispatch_rule(api.ListSIPDispatchRuleRequest())
-    for item in resp.items:
-        trunk_ids = list(item.trunk_ids)
-        if ZADARMA_TRUNK_ID in trunk_ids:
-            return item
+async def get_all_inbound_info(lk_client):
+    """Fetch all dispatch rules + inbound trunks and return merged info."""
+    rules_resp = await lk_client.sip.list_dispatch_rule(api.ListSIPDispatchRuleRequest())
+    trunks_resp = await lk_client.sip.list_inbound_trunk(api.ListSIPInboundTrunkRequest())
+    trunk_map = {t.sip_trunk_id: t for t in trunks_resp.items}
+
+    items = []
+    for rule in rules_resp.items:
+        trunk_ids = list(rule.trunk_ids)
+        providers, trunk_names, numbers = [], [], []
+        for tid in trunk_ids:
+            trunk = trunk_map.get(tid)
+            if trunk:
+                trunk_names.append(trunk.name)
+                numbers.extend(list(trunk.numbers))
+                meta = trunk.metadata
+                if meta:
+                    try:
+                        meta_dict = pyjson.loads(meta) if isinstance(meta, str) else meta
+                        if isinstance(meta_dict, dict) and "provider" in meta_dict:
+                            providers.append(meta_dict["provider"].lower())
+                    except:
+                        pass
+                if not providers:
+                    name_lower = trunk.name.lower()
+                    if "plivo" in name_lower:
+                        providers.append("plivo")
+                    elif "twilio" in name_lower:
+                        providers.append("twilio")
+                    elif "zadarma" in name_lower:
+                        providers.append("zadarma")
+
+        current_agent = "mantra-agent"
+        if rule.room_config and rule.room_config.agents:
+            current_agent = rule.room_config.agents[0].agent_name
+
+        room_prefix = "inbound_"
+        if rule.rule and rule.rule.dispatch_rule_individual:
+            room_prefix = rule.rule.dispatch_rule_individual.room_prefix
+
+        items.append({
+            "rule": rule,
+            "rule_id": rule.sip_dispatch_rule_id,
+            "name": rule.name,
+            "trunk_ids": trunk_ids,
+            "trunk_names": trunk_names,
+            "numbers": numbers,
+            "providers": list(set(providers)),
+            "current_agent": current_agent,
+            "room_prefix": room_prefix,
+            "room_config": rule.room_config
+        })
+    return items
+
+
+def parse_args():
+    args = sys.argv[1:]
+    cmd = args[0] if args else "status"
+    provider = None
+    trunk_id = None
+    all_flag = False
+
+    i = 1
+    while i < len(args):
+        arg = args[i]
+        if arg in ("plivo", "twilio", "zadarma"):
+            provider = arg.lower()
+            i += 1
+        elif arg == "--provider" and i + 1 < len(args):
+            provider = args[i+1].lower()
+            i += 2
+        elif arg == "--trunk-id" and i + 1 < len(args):
+            trunk_id = args[i+1]
+            i += 2
+        elif arg == "--all":
+            all_flag = True
+            i += 1
+        else:
+            i += 1
+    return cmd, provider, trunk_id, all_flag
+
+
+def _backup_path(trunk_ids, rule_id):
+    """Return the canonical backup path: keyed by first trunk ID, falling back to rule ID."""
+    key = trunk_ids[0] if trunk_ids else rule_id
+    return f".dispatch-rule-backup-{key}.json"
+
+
+def _find_backup_file(trunk_ids, rule_id):
+    """Find existing backup file by scanning all backup files for matching trunk IDs."""
+    expected = _backup_path(trunk_ids, rule_id)
+    if os.path.exists(expected):
+        return expected
+    for fname in os.listdir("."):
+        if not fname.startswith(".dispatch-rule-backup-") or not fname.endswith(".json"):
+            continue
+        try:
+            with open(fname) as f:
+                data = pyjson.loads(f.read())
+            backup_tids = data.get("trunk_ids", [])
+            if any(tid in backup_tids for tid in trunk_ids):
+                return fname
+        except:
+            pass
     return None
 
 
-async def get_agent_name(rule_info):
-    if rule_info.room_config and rule_info.room_config.agents:
-        return rule_info.room_config.agents[0].agent_name
-    return "mantra-agent"
+async def cmd_status(lk_client):
+    items = await get_all_inbound_info(lk_client)
+    if not items:
+        print("No inbound dispatch rules found.")
+        return
+    print(f"{'RULE ID':<18} | {'NAME':<25} | {'PROVIDER':<10} | {'AGENT':<18} | {'TRUNK(S)':<15} | {'NUMBERS'}")
+    print("-" * 105)
+    for item in items:
+        prov = ", ".join(item["providers"]) or "unknown"
+        trunks = ", ".join(item["trunk_ids"])
+        nums = ", ".join(item["numbers"]) or "none"
+        print(f"{item['rule_id']:<18} | {item['name']:<25} | {prov:<10} | {item['current_agent']:<18} | {trunks:<15} | {nums}")
 
 
-async def cmd_on(lk_client):
-    rule = await find_zadarma_rule(lk_client)
-    if not rule:
-        print("ERROR: No dispatch rule found for Zadarma trunk")
+async def cmd_on(lk_client, provider_filter, trunk_id_filter, all_flag):
+    items = await get_all_inbound_info(lk_client)
+    if not items:
+        print("No inbound dispatch rules found.")
         return
 
-    rule_id = rule.sip_dispatch_rule_id
-    current_agent = await get_agent_name(rule)
-    print(f"Current rule: {rule_id}, agent: {current_agent}")
+    targets = []
+    for item in items:
+        if trunk_id_filter and trunk_id_filter not in item["trunk_ids"]:
+            continue
+        if provider_filter and provider_filter not in item["providers"]:
+            continue
+        targets.append(item)
 
-    if current_agent == "mantra-agent-dev":
-        print("Already in DEV mode — nothing to do")
+    if not targets:
+        print("No dispatch rules matched the specified filters.")
         return
 
-    # Determine room_prefix from rule
-    room_prefix = "inbound_"
-    if rule.rule and rule.rule.dispatch_rule_individual:
-        room_prefix = rule.rule.dispatch_rule_individual.room_prefix
+    if len(targets) > 1 and not all_flag and not trunk_id_filter and not provider_filter:
+        print(f"Found {len(targets)} inbound rules. Specify --all, --provider <name>, or --trunk-id <id> to target specific rules, or use status to inspect.")
+        return
 
-    # Save backup
-    backup = {
-        "sip_dispatch_rule_id": rule_id,
-        "name": rule.name,
-        "metadata": rule.metadata,
-        "room_prefix": room_prefix,
-        "trunk_ids": list(rule.trunk_ids),
-        "agent_name": current_agent,
-        "room_config": {
-            "empty_timeout": rule.room_config.empty_timeout if rule.room_config else 300,
-            "departure_timeout": rule.room_config.departure_timeout if rule.room_config else 60,
-        }
-    }
-    with open(BACKUP_FILE, "w") as f:
-        f.write(pyjson.dumps(backup, indent=2))
-    print(f"Saved backup to {BACKUP_FILE}")
+    for item in targets:
+        rule_id = item["rule_id"]
+        current_agent = item["current_agent"]
+        if current_agent == "mantra-agent-dev":
+            print(f"Rule {rule_id} ({item['name']}) already in DEV mode — skipping.")
+            continue
 
-    # Parse existing metadata
-    metadata_dict = {}
-    if rule.metadata:
-        try:
-            metadata_dict = pyjson.loads(rule.metadata)
-        except:
-            pass
-
-    # Delete old rule
-    print(f"Deleting old rule: {rule_id}")
-    await lk_client.sip.delete_dispatch_rule(
-        api.DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=rule_id)
-    )
-
-    # Create new rule with dev agent
-    trunk_ids = list(rule.trunk_ids)
-    req = api.CreateSIPDispatchRuleRequest(
-        name=rule.name,
-        metadata=pyjson.dumps(metadata_dict),
-        rule=api.SIPDispatchRule(
-            dispatch_rule_individual=api.SIPDispatchRuleIndividual(
-                room_prefix=room_prefix
-            )
-        ),
-        room_config=api.RoomConfiguration(
-            empty_timeout=backup["room_config"]["empty_timeout"],
-            departure_timeout=backup["room_config"]["departure_timeout"],
-            agents=[
-                api.RoomAgentDispatch(
-                    agent_name="mantra-agent-dev",
-                    metadata=pyjson.dumps(metadata_dict)
-                )
-            ]
-        ),
-        trunk_ids=trunk_ids
-    )
-    new_rule = await lk_client.sip.create_dispatch_rule(req)
-    print(f"Created DEV rule: {new_rule.sip_dispatch_rule_id}  (agent: mantra-agent-dev)")
-    print("Inbound calls now route to your local agent.")
-    print(f"Run `lk sip dispatch list` to verify.")
-    print(f"\nTo switch back: python tools/toggle-dev-dispatch.py off")
-
-
-async def cmd_off(lk_client):
-    if not os.path.exists(BACKUP_FILE):
-        print("No backup file found. Creating a default prod backup and restoring...")
+        backup_file = _backup_path(item["trunk_ids"], rule_id)
         backup = {
-            "name": "Rule for Zadarma Inbound Trunk",
-            "metadata": "{}",
-            "room_prefix": "inbound_7iMhPM",
-            "trunk_ids": [ZADARMA_TRUNK_ID],
-            "agent_name": "mantra-agent",
-            "room_config": {"empty_timeout": 300, "departure_timeout": 60}
+            "sip_dispatch_rule_id": rule_id,
+            "name": item["name"],
+            "metadata": item["rule"].metadata,
+            "room_prefix": item["room_prefix"],
+            "trunk_ids": item["trunk_ids"],
+            "agent_name": current_agent,
+            "room_config": {
+                "empty_timeout": item["room_config"].empty_timeout if item["room_config"] else 300,
+                "departure_timeout": item["room_config"].departure_timeout if item["room_config"] else 60,
+            }
         }
-    else:
-        with open(BACKUP_FILE) as f:
-            backup = pyjson.loads(f.read())
+        with open(backup_file, "w") as f:
+            f.write(pyjson.dumps(backup, indent=2))
+        print(f"✓ Backed up {rule_id} → {backup_file}")
 
-    # Check if a rule for this trunk already exists
-    existing = await find_zadarma_rule(lk_client)
-    if existing:
-        existing_agent = await get_agent_name(existing)
-        if existing_agent == backup["agent_name"] and os.path.exists(BACKUP_FILE):
-            print(f"Already restored to {backup['agent_name']} — nothing to do")
-            return
-        # Delete the current rule first
-        print(f"Deleting current rule: {existing.sip_dispatch_rule_id}")
+        metadata_dict = {}
+        if item["rule"].metadata:
+            try:
+                metadata_dict = pyjson.loads(item["rule"].metadata)
+            except:
+                pass
+
+        print(f"  Deleting old rule: {rule_id}")
         await lk_client.sip.delete_dispatch_rule(
-            api.DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=existing.sip_dispatch_rule_id)
+            api.DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=rule_id)
         )
 
-    # Parse metadata
-    metadata_dict = {}
-    if backup.get("metadata"):
-        try:
-            metadata_dict = pyjson.loads(backup["metadata"])
-        except:
-            pass
-
-    # Restore original rule
-    req = api.CreateSIPDispatchRuleRequest(
-        name=backup["name"],
-        metadata=pyjson.dumps(metadata_dict),
-        rule=api.SIPDispatchRule(
-            dispatch_rule_individual=api.SIPDispatchRuleIndividual(
-                room_prefix=backup["room_prefix"]
-            )
-        ),
-        room_config=api.RoomConfiguration(
-            empty_timeout=backup["room_config"]["empty_timeout"],
-            departure_timeout=backup["room_config"]["departure_timeout"],
-            agents=[
-                api.RoomAgentDispatch(
-                    agent_name=backup["agent_name"],
-                    metadata=pyjson.dumps(metadata_dict)
+        req = api.CreateSIPDispatchRuleRequest(
+            name=item["name"],
+            metadata=pyjson.dumps(metadata_dict),
+            rule=api.SIPDispatchRule(
+                dispatch_rule_individual=api.SIPDispatchRuleIndividual(
+                    room_prefix=item["room_prefix"]
                 )
-            ]
-        ),
-        trunk_ids=backup["trunk_ids"]
-    )
-    new_rule = await lk_client.sip.create_dispatch_rule(req)
-    print(f"Restored rule: {new_rule.sip_dispatch_rule_id}  (agent: {backup['agent_name']})")
-    if os.path.exists(BACKUP_FILE):
-        os.remove(BACKUP_FILE)
-    print("Inbound calls now route to production agent.")
+            ),
+            room_config=api.RoomConfiguration(
+                empty_timeout=backup["room_config"]["empty_timeout"],
+                departure_timeout=backup["room_config"]["departure_timeout"],
+                agents=[
+                    api.RoomAgentDispatch(
+                        agent_name="mantra-agent-dev",
+                        metadata=pyjson.dumps(metadata_dict)
+                    )
+                ]
+            ),
+            trunk_ids=item["trunk_ids"]
+        )
+        new_rule = await lk_client.sip.create_dispatch_rule(req)
+        print(f"  ✓ Created DEV rule: {new_rule.sip_dispatch_rule_id} (agent: mantra-agent-dev)")
 
 
-async def cmd_status(lk_client):
-    rule = await find_zadarma_rule(lk_client)
-    if not rule:
-        print("No dispatch rule found for Zadarma trunk")
+async def cmd_off(lk_client, provider_filter, trunk_id_filter, all_flag):
+    items = await get_all_inbound_info(lk_client)
+    if not items:
+        print("No inbound dispatch rules found.")
         return
-    agent = await get_agent_name(rule)
-    backup_exists = os.path.exists(BACKUP_FILE)
-    print(f"Rule ID:    {rule.sip_dispatch_rule_id}")
-    print(f"Name:       {rule.name}")
-    print(f"Agent:      {agent}")
-    print(f"Trunk IDs:  {list(rule.trunk_ids)}")
-    print(f"Backup:     {'exists' if backup_exists else 'none'}")
-    print(f"Mode:       {'DEV' if agent == 'mantra-agent-dev' else 'PRODUCTION'}")
+
+    targets = []
+    for item in items:
+        if trunk_id_filter and trunk_id_filter not in item["trunk_ids"]:
+            continue
+        if provider_filter and provider_filter not in item["providers"]:
+            continue
+        targets.append(item)
+
+    if not targets:
+        print("No dispatch rules matched the specified filters.")
+        return
+
+    for item in targets:
+        rule_id = item["rule_id"]
+        current_agent = item["current_agent"]
+
+        # If already in production, skip
+        if current_agent != "mantra-agent-dev":
+            print(f"✓ Rule {rule_id} already in production ({current_agent}) — skipping.")
+            continue
+
+        backup_file = _find_backup_file(item["trunk_ids"], rule_id)
+        if backup_file:
+            with open(backup_file) as f:
+                backup = pyjson.loads(f.read())
+        else:
+            # No backup found — create a synthetic one from current rule config
+            print(f"  (No backup file found for {rule_id} — using current rule config with agent: mantra-agent)")
+            backup = {
+                "name": item["name"],
+                "metadata": item["rule"].metadata,
+                "room_prefix": item["room_prefix"],
+                "trunk_ids": item["trunk_ids"],
+                "agent_name": "mantra-agent",
+                "room_config": {
+                    "empty_timeout": item["room_config"].empty_timeout if item["room_config"] else 300,
+                    "departure_timeout": item["room_config"].departure_timeout if item["room_config"] else 60,
+                }
+            }
+
+        # Delete current DEV rule (if it exists — handle 404 gracefully)
+        try:
+            print(f"  Deleting DEV rule: {rule_id}")
+            await lk_client.sip.delete_dispatch_rule(
+                api.DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=rule_id)
+            )
+        except Exception as e:
+            if "not_found" in str(e) or "404" in str(e) or "cannot be found" in str(e):
+                print(f"  (DEV rule {rule_id} already gone — production rule exists, skipping recreate to avoid duplicates)")
+                if backup_file and os.path.exists(backup_file):
+                    os.remove(backup_file)
+                continue
+            else:
+                print(f"  ⚠ Delete failed: {e} (continuing with restore)")
+
+        metadata_dict = {}
+        if backup.get("metadata"):
+            try:
+                metadata_dict = pyjson.loads(backup["metadata"])
+            except:
+                pass
+
+        req = api.CreateSIPDispatchRuleRequest(
+            name=backup["name"],
+            metadata=pyjson.dumps(metadata_dict),
+            rule=api.SIPDispatchRule(
+                dispatch_rule_individual=api.SIPDispatchRuleIndividual(
+                    room_prefix=backup["room_prefix"]
+                )
+            ),
+            room_config=api.RoomConfiguration(
+                empty_timeout=backup["room_config"]["empty_timeout"],
+                departure_timeout=backup["room_config"]["departure_timeout"],
+                agents=[
+                    api.RoomAgentDispatch(
+                        agent_name=backup["agent_name"],
+                        metadata=pyjson.dumps(metadata_dict)
+                    )
+                ]
+            ),
+            trunk_ids=backup["trunk_ids"]
+        )
+        new_rule = await lk_client.sip.create_dispatch_rule(req)
+        print(f"  ✓ Restored rule: {new_rule.sip_dispatch_rule_id} (agent: {backup['agent_name']})")
+        if backup_file and os.path.exists(backup_file):
+            os.remove(backup_file)
 
 
 async def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("on", "off", "status"):
+    cmd, provider, trunk_id, all_flag = parse_args()
+    if cmd not in ("on", "off", "status"):
         print(__doc__)
         return
 
     lk_client = get_lk_client()
     try:
-        cmd = sys.argv[1]
-        if cmd == "on":
-            await cmd_on(lk_client)
-        elif cmd == "off":
-            await cmd_off(lk_client)
-        elif cmd == "status":
+        if cmd == "status":
             await cmd_status(lk_client)
+        elif cmd == "on":
+            await cmd_on(lk_client, provider, trunk_id, all_flag)
+        elif cmd == "off":
+            await cmd_off(lk_client, provider, trunk_id, all_flag)
     finally:
         await lk_client.aclose()
 
