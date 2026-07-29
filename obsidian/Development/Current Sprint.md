@@ -1,11 +1,12 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-07-26  
+> **Last Updated:** 2026-07-29  
 > **Status:** Active maintenance + incremental features
 
 ## Recently Completed
 
+- [x] Celery post-call processing & delivery pipeline — decoupled LLM analysis and delivery to `webhook_processing` and `webhook_delivery` queues with `webhook_events` audit logging (2026-07-29)
 - [x] TOS telemetry cleanup — structured `data` payload, natural language stage messages, stripped verbose logging
 - [x] Timezone fix — `next_call_on` sent in UTC for scheduled times, rest stays local
 - [x] TOS telemetry pipeline — `report_telemetry()` in utils.py, integrated across agent/dispatcher/ui_server

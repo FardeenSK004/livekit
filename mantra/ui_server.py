@@ -16,9 +16,7 @@ import asyncpg
 import redis.asyncio as redis
 from fastapi import FastAPI, Request, HTTPException
 from mantra.email_alerts import send_crash_email
-from mantra.utils import save_call_log_to_db, report_telemetry
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
-from mantra.utils import save_call_log_to_db
+from mantra.utils import save_call_log_to_db, report_telemetry, save_webhook_event
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from livekit import api
@@ -474,6 +472,91 @@ async def dispatch_test(request: Request):
         "token": token.to_jwt(),
         "url": os.getenv("LIVEKIT_URL"),
     })
+
+
+@app.post("/api/v1/postcall/enqueue")
+async def enqueue_postcall(request: Request):
+    """
+    Endpoint to receive raw post-call data from the agent, store an audit event,
+    and push to Celery processing queue.
+    """
+    data = await request.json()
+    if not data or not data.get("call_id"):
+        return JSONResponse({"error": "Missing call_id"}, status_code=400)
+
+    call_id = str(data["call_id"])
+    event_id = f"postcall-{call_id}-{int(time.time())}"
+
+    logger.info(f"Received post-call enqueue request for call_id: {call_id}, event_id: {event_id}")
+
+    try:
+        # Save to database audit log
+        await save_webhook_event(event_id, call_id, "processing", "received", data)
+
+        # Enqueue task
+        from mantra.webhook_tasks import process_postcall
+        process_postcall.delay(event_id, data)
+
+        return JSONResponse({"status": "accepted", "event_id": event_id}, status_code=202)
+    except Exception as e:
+        logger.error(f"Failed to enqueue post-call task: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/v1/postcall/redeliver")
+async def redeliver_postcall(request: Request):
+    """
+    Endpoint to re-trigger delivery for a failed or previously saved webhook payload
+    by fetching its result_payload from the database by event_id or call_id.
+    """
+    data = await request.json()
+    event_id = data.get("event_id")
+    call_id = data.get("call_id")
+
+    if not event_id and not call_id:
+        return JSONResponse({"error": "Must provide event_id or call_id"}, status_code=400)
+
+    db_user = os.getenv("POSTGRES_USER")
+    db_password = os.getenv("POSTGRES_PASSWORD")
+    db_name = os.getenv("POSTGRES_DB")
+    db_host = os.getenv("POSTGRES_HOST")
+    db_port = os.getenv("POSTGRES_PORT")
+
+    conn = None
+    try:
+        conn = await asyncpg.connect(
+            user=db_user, password=db_password, database=db_name, host=db_host, port=db_port, timeout=5.0
+        )
+        if event_id:
+            row = await conn.fetchrow(
+                "SELECT event_id, call_id, result_payload, payload FROM webhook_events WHERE event_id = $1", event_id
+            )
+        else:
+            row = await conn.fetchrow(
+                "SELECT event_id, call_id, result_payload, payload FROM webhook_events WHERE call_id = $1 ORDER BY id DESC LIMIT 1", call_id
+            )
+
+        if not row:
+            return JSONResponse({"error": "No matching webhook event found in DB"}, status_code=404)
+
+        matched_event_id = row["event_id"]
+        payload_json = row["result_payload"] or row["payload"]
+        if isinstance(payload_json, str):
+            payload = json.loads(payload_json)
+        else:
+            payload = payload_json
+
+        from mantra.webhook_tasks import deliver_postcall
+        deliver_postcall.delay(matched_event_id, payload)
+
+        logger.info(f"Re-enqueued post-call delivery for event_id: {matched_event_id}")
+        return JSONResponse({"status": "accepted", "event_id": matched_event_id, "message": "Redelivery task queued"}, status_code=202)
+    except Exception as e:
+        logger.error(f"Redelivery failed: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        if conn:
+            await conn.close()
 
 
 @app.post("/api/v1/webhooks/call-logs")

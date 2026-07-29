@@ -58,6 +58,67 @@ async def save_call_log_to_db(call_id: str, call_log: str, status: str, recordin
             await conn.close()
 
 
+async def save_webhook_event(event_id: str, call_id: str, queue: str, status: str, payload: dict):
+    """Save an initial event to the webhook_events table."""
+    db_user = os.getenv("POSTGRES_USER")
+    db_password = os.getenv("POSTGRES_PASSWORD")
+    db_name = os.getenv("POSTGRES_DB")
+    db_host = os.getenv("POSTGRES_HOST")
+    db_port = os.getenv("POSTGRES_PORT")
+    
+    conn = None
+    try:
+        conn = await asyncpg.connect(
+            user=db_user, password=db_password, database=db_name, host=db_host, port=db_port, timeout=5.0
+        )
+        query = """
+        INSERT INTO webhook_events (event_id, call_id, queue, status, payload)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (event_id) DO UPDATE
+        SET status = EXCLUDED.status,
+            payload = EXCLUDED.payload,
+            updated_at = NOW();
+        """
+        await conn.execute(query, event_id, call_id, queue, status, json.dumps(payload))
+    except Exception as e:
+        logger.error(f"Failed to save webhook event {event_id}: {e}")
+    finally:
+        if conn:
+            await conn.close()
+
+
+async def update_webhook_event(event_id: str, status: str, result_payload: dict = None, error_message: str = None, increment_attempts: bool = False):
+    """Update status, result payload, or error in webhook_events table."""
+    db_user = os.getenv("POSTGRES_USER")
+    db_password = os.getenv("POSTGRES_PASSWORD")
+    db_name = os.getenv("POSTGRES_DB")
+    db_host = os.getenv("POSTGRES_HOST")
+    db_port = os.getenv("POSTGRES_PORT")
+    
+    conn = None
+    try:
+        conn = await asyncpg.connect(
+            user=db_user, password=db_password, database=db_name, host=db_host, port=db_port, timeout=5.0
+        )
+        res_json = json.dumps(result_payload) if result_payload is not None else None
+        query = """
+        UPDATE webhook_events
+        SET status = $2,
+            result_payload = COALESCE($3, result_payload),
+            error_message = COALESCE($4, error_message),
+            attempts = attempts + (CASE WHEN $5::boolean THEN 1 ELSE 0 END),
+            updated_at = NOW()
+        WHERE event_id = $1;
+        """
+        await conn.execute(query, event_id, status, res_json, error_message, increment_attempts)
+    except Exception as e:
+        logger.error(f"Failed to update webhook event {event_id}: {e}")
+    finally:
+        if conn:
+            await conn.close()
+
+
+
 async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
     """POST the post-call payload to the MantraAssist backend with HMAC signing."""
     base_url = os.getenv("MANTRAASSIST_BACKEND_URL", "").rstrip("/")

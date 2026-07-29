@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-07-29
+
+### Celery Post-Call Processing & Delivery Pipeline
+- **feat:** Decoupled agent post-call processing into asynchronous Celery 2-queue architecture (`webhook_processing` and `webhook_delivery`).
+- **feat:** Created `mantra/webhook_tasks.py` with `process_postcall` (LLM analysis, stage transitions, appointment extraction) and `deliver_postcall` (`send_to_backend`, local Postgres `save_call_log_to_db`, TOS telemetry) worker tasks.
+- **feat:** Enforced DB-first persistence in `deliver_postcall` (saves payload to PostgreSQL before attempting n8n delivery; aborts & retries if DB save fails).
+- **feat:** Added `_verify_payload_integrity()` check prior to n8n delivery to ensure payload completeness.
+- **feat:** Added `POST /api/v1/postcall/redeliver` endpoint in `ui_server.py` to re-trigger delivery from DB records by `call_id` or `event_id`.
+- **feat:** Added `migrations/001_webhook_events.sql` for PostgreSQL audit logging of all webhook event transitions (`received` → `processing` → `processed` → `delivering` → `delivered` / `failed`).
+- **refactor:** Simplified agent `finalize()` in `mantra/agent.py` to collect raw metadata/transcript/history and POST to UI server enqueue endpoint instead of running inline LLM analysis and HTTP calls.
+- **chore:** Updated `pyproject.toml`, `entrypoint.sh`, and `dev.sh` to support Celery worker processes.
+
 ## 2026-07-27
 
 ### TTS Fix & Payload Cleanup

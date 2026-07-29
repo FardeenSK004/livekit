@@ -866,122 +866,56 @@ Follow these specific instructions:
                 if hasattr(recorder, "recording_duration_seconds"):
                     duration = int(recorder.recording_duration_seconds)
 
-                # 5. Run unified analysis to generate summary, stage transition, and metadata
-                current_stage_id = call_payload.get("stage_id")
-                stage_details = call_payload.get("stageDetails", [])
-                
-                summary_text = None
-                new_stage_id = current_stage_id
-                next_call_on = None
-                client_custom_fields = call_payload.get("client_custom_fields", {})
-                if not isinstance(client_custom_fields, dict):
-                    client_custom_fields = {}
+                # 5. Build history list for Celery task
+                serializable_history = []
+                for msg in history_snapshot:
+                    role = msg.role.name if hasattr(msg.role, "name") else str(msg.role)
+                    content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+                    serializable_history.append({"role": role, "content": content})
 
-                if call_status in ["Busy", "Incomplete", "No Answer"]:
-                    logger.info(f"Call status is {call_status}. Skipping LLM analysis and applying 'Not Answering' logic.")
-                    summary_text = f"Call failed with status: {call_status}. The user did not speak or answer."
-                    duration = 0
-                    not_answering_id = current_stage_id
-                    for stage in stage_details:
-                        desc = stage.get("description", "").lower()
-                        if "not answering" in desc or "failed" in desc or "incomplete" in desc or "busy" in desc:
-                            not_answering_id = stage.get("stage_id")
-                            break
-                    new_stage_id = not_answering_id
+                # 6. Prepare raw post-call payload for queue
+                postcall_data = {
+                    "call_id": call_id,
+                    "job_id": ctx.job.id,
+                    "call_status": call_status,
+                    "transcript": transcript_data,
+                    "recording_url": recording_url,
+                    "duration": duration,
+                    "call_payload": call_payload,
+                    "history": serializable_history,
+                    "call_state": {
+                        "call_initiated_at": call_state.get("call_initiated_at"),
+                        "tos_task_id": call_state.get("tos_task_id"),
+                    }
+                }
+
+                # 7. Post to UI server enqueue endpoint
+                ui_url = os.getenv("TELEPHONY_UI_URL")
+                if ui_url:
+                    enqueue_endpoint = f"{ui_url.rstrip('/')}/api/v1/postcall/enqueue"
+                    logger.info(f"Enqueuing post-call data to UI server at {enqueue_endpoint}")
+                    async with aiohttp.ClientSession() as http_session:
+                        async with http_session.post(enqueue_endpoint, json=postcall_data) as resp:
+                            if resp.status in [200, 202]:
+                                res_json = await resp.json()
+                                logger.info(f"Post-call data enqueued successfully. Event ID: {res_json.get('event_id')}")
+                            else:
+                                resp_text = await resp.text()
+                                logger.error(f"UI Server post-call enqueue returned {resp.status}: {resp_text}")
                 else:
-                    try:
-                        if llm_engine and history_snapshot:
-                            analysis = await SessionRecorder.analyze_call(
-                                llm_engine=llm_engine,
-                                history=list(history_snapshot),
-                                current_stage_id=current_stage_id,
-                                stage_details=stage_details,
-                                duration=duration
-                            )
-                            summary_text = analysis["summary"]
-                            new_stage_id = analysis["new_stage_id"]
-                            next_call_on = analysis["next_call_on"]
-                            
-                            if analysis.get("appointment_date_time"):
-                                client_custom_fields["appointment_date_time"] = analysis["appointment_date_time"]
-                            if analysis.get("doctor"):
-                                client_custom_fields["doctor"] = analysis["doctor"]
-                            if analysis.get("hospital_location"):
-                                client_custom_fields["hospital_location"] = analysis["hospital_location"]
-                            
-                            logger.info(f"Analysis completed. New Stage ID: {new_stage_id}, Next Call On: {next_call_on}")
-                        else:
-                            logger.warning("Skipping analysis: LLM or history unavailable after session close")
-                    except Exception as e:
-                        logger.error(f"Analysis or summary generation failed: {e}", exc_info=True)
+                    logger.warning("TELEPHONY_UI_URL is not set. Cannot enqueue post-call data.")
 
             except Exception as e:
                 logger.error(f"Pipeline error in finalize: {e}", exc_info=True)
 
-            # 6. Build webhook payload — same structure regardless of errors
-            webhook_payload = {
-                "event": "CALL_DATA_UPDATE",
-                "data": {
-                    "client_id": call_payload.get("lead_id"),
-                    "call_id": call_payload.get("call_id") or call_payload.get("voice_id"),
-                    "call_status": call_status,
-                    "call_transcript": transcript_data,
-                    "ai_summary": summary_text,
-                    "recording_url": recording_url,
-                    "call_duration_seconds": duration,
-                    "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else None,
-                    "called_on": call_state.get("call_initiated_at") or None,
-                    "ai_call_id": ctx.job.id,
-                    "process_id": call_payload.get("process_id"),
-                    "new_stage_id": new_stage_id,
-                    "metadata": call_payload.get("metadata", {}),
-                    "client_custom_fields": client_custom_fields or {},
-                    "call_custom_fields": call_payload.get("call_custom_fields", {}),
-                }
-            }
-
-            # 8. Send to MantraAssist backend and save to local DB
-            try:
-
-                # Save to local Postgres DB via UI Server webhook (bypassing cloud SG blocks)
-                try:
-                    ui_url = os.getenv("TELEPHONY_UI_URL")
-                    if ui_url:
-                        db_endpoint = f"{ui_url.rstrip('/')}/api/v1/webhooks/call-logs"
-                        logger.info(f"Sending full call log payload to UI server at {db_endpoint}")
-                        async with aiohttp.ClientSession() as session:
-                            async with session.post(db_endpoint, json=webhook_payload) as resp:
-                                if resp.status == 200:
-                                    logger.info("Successfully sent call log to UI Server for DB insertion.")
-                                else:
-                                    resp_text = await resp.text()
-                                    logger.error(f"UI Server DB Webhook returned {resp.status}: {resp_text}")
-                    else:
-                        logger.warning("TELEPHONY_UI_URL is not set. Cannot save call log to local database.")
-                except Exception as db_err:
-                    logger.error(f"Error sending call log to UI server: {db_err}")
-
-                logger.info("Delivering post-call webhook to backend...")
-                logger.info(f"Webhook Payload:\n{json.dumps(webhook_payload)}")
-                delivered = await send_to_backend(webhook_payload)
-                tos_sent = True
-                await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if delivered else 'no'}")
-            except Exception as e:
-                logger.error(f"Webhook delivery failed: {e}", exc_info=True)
-                delivered = False
-
-
             await _telemetry(f"call_complete — status={call_status}, duration={duration}s")
 
             logger.info(
-                f"Post-call processing complete | "
+                f"Agent post-call collection complete | "
                 f"Call ID: {ctx.job.id} | "
-                f"Lead: {webhook_payload.get('data', {}).get('client_id', 'N/A')} | "
-                f"Status: {webhook_payload.get('data', {}).get('call_status', 'N/A')} | "
+                f"Status: {call_status} | "
                 f"Duration: {duration}s | "
-                f"S3: {'✓' if recording_url else '✗'} | "
-                f"Backend: {'✓' if delivered else '✗'} | "
-                f"TOS: {'✓' if tos_sent else '✗'}"
+                f"S3: {'✓' if recording_url else '✗'}"
             )
 
         await asyncio.shield(finalize())

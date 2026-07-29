@@ -22,8 +22,9 @@ dependencies = [
     "boto3>=1.35.0",
     "httpx>=0.27.0",
     "pydub>=0.25.1",
-    "redis>=8.0.0",
+    "redis>=5.0.0,<6.0.0",
     "pyjwt>=2.8.0",
+    "celery[redis]>=5.4.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -34,6 +35,8 @@ exclude = ["static*", "recordings*", "massist*"]
 [project.scripts]
 mantra-agent = "mantra.agent:run_agent"
 mantra-ui = "mantra.ui_server:main"
+mantra-worker-processing = "mantra.webhook_tasks:start_processing_worker"
+mantra-worker-delivery = "mantra.webhook_tasks:start_delivery_worker"
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

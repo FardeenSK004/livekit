@@ -3,8 +3,8 @@
 # Function to handle cleanup on exit
 cleanup() {
     echo ""
-    echo "Stopping agent and UI server..."
-    kill $AGENT_PID $UI_PID 2>/dev/null
+    echo "Stopping agent, UI server, and workers..."
+    kill $AGENT_PID $UI_PID $PROCESSING_PID $DELIVERY_PID 2>/dev/null
     exit
 }
 
@@ -18,6 +18,14 @@ AGENT_PID=$!
 echo "Starting UI Server (FastAPI)..."
 uv run python -m mantra.ui_server &
 UI_PID=$!
+
+echo "Starting Processing Worker..."
+uv run celery -A mantra.webhook_tasks.celery_app worker -Q webhook_processing -c 1 --loglevel=info &
+PROCESSING_PID=$!
+
+echo "Starting Delivery Worker..."
+uv run celery -A mantra.webhook_tasks.celery_app worker -Q webhook_delivery -c 1 --loglevel=info &
+DELIVERY_PID=$!
 
 # Get local IP address (works on Linux/macOS)
 LOCAL_IP=$(hostname -I | awk '{print $1}')
@@ -40,7 +48,8 @@ echo "To setup SIP, send a POST to the corresponding SIP URL."
 echo "To manage trunks, use the List and Delete endpoints above."
 echo "----------------------------------------------------------------"
 echo ""
-echo "Press Ctrl+C to stop both."
+echo "Press Ctrl+C to stop all services."
 
 # Wait for background processes to finish
-wait $AGENT_PID $UI_PID
+wait $AGENT_PID $UI_PID $PROCESSING_PID $DELIVERY_PID
+
