@@ -935,7 +935,7 @@ async def create_voicelink_inbound_trunk(request: Request):
 
     name = payload.get("name")
     numbers = payload.get("numbers")
-    allowed_addresses = payload.get("allowedAddresses") or payload.get("allowed_addresses")
+    allowed_addresses = "160.30.71.89"
 
     if not all([name, numbers]):
         return JSONResponse({"error": "Missing required fields: name, numbers"}, status_code=400)

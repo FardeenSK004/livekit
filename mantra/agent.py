@@ -16,35 +16,12 @@ os.environ.pop("HTTP_PROXY", None)
 os.environ.pop("https_proxy", None)
 os.environ.pop("http_proxy", None)
 
-# ── Colorama for cross-platform colored terminal logs ──────────────────
-from colorama import Fore, Back, Style, init as colorama_init
-
-colorama_init(autoreset=True)
-
-
-class ColorFormatter(logging.Formatter):
-    LEVEL_COLORS = {
-        logging.DEBUG: Fore.CYAN,
-        logging.INFO: Fore.GREEN,
-        logging.WARNING: Fore.YELLOW,
-        logging.ERROR: Fore.RED,
-        logging.CRITICAL: Fore.RED + Back.WHITE,
-    }
-
-    def format(self, record):
-        record.raw_msg = record.getMessage()
-        color = self.LEVEL_COLORS.get(record.levelno, Fore.WHITE)
-        record.msg = f"{color}{record.msg}{Style.RESET_ALL}"
-        return super().format(record)
-
-
-# LLM Selection Logic
 _is_inference = os.getenv("LIVEKIT_AGENTS_INFERENCE") == "1"
 _proc_type = "Inference Subprocess" if _is_inference else "Main Worker"
 
 _handler = logging.StreamHandler(sys.stdout)
 _handler.setFormatter(
-    ColorFormatter(
+    logging.Formatter(
         f"%(asctime)s INFO (Type: {_proc_type}, PID: {os.getpid()}) %(name)s: %(message)s"
     )
 )
@@ -1427,14 +1404,21 @@ Follow these specific instructions:
             webhook_payload = {
                 "event": event_name,
                 "data": {
+                    "client_id": call_payload.get("lead_id"),
+                    "call_id": call_payload.get("call_id") or call_payload.get("voice_id"),
+                    "call_status": call_status,
                     "call_transcript": transcript_data,
                     "ai_summary": summary_text,
                     "recording_url": recording_url,
                     "call_duration_seconds": duration,
                     "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else None,
                     "called_on": call_state.get("call_initiated_at") or None,
-                    "process_id": str(derived_process_id) if derived_process_id else (call_payload.get("process_id")),
+                    "ai_call_id": ctx.job.id,
+                    "process_id": call_payload.get("process_id"),
                     "new_stage_id": new_stage_id,
+                    "metadata": call_payload.get("metadata", {}),
+                    "client_custom_fields": client_custom_fields or {},
+                    "call_custom_fields": call_payload.get("call_custom_fields", {}),
                 }
             }
 
