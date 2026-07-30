@@ -345,106 +345,106 @@ class AssistantFunctions:
                         result.append(entry)
         return result
 
-    @llm.function_tool(
-        description="Transfer the call to a human agent in a specific department when the user requests it, "
-                    "you cannot resolve their issue, or they seem frustrated. "
-                    "Specify the department (e.g., 'refund', 'support', 'billing', 'general') "
-                    "based on what the user needs."
-    )
-    async def transfer_to_human(
-        self,
-        reason: Annotated[str, "Why the human agent is needed — be specific about the user's request"],
-        department: Annotated[str, "The department to transfer to (e.g., refund, support, billing, general)"] = "general"
-    ):
-        logger.info(f"Handoff requested. Reason: {reason}, Department: {department}")
-
-        # Guard: prevent duplicate transfers if LLM calls this twice
-        if self.handoff_triggered:
-            logger.warning("Handoff already in progress — ignoring duplicate request")
-            return "TRANSFER_ALREADY_IN_PROGRESS."
-
-        self.handoff_triggered = True
-        self.last_reason = reason
-        self.last_department = department
-
-        # Parse metadata to get call/lead IDs
-        try:
-            payload = json.loads(self.job_metadata) if self.job_metadata else {}
-        except Exception:
-            payload = {}
-
-        # Determine target number from department mapping
-        dept_lower = department.lower().strip()
-        target_number = TRANSFER_NUMBERS.get(dept_lower, TRANSFER_DEFAULT_NUMBER)
-        trunk_id = TRANSFER_SIP_TRUNK_ID or payload.get("trunk_id") or payload.get("call_from_id") or ""
-
-        if target_number and trunk_id:
-            try:
-                lk_api = api.LiveKitAPI(
-                    url=os.getenv("LIVEKIT_URL"),
-                    api_key=os.getenv("LIVEKIT_API_KEY"),
-                    api_secret=os.getenv("LIVEKIT_API_SECRET")
-                )
-                timestamp = datetime.datetime.now().strftime("%H%M%S%f")
-                call_id = payload.get("call_id") or payload.get("voice_id") or self.room_name
-                human_identity = f"human_{call_id}_{timestamp}"
-                await lk_api.sip.create_sip_participant(
-                    api.CreateSIPParticipantRequest(
-                        sip_trunk_id=trunk_id,
-                        sip_call_to=target_number,
-                        room_name=self.room_name,
-                        participant_identity=human_identity,
-                        participant_name=f"Human - {department.title()}"
-                    )
-                )
-                await lk_api.aclose()
-                logger.info(f"Human agent ({target_number}) added to room {self.room_name} for {department} department")
-            except Exception as e:
-                logger.error(f"Failed to add human agent via SIP: {e}")
-        else:
-            missing = []
-            if not target_number:
-                missing.append("target phone number")
-            if not trunk_id:
-                missing.append("SIP trunk ID")
-            logger.warning(f"Cannot transfer: missing {', '.join(missing)}. Backend notification sent anyway.")
-
-        # Notify backend (skip if no URL configured)
-        if os.getenv("MANTRAASSIST_BACKEND_URL"):
-            webhook_payload = {
-                "event": "HANDOFF_REQUESTED",
-                "data": {
-                    "room_name": self.room_name,
-                    "reason": reason,
-                    "department": department,
-                    "call_id": payload.get("call_id") or payload.get("voice_id"),
-                    "lead_id": payload.get("lead_id"),
-                    "client_name": payload.get("client_name", "User"),
-                }
-            }
-            await send_to_backend(webhook_payload)
-
-        # Override agent instructions to enforce absolute silence
-        if self.agent:
-            try:
-                await self.agent.update_instructions(
-                    "You are SILENT. The call has been transferred to a human agent. "
-                    "Say absolutely nothing. Do not speak, do not acknowledge, do not say goodbye. "
-                    "The human agent handles everything from here. SILENT."
-                )
-                logger.info("Agent instructions overridden to enforce silence")
-            except Exception as e:
-                logger.error(f"Failed to update agent instructions: {e}")
-
-        # Interrupt any in-progress speech from the agent
-        try:
-            if self.agent and self.agent._session:
-                self.agent._session.interrupt()
-                logger.info("Agent speech interrupted for handoff")
-        except Exception as e:
-            logger.debug(f"Agent interrupt unavailable (non-fatal): {e}")
-
-        return "TRANSFER_COMPLETE. Do not speak."
+    # @llm.function_tool(
+    #     description="Transfer the call to a human agent in a specific department when the user requests it, "
+    #                 "you cannot resolve their issue, or they seem frustrated. "
+    #                 "Specify the department (e.g., 'refund', 'support', 'billing', 'general') "
+    #                 "based on what the user needs."
+    # )
+    # async def transfer_to_human(
+    #     self,
+    #     reason: Annotated[str, "Why the human agent is needed — be specific about the user's request"],
+    #     department: Annotated[str, "The department to transfer to (e.g., refund, support, billing, general)"] = "general"
+    # ):
+    #     logger.info(f"Handoff requested. Reason: {reason}, Department: {department}")
+    # 
+    #     # Guard: prevent duplicate transfers if LLM calls this twice
+    #     if self.handoff_triggered:
+    #         logger.warning("Handoff already in progress — ignoring duplicate request")
+    #         return "TRANSFER_ALREADY_IN_PROGRESS."
+    # 
+    #     self.handoff_triggered = True
+    #     self.last_reason = reason
+    #     self.last_department = department
+    # 
+    #     # Parse metadata to get call/lead IDs
+    #     try:
+    #         payload = json.loads(self.job_metadata) if self.job_metadata else {}
+    #     except Exception:
+    #         payload = {}
+    # 
+    #     # Determine target number from department mapping
+    #     dept_lower = department.lower().strip()
+    #     target_number = TRANSFER_NUMBERS.get(dept_lower, TRANSFER_DEFAULT_NUMBER)
+    #     trunk_id = TRANSFER_SIP_TRUNK_ID or payload.get("trunk_id") or payload.get("call_from_id") or ""
+    # 
+    #     if target_number and trunk_id:
+    #         try:
+    #             lk_api = api.LiveKitAPI(
+    #                 url=os.getenv("LIVEKIT_URL"),
+    #                 api_key=os.getenv("LIVEKIT_API_KEY"),
+    #                 api_secret=os.getenv("LIVEKIT_API_SECRET")
+    #             )
+    #             timestamp = datetime.datetime.now().strftime("%H%M%S%f")
+    #             call_id = payload.get("call_id") or payload.get("voice_id") or self.room_name
+    #             human_identity = f"human_{call_id}_{timestamp}"
+    #             await lk_api.sip.create_sip_participant(
+    #                 api.CreateSIPParticipantRequest(
+    #                     sip_trunk_id=trunk_id,
+    #                     sip_call_to=target_number,
+    #                     room_name=self.room_name,
+    #                     participant_identity=human_identity,
+    #                     participant_name=f"Human - {department.title()}"
+    #                 )
+    #             )
+    #             await lk_api.aclose()
+    #             logger.info(f"Human agent ({target_number}) added to room {self.room_name} for {department} department")
+    #         except Exception as e:
+    #             logger.error(f"Failed to add human agent via SIP: {e}")
+    #     else:
+    #         missing = []
+    #         if not target_number:
+    #             missing.append("target phone number")
+    #         if not trunk_id:
+    #             missing.append("SIP trunk ID")
+    #         logger.warning(f"Cannot transfer: missing {', '.join(missing)}. Backend notification sent anyway.")
+    # 
+    #     # Notify backend (skip if no URL configured)
+    #     if os.getenv("MANTRAASSIST_BACKEND_URL"):
+    #         webhook_payload = {
+    #             "event": "HANDOFF_REQUESTED",
+    #             "data": {
+    #                 "room_name": self.room_name,
+    #                 "reason": reason,
+    #                 "department": department,
+    #                 "call_id": payload.get("call_id") or payload.get("voice_id"),
+    #                 "lead_id": payload.get("lead_id"),
+    #                 "client_name": payload.get("client_name", "User"),
+    #             }
+    #         }
+    #         await send_to_backend(webhook_payload)
+    # 
+    #     # Override agent instructions to enforce absolute silence
+    #     if self.agent:
+    #         try:
+    #             await self.agent.update_instructions(
+    #                 "You are SILENT. The call has been transferred to a human agent. "
+    #                 "Say absolutely nothing. Do not speak, do not acknowledge, do not say goodbye. "
+    #                 "The human agent handles everything from here. SILENT."
+    #             )
+    #             logger.info("Agent instructions overridden to enforce silence")
+    #         except Exception as e:
+    #             logger.error(f"Failed to update agent instructions: {e}")
+    # 
+    #     # Interrupt any in-progress speech from the agent
+    #     try:
+    #         if self.agent and self.agent._session:
+    #             self.agent._session.interrupt()
+    #             logger.info("Agent speech interrupted for handoff")
+    #         except Exception as e:
+    #             logger.debug(f"Agent interrupt unavailable (non-fatal): {e}")
+    # 
+    #     return "TRANSFER_COMPLETE. Do not speak."
 
     @llm.function_tool(
         description="Search the knowledge base for factual information relevant to the user's question. Use this tool to retrieve accurate information about products, services, policies, procedures, pricing, locations, schedules, people, organizations, documents, regulations, FAQs, or any domain-specific content stored in the knowledge base. ALWAYS use this tool before answering questions that require factual or organization-specific information. If the user switches topics to a specific category (like 'support' or 'pricing'), you can provide that category in 'specific_tag' to override the default search scope."
@@ -656,11 +656,11 @@ CORE BEHAVIOR:
 - RETAIN CONTEXT & AVOID REPETITION: Remember the user's previous answers. Do NOT repeatedly ask the same questions. If they say no or want to focus on something else, acknowledge it and move on. DO NOT be pushy.
 - KNOWLEDGE BASE USAGE: If the user asks a factual question or inquires about policies, services, or locations, you MUST use the `search_knowledge_base` tool to find the accurate answer.
 
-TRANSFER CAPABILITY (CRITICAL):
-- You HAVE a function called "transfer_to_human" that transfers the call to a real human agent.
-- When the user asks to speak to a human, you cannot resolve their issue, or they seem frustrated — USE the transfer_to_human function IMMEDIATELY. Do NOT say you cannot transfer. You CAN transfer. Use the function.
-- If the user mentions a specific department (refund, billing, support), pass it as the department parameter. Otherwise use "general".
-- After the function executes, you will be muted. Say nothing. The human takes over.
+# HUMAN HANDOFF (DISABLED):
+# - Handoff to human is currently disabled.
+# - If the user explicitly asks to speak to a human or a doctor/clinical agent, apologize and let them know:
+#   "I understand you want to speak to a human or doctor. Unfortunately, we don't have human transfers available right now. However, I can help you book an appointment, or have an agent call you back later."
+# - If they insist, politely end the call. Do not promise transfers or human callback.
 
 POLITENESS & EMPATHY:
 - Always be polite, courteous, and respectful.
@@ -787,7 +787,7 @@ Follow these specific instructions:
             initial_instructions += "1. NEVER repeat the same question twice. If the user dodges the question or asks a counter-question, answer them and DO NOT repeat your previous question.\n"
             initial_instructions += "2. DO NOT push for an appointment if the user hasn't explicitly agreed or if they are asking about other things. Let the conversation flow naturally.\n"
             initial_instructions += "3. Answer user's questions DIRECTLY without appending a sales pitch or appointment request at the end of every turn.\n"
-            initial_instructions += "4. If the user asks to speak to a human, asks to be transferred, or mentions a department — you MUST call the transfer_to_human function IMMEDIATELY. Do NOT keep talking. Call the function.\n"
+            initial_instructions += "4. If the user asks to speak to a human or asks to be transferred — apologize and explain that human transfer is currently unavailable. Do not promise transfer, and if they insist, politely end the call.\n"
 
 
             if is_inbound:
@@ -915,7 +915,7 @@ Follow these specific instructions:
 
     await _telemetry("Agent voice engine ready", f"model={model_name}")
 
-    agent_tools = [fnc_ctx.end_call, fnc_ctx.search_knowledge_base, fnc_ctx.transfer_to_human]
+    agent_tools = [fnc_ctx.end_call, fnc_ctx.search_knowledge_base]
 
     agent = Agent(
         instructions=initial_instructions,
