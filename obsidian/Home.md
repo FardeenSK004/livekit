@@ -1,9 +1,9 @@
 # Mantra Voice Agent — Knowledge Base
 
-> **Version:** 0.2.1  
+> **Version:** 0.2.2  
 > **Package:** `livekit-agent`  
 > **Repository:** `git@github.com:FardeenSK004/livekit.git` (fork of Mantracare-Org/livekit)  
-> **Last Updated:** 2026-07-27
+> **Last Updated:** 2026-07-30
 
 ---
 

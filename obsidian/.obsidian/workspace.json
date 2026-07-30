@@ -11,10 +11,17 @@
             "id": "ba89d0ebd22c5ea3",
             "type": "leaf",
             "state": {
-              "type": "graph",
-              "state": {},
-              "icon": "lucide-git-fork",
-              "title": "Graph view"
+              "type": "canvas",
+              "state": {
+                "file": "Outbound Call Walkthrough.canvas",
+                "viewState": {
+                  "x": 973.0835478175783,
+                  "y": 119.12022237646275,
+                  "zoom": -0.40000000000000013
+                }
+              },
+              "icon": "lucide-layout-dashboard",
+              "title": "Outbound Call Walkthrough"
             }
           }
         ]
@@ -178,6 +185,8 @@
   },
   "active": "ba89d0ebd22c5ea3",
   "lastOpenFiles": [
+    "Outbound Call Walkthrough.canvas",
+    "Untitled.canvas",
     "Features/API Server.md",
     "Features/Dispatcher.md",
     "Features/Dashboard.md",
@@ -195,7 +204,6 @@
     "Agents/QA Agent.md",
     "Agents/Frontend Agent.md",
     "Agents/Documentation Agent.md",
-    "Untitled.canvas",
     "Development/TODO.md",
     "Development/Roadmap.md",
     "Development/Current Sprint.md",
@@ -203,7 +211,6 @@
     "Development/Changelog.md",
     "Development/Bugs.md",
     "Development/Backlog.md",
-    "Context/External Services.md",
-    "Architecture/Database.md"
+    "Context/External Services.md"
   ]
 }

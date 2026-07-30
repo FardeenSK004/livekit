@@ -1,11 +1,16 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-07-27  
-> **Status:** Active maintenance, TTS migration to LiveKit native `sonic-3`, TOS telemetry refinement & stability
+> **Last Updated:** 2026-07-30  
+> **Status:** Active maintenance, Multi-KB per org (KB collections), Voicelink SIP inbound trunk provisioning, LiveKit native `sonic-3` TTS
 
 ## Recently Completed
 
+- [x] **Voicelink SIP Integration & Call Routing Fixes:** Fixed `voicelink_client` NameError, added inbound SIP setup support for `voice_link`, implemented Redis-backed trunk provider caching with `voicelink_client` fallback, and routed outbound VoiceLink calls through the proxied client (preventing 408 SIP timeout errors).
+- [x] **Outbound Call Walkthrough doc:** Created `Architecture/Outbound Call Walkthrough.md` — full end-to-end trace of a single outbound call with payload sample, code references, sequence diagram, failure modes, and design properties
+- [x] **Multi-KB per Org — KB Collections:** Added `kb_collections` table (migration `003_kb_collections.py`) where each row = one document = one KB collection per org. Agent resolves all collections for an org plus legacy fallback. Ingestion endpoints create/find collections.
+- [x] **Voicelink SIP Inbound Trunk Provisioning:** Added SIP inbound trunk provisioning endpoints to `ui_server.py` for Voicelink integration.
+- [x] **Inbound KB Document Metadata Tracking:** `KnowledgeRetriever` tracks accessed page metadata; `AssistantFunctions` extracts unique `process_id` values; `CALL_DATA_INBOUND_UPDATE` webhook carries specific KB process IDs.
 - [x] Inbound KB document tracking — `CALL_DATA_INBOUND_UPDATE` now carries `process_id` from the specific KB document the agent searched during the call (not org-level config)
 - [x] TTS migration to LiveKit native `sonic-3` (removed Cartesia dependency & health check)
 - [x] TOS telemetry refinement — fire-and-forget post-processing, explicit `called_on` timestamp mapping

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-30
+
+### Voicelink Integration & SIP Fixes
+- **fix:** Resolved `NameError: name 'voicelink_client' is not defined` by adding module-level client/session declarations and lifespan initialization.
+- **feat:** Added `voice_link` / `voicelink` inbound SIP setup support and `_update_voicelink_sip_forwarding()` handler.
+- **feat:** Updated inbound SIP trunk name default fallback to `{provider} {number}`.
+- **feat:** Added Redis-backed trunk-to-provider caching in `_get_provider_from_trunk()` with `voicelink_client` fallback lookup for existing trunks.
+- **fix:** Added `voice_link` branch in outbound SIP client selection to route through `voicelink_client` (proxied), preventing 408 SIP timeout errors.
+- **refactor:** Cleaned up `_get_provider_from_trunk()` logic for cleaner execution and error logging.
+
+### Outbound Call Walkthrough
+- **doc:** Created `Architecture/Outbound Call Walkthrough.md` — full end-to-end trace from webhook payload through post-call processing with payload samples, code references, sequence diagram, failure modes, and design properties table
+
 ## 2026-07-29
 
 ### Multi-KB per Org — KB Collections

@@ -53,6 +53,10 @@ plivo_client: api.LiveKitAPI = None  # Proxied — used for Plivo (India routing
 plivo_session: aiohttp.ClientSession = (
     None  # Owned session for plivo_client; closed manually on shutdown
 )
+voicelink_client: api.LiveKitAPI = None  # Proxied — used for VoiceLink
+voicelink_session: aiohttp.ClientSession = (
+    None  # Owned session for voicelink_client; closed manually on shutdown
+)
 redis_client: redis.Redis = None
 http_client: httpx.AsyncClient = None      # Persistent client for health checks
 
@@ -84,7 +88,7 @@ async def get_db_connection():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global lk_client, plivo_client, plivo_session, redis_client, http_client
+    global lk_client, plivo_client, plivo_session, voicelink_client, voicelink_session, redis_client, http_client
     api_key = os.getenv("LIVEKIT_API_KEY")
     api_secret = os.getenv("LIVEKIT_API_SECRET")
     lk_url = os.getenv("LIVEKIT_URL")
@@ -113,6 +117,16 @@ async def lifespan(app: FastAPI):
             url=api_url, api_key=api_key, api_secret=api_secret, session=plivo_session
         )
 
+        voicelink_proxy = os.getenv("VOICELINK_PROXY") or plivo_proxy
+        if voicelink_proxy:
+            logger.info(f"Creating VoiceLink LiveKit client with proxy: {voicelink_proxy}")
+        else:
+            logger.info("Creating VoiceLink LiveKit client without proxy")
+        voicelink_session = aiohttp.ClientSession(proxy=voicelink_proxy)
+        voicelink_client = api.LiveKitAPI(
+            url=api_url, api_key=api_key, api_secret=api_secret, session=voicelink_session
+        )
+
     # Setup Redis
     redis_url = os.getenv("REDIS_URL")
     try:
@@ -135,11 +149,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    for client in [lk_client, plivo_client]:
+    for client in [lk_client, plivo_client, voicelink_client]:
         if client:
             await client.aclose()
     if plivo_session:
         await plivo_session.close()
+    if voicelink_session:
+        await voicelink_session.close()
     if http_client:
         await http_client.aclose()
 
@@ -393,10 +409,10 @@ async def _run_health_checks() -> bool:
     await asyncio.gather(
         _check("livekit", lk_client.room.list_rooms(api.ListRoomsRequest()), timeout=5.0),
         _check_redis(),
-        # _check_postgres(),
+        _check_postgres(),
         _check_stt(),
-        # _check_mantraassist_backend(),
-        # _check_s3(),
+        _check_mantraassist_backend(),
+        _check_s3(),
         return_exceptions=True
     )
 
@@ -1610,10 +1626,24 @@ async def _update_plivo_sip_forwarding(phone_number: str, sip_uri: str) -> dict:
                 raise Exception(f"Plivo API error: {text}")
 
 
+async def _update_voicelink_sip_forwarding(phone_number: str, sip_uri: str) -> dict:
+    """
+    VoiceLink is a LiveKit-native SIP provider — the LiveKit inbound trunk + dispatch rule
+    are already configured. The user must link this SIP URI in their VoiceLink dashboard.
+    """
+    logger.info(f"VoiceLink inbound SIP configured for {phone_number} -> {sip_uri}")
+    return {
+        "status": "success",
+        "provider": "voice_link",
+        "phone_number": phone_number,
+        "sip_uri": sip_uri,
+    }
+
+
 async def _update_provider_sip_forwarding(provider: str, phone_number: str, sip_uri: str) -> dict:
     """
     Routes to the appropriate provider-specific SIP forwarding function.
-    Supported providers: zadarma, twilio, plivo
+    Supported providers: zadarma, twilio, plivo, voice_link
     """
     provider = provider.lower().strip()
     
@@ -1623,8 +1653,10 @@ async def _update_provider_sip_forwarding(provider: str, phone_number: str, sip_
         return await _update_twilio_sip_forwarding(phone_number, sip_uri)
     elif provider == "plivo":
         return await _update_plivo_sip_forwarding(phone_number, sip_uri)
+    elif provider in ("voicelink", "voice_link"):
+        return await _update_voicelink_sip_forwarding(phone_number, sip_uri)
     else:
-        raise ValueError(f"Unsupported provider: {provider}. Supported providers: zadarma, twilio, plivo")
+        raise ValueError(f"Unsupported provider: {provider}. Supported providers: zadarma, twilio, plivo, voice_link")
 
 
 @app.post("/api/v1/sip/inbound/setup")
@@ -1639,7 +1671,7 @@ async def setup_inbound_sip(request: Request):
     - number (required): Phone number in E.164 format (e.g., +918031321203)
     - org_id (required): Organization ID
     - provider (optional): SIP provider - "zadarma", "twilio", or "plivo" (default: "zadarma")
-    - name (optional): Trunk name
+    - name (optional): Trunk name (default: "{provider} {number}")
     - prompt (optional): Agent prompt
     - voice (optional): Agent voice
     - model (optional): Agent model
@@ -1690,12 +1722,12 @@ async def _setup_inbound_sip_process(payload: dict | None) -> JSONResponse:
     number = payload.get("number")
     if not number:
         return JSONResponse({"status_code": 400, "status": "error", "error": "number is required"}, status_code=400)
-        
-    name = payload.get("name", f"Inbound {number}")
+
+    provider = payload.get("provider").lower().strip()
+    name = payload.get("name", f"{provider} {number}")
     prompt = payload.get("prompt", "You are a helpful voice assistant.")
     voice = payload.get("voice", "arushi")
     model = payload.get("model", "deepseek")
-    provider = payload.get("provider", "zadarma").lower().strip()  # Default to Zadarma for backwards compatibility
     
     # New fields for org configuration
     org_id = payload.get("org_id")
@@ -1781,7 +1813,7 @@ async def _setup_inbound_sip_process(payload: dict | None) -> JSONResponse:
         
         # Store SIP trunk mapping in Redis for webhooks lookup
         # This allows the provider webhooks (Twilio/Plivo) to find the correct SIP trunk ID for incoming calls
-        if redis_client and provider in ["plivo", "twilio"]:
+        if redis_client and provider in ["plivo", "twilio", "voice_link", "voicelink"]:
             try:
                 # Store with both +prefix and without for flexible lookup
                 await redis_client.set(f"{provider}:sip_trunk:{number}", trunk_id, ex=86400*30)  # 30 days TTL
@@ -2031,12 +2063,16 @@ async def handle_outbound_call_webhook(request: Request):
             if sip_number and not sip_number.startswith("+"):
                 sip_number = f"+{sip_number}"
 
-            sip_client = (
-                plivo_client if provider == "plivo" and plivo_client else lk_client
-            )
+            sip_client = lk_client
+            if provider == "plivo" and plivo_client:
+                sip_client = plivo_client
+            elif provider == "voice_link" and voicelink_client:
+                sip_client = voicelink_client
             proxy_msg = (
                 "proxied Plivo client"
                 if sip_client == plivo_client
+                else "proxied VoiceLink client"
+                if sip_client == voicelink_client
                 else "direct LiveKit client"
             )
             logger.info(
@@ -2196,24 +2232,39 @@ DEFAULT_PROVIDER = "zadarma"
 
 
 async def _get_provider_from_trunk(trunk_id: str) -> str:
-    """Fetch the specific trunk by ID and infer the provider from its address."""
+    if redis_client:
+        stored = await redis_client.get(f"trunk:provider:{trunk_id}")
+        if stored:
+            return stored
+
+    provider = DEFAULT_PROVIDER
+
     try:
         response = await lk_client.sip.list_outbound_trunk(
             api.ListSIPOutboundTrunkRequest(trunk_ids=[trunk_id])
         )
         if response.items:
-            trunk = response.items[0]
-            address = (trunk.address or "").lower()
+            address = (response.items[0].address or "").lower()
             if "twilio" in address:
-                return "twilio"
+                provider = "twilio"
             elif "plivo" in address:
-                return "plivo"
-            return DEFAULT_PROVIDER
-        logger.warning(f"Trunk {trunk_id} not found — defaulting to {DEFAULT_PROVIDER}")
-        return DEFAULT_PROVIDER
+                provider = "plivo"
     except Exception as e:
-        logger.error(f"Failed to fetch trunk {trunk_id} for provider detection: {e}")
-        return DEFAULT_PROVIDER
+        logger.warning(f"Cannot list trunk {trunk_id} via lk_client: {e}")
+
+    if provider == DEFAULT_PROVIDER and voicelink_client:
+        try:
+            vl_resp = await voicelink_client.sip.list_outbound_trunk(
+                api.ListSIPOutboundTrunkRequest(trunk_ids=[trunk_id])
+            )
+            if vl_resp.items:
+                provider = "voice_link"
+        except Exception as e:
+            logger.warning(f"Cannot list trunk {trunk_id} via voicelink_client: {e}")
+
+    if redis_client:
+        await redis_client.set(f"trunk:provider:{trunk_id}", provider, ex=86400 * 30)
+    return provider
 
 
 @app.post("/api/v1/sip/trunks/outbound")
@@ -2307,7 +2358,7 @@ async def create_twilio_sip_trunk(request: Request):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-@app.post("/api/v1/sip/trunks/outbound/voicelink")
+@app.post("/api/v1/sip/trunks/outbound/voice_link")
 async def create_voicelink_sip_trunk(request: Request):
     """
     Create a new Voicelink SIP trunk.
@@ -2347,6 +2398,8 @@ async def create_voicelink_sip_trunk(request: Request):
                 destination_country="in",
             )
             trunk_id = trunk.sip_trunk_id
+            if redis_client:
+                await redis_client.set(f"trunk:provider:{trunk_id}", "voice_link", ex=86400 * 30)
         else:
             trunk_id = payload.get("trunk_id") or payload.get("call_from_id")
 
@@ -2574,11 +2627,6 @@ async def delete_sip_outbound_trunk(trunk_id: str):
     except Exception as e:
         logger.error(f"Failed to delete SIP outbound trunk {trunk_id}: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ──────────────────────────────────────────────
-# SIP INBOUND TRUNK UPDATE
-# ──────────────────────────────────────────────
 
 @app.patch("/api/v1/sip/trunks/inbound/{trunk_id}")
 async def update_inbound_sip_trunk(trunk_id: str, request: Request):
