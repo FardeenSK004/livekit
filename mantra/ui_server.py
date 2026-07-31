@@ -410,7 +410,7 @@ async def _run_health_checks() -> bool:
     await asyncio.gather(
         _check("livekit", lk_client.room.list_rooms(api.ListRoomsRequest()), timeout=5.0),
         _check_redis(),
-        check_postgres(),
+        _check_postgres(),
         _check_stt(),
         _check_mantraassist_backend(),
         _check_s3(),
