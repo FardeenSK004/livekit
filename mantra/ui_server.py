@@ -36,6 +36,7 @@ colorama_init(autoreset=True)
 
 # Load environment variables from .env.local
 load_dotenv(".env.local")
+AGENT_NAME = os.getenv("AGENT_NAME", "mantra-agent")
 
 logger = logging.getLogger("mantra.ui_server")
 logger.setLevel(logging.INFO)
@@ -409,7 +410,7 @@ async def _run_health_checks() -> bool:
     await asyncio.gather(
         _check("livekit", lk_client.room.list_rooms(api.ListRoomsRequest()), timeout=5.0),
         _check_redis(),
-        _check_postgres(),
+        check_postgres(),
         _check_stt(),
         _check_mantraassist_backend(),
         _check_s3(),
@@ -759,7 +760,7 @@ async def dispatch_test(request: Request):
         f"Manual dispatch request with payload: {json.dumps(payload, separators=(',', ':'))}"
     )
 
-    agent_name = payload.pop("agent_name", "mantra-agent")
+    agent_name = payload.pop("agent_name", AGENT_NAME)
     # Generate a unique room name for this test session using the call_id if provided
     call_id = payload.get("call_id") or int(time.time())
     room_name = f"test_{call_id}"
@@ -816,7 +817,7 @@ async def test_inbound_call(request: Request):
     
     logger.info(f"Test inbound call request: {json.dumps(payload, indent=2)}")
     
-    agent_name = payload.pop("agent_name", "mantra-agent")
+    agent_name = payload.pop("agent_name", AGENT_NAME)
     call_id = int(time.time())
     room_name = f"test_inbound_{call_id}"
     
@@ -980,7 +981,7 @@ async def create_voicelink_inbound_trunk(request: Request):
             room_config=api.RoomConfiguration(
                 agents=[
                     api.RoomAgentDispatch(
-                        agent_name="mantra-agent",
+                        agent_name=AGENT_NAME,
                         metadata=json.dumps(dispatch_payload)
                     )
                 ]
@@ -1088,7 +1089,7 @@ async def create_dispatch_rule(request: Request):
             room_config=api.RoomConfiguration(
                 agents=[
                     api.RoomAgentDispatch(
-                        agent_name="mantra-agent",
+                        agent_name=AGENT_NAME,
                         metadata=json.dumps(payload)
                     )
                 ]
@@ -1851,7 +1852,7 @@ async def _setup_inbound_sip_process(payload: dict | None) -> JSONResponse:
                     departure_timeout=60,
                     agents=[
                         api.RoomAgentDispatch(
-                            agent_name="mantra-agent",
+                            agent_name=AGENT_NAME,
                             metadata=json.dumps(metadata_dict)
                         )
                     ]
@@ -2030,7 +2031,7 @@ async def handle_outbound_call_webhook(request: Request):
         return JSONResponse({"error": "No SIP trunk ID configured"}, status_code=500)
 
     provider = await _get_provider_from_trunk(trunk_id)
-    logger.info(f"Provider detected: {provider}")
+    logger.info(f"[DIAG] Webhook: call_id={call_id} phone={phone_number} trunk={trunk_id} provider={provider} AGENT_NAME={AGENT_NAME}")
 
     # Stamp call_initiated_at before dispatching so the agent gets it
     payload_meta = payload.get("metadata")
@@ -2042,13 +2043,13 @@ async def handle_outbound_call_webhook(request: Request):
     # Trigger agent dispatch — always use lk_client (direct, no proxy)
     # LiveKit Cloud API calls don't need the Indian proxy; region pinning is on the trunk itself
     try:
-        logger.info(f"Step 1: Creating agent dispatch for room {room_name}")
+        logger.info(f"[DIAG] Webhook: Step 1 — Creating agent dispatch for room={room_name} agent_name={AGENT_NAME}")
         dispatch = await lk_client.agent_dispatch.create_dispatch(
             api.CreateAgentDispatchRequest(
-                room=room_name, agent_name="mantra-agent", metadata=json.dumps(payload)
+                room=room_name, agent_name=AGENT_NAME, metadata=json.dumps(payload)
             )
         )
-        logger.info(f"Dispatch created: {dispatch.id}")
+        logger.info(f"[DIAG] Webhook: Dispatch created: {dispatch.id}")
         _telemetry(f"agent_dispatched — room={room_name}")
     except Exception as e:
         logger.error(f"Agent dispatch failed: {e}\n{traceback.format_exc()}")
@@ -2076,7 +2077,7 @@ async def handle_outbound_call_webhook(request: Request):
                 else "direct LiveKit client"
             )
             logger.info(
-                f"Step 2: Initiating SIP call to {phone_number} via trunk {trunk_id} using {proxy_msg}"
+                f"[DIAG] Webhook: Step 2 — Initiating SIP call to {phone_number} via trunk {trunk_id} using {proxy_msg}"
                 + (f" (Caller ID: {sip_number})" if sip_number else "")
             )
 
@@ -2094,10 +2095,10 @@ async def handle_outbound_call_webhook(request: Request):
                     wait_until_answered=True,
                 )
             )
-            logger.info(f"SIP Participant created: {sip_part.participant_identity}")
+            logger.info(f"[DIAG] Webhook: SIP Participant created: {sip_part.participant_identity}")
             _telemetry("sip_call_connected")
         except Exception as e:
-            logger.error(f"SIP Call trigger failed for {room_name}: {e}\n{traceback.format_exc()}")
+            logger.error(f"[DIAG] Webhook: SIP Call trigger failed for {room_name}: {e}\n{traceback.format_exc()}")
             _telemetry(f"sip_call_failed — {str(e)[:100]}")
 
             call_already_connected = False
@@ -2148,6 +2149,8 @@ async def handle_outbound_call_webhook(request: Request):
     # Fire and forget the SIP task
     asyncio.create_task(trigger_sip())
 
+    logger.info(f"[DIAG] Webhook: Returning success response. call_id={call_id} room={room_name}")
+    
     # Generate token for anyone needing to join/monitor the call
     token = (
         api.AccessToken(os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET"))
@@ -2529,7 +2532,7 @@ async def create_and_call_plivo(request: Request):
         logger.info(f"Dispatching agent to room {room_name}")
         await lk_client.agent_dispatch.create_dispatch(
             api.CreateAgentDispatchRequest(
-                room=room_name, agent_name="mantra-agent", metadata=json.dumps(payload)
+                room=room_name, agent_name=AGENT_NAME, metadata=json.dumps(payload)
             )
         )
 

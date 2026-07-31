@@ -13,6 +13,8 @@ from mantra.utils import report_telemetry
 # Load environment variables
 load_dotenv(".env.local")
 
+AGENT_NAME = os.getenv("AGENT_NAME", "mantra-agent")
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mantra.dispatcher")
@@ -54,7 +56,7 @@ async def dispatch_call(lk_client: api.LiveKitAPI, payload: dict):
         logger.info(f"[Call {call_id}] Creating agent dispatch for room {room_name}")
         dispatch = await lk_client.agent_dispatch.create_dispatch(
             api.CreateAgentDispatchRequest(
-                room=room_name, agent_name="mantra-agent", metadata=json.dumps(payload)
+                room=room_name, agent_name=AGENT_NAME, metadata=json.dumps(payload)
             )
         )
         logger.info(f"[Call {call_id}] Dispatch created: {dispatch.id}")

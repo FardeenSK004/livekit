@@ -23,6 +23,8 @@ import json as pyjson
 from dotenv import load_dotenv
 load_dotenv(".env.local")
 
+AGENT_NAME = os.getenv("AGENT_NAME", "mantra-agent")
+
 from livekit import api
 
 
@@ -71,7 +73,7 @@ async def get_all_inbound_info(lk_client):
                     elif "zadarma" in name_lower:
                         providers.append("zadarma")
 
-        current_agent = "mantra-agent"
+        current_agent = AGENT_NAME
         if rule.room_config and rule.room_config.agents:
             current_agent = rule.room_config.agents[0].agent_name
 
@@ -185,7 +187,7 @@ async def cmd_on(lk_client, provider_filter, trunk_id_filter, all_flag):
     for item in targets:
         rule_id = item["rule_id"]
         current_agent = item["current_agent"]
-        if current_agent == "mantra-agent-dev":
+        if current_agent == AGENT_NAME:
             print(f"Rule {rule_id} ({item['name']}) already in DEV mode — skipping.")
             continue
 
@@ -231,7 +233,7 @@ async def cmd_on(lk_client, provider_filter, trunk_id_filter, all_flag):
                 departure_timeout=backup["room_config"]["departure_timeout"],
                 agents=[
                     api.RoomAgentDispatch(
-                        agent_name="mantra-agent-dev",
+                        agent_name=AGENT_NAME,
                         metadata=pyjson.dumps(metadata_dict)
                     )
                 ]
@@ -239,7 +241,7 @@ async def cmd_on(lk_client, provider_filter, trunk_id_filter, all_flag):
             trunk_ids=item["trunk_ids"]
         )
         new_rule = await lk_client.sip.create_dispatch_rule(req)
-        print(f"  ✓ Created DEV rule: {new_rule.sip_dispatch_rule_id} (agent: mantra-agent-dev)")
+        print(f"  ✓ Created DEV rule: {new_rule.sip_dispatch_rule_id} (agent: {AGENT_NAME})")
 
 
 async def cmd_off(lk_client, provider_filter, trunk_id_filter, all_flag):
@@ -265,7 +267,7 @@ async def cmd_off(lk_client, provider_filter, trunk_id_filter, all_flag):
         current_agent = item["current_agent"]
 
         # If already in production, skip
-        if current_agent != "mantra-agent-dev":
+        if current_agent != AGENT_NAME:
             print(f"✓ Rule {rule_id} already in production ({current_agent}) — skipping.")
             continue
 
@@ -275,13 +277,13 @@ async def cmd_off(lk_client, provider_filter, trunk_id_filter, all_flag):
                 backup = pyjson.loads(f.read())
         else:
             # No backup found — create a synthetic one from current rule config
-            print(f"  (No backup file found for {rule_id} — using current rule config with agent: mantra-agent)")
+            print(f"  (No backup file found for {rule_id} — using current rule config with agent: {AGENT_NAME})")
             backup = {
                 "name": item["name"],
                 "metadata": item["rule"].metadata,
                 "room_prefix": item["room_prefix"],
                 "trunk_ids": item["trunk_ids"],
-                "agent_name": "mantra-agent",
+                "agent_name": AGENT_NAME,
                 "room_config": {
                     "empty_timeout": item["room_config"].empty_timeout if item["room_config"] else 300,
                     "departure_timeout": item["room_config"].departure_timeout if item["room_config"] else 60,
