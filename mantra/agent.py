@@ -215,17 +215,15 @@ async def _resolve_from_mantra_backend(phone_number: str) -> dict | None:
 
 async def resolve_inbound_context(phone_number: str) -> dict | None:
     """
-    Resolves inbound call context, checking DB first and falling back to MantraAssist backend.
+    Resolves inbound call context from the PostgreSQL org_configs table (DB only, no HTTP).
     """
-    # 1. Try DB first (fast path)
+    logger.info(f"[DIAG] resolve_inbound_context: looking up {phone_number} in DB...")
     config = await _resolve_from_db(phone_number)
     if config:
-        logger.info(f"Resolved inbound context from DB for {phone_number} (org_id: {config.get('org_id')})")
-        return config
-    
-    # 2. Fall back to MantraAssist API (supplementary path)
-    logger.info(f"DB miss — falling back to MantraAssist API for {phone_number}")
-    return await _resolve_from_mantra_backend(phone_number)
+        logger.info(f"[DIAG] resolve_inbound_context: DB HIT — org_id={config.get('org_id')}, kb_ids={config.get('kb_ids')}, client={config.get('client_name')}")
+    else:
+        logger.warning(f"[DIAG] resolve_inbound_context: DB MISS for {phone_number} — using dispatch rule defaults")
+    return config
 
 
 class AssistantFunctions:
@@ -553,19 +551,16 @@ async def entrypoint(ctx: JobContext):
 
             if meta_payload.get("direction") == "inbound":
                 phone_number = meta_payload.get("phone_number", "")
+                logger.info(f"[DIAG] Inbound call detected — phone_number={phone_number}")
                 if phone_number:
                     resolved_context = await resolve_inbound_context(phone_number)
-                    if resolved_context is None:
-                        logger.error(f"Cannot resolve inbound call context for {phone_number}. Rejecting call.")
-                        try:
-                            await ctx.room.disconnect()
-                        except Exception:
-                            pass
-                        return
-                    meta_payload.update(resolved_context)
-                    logger.info(f"Merged inbound context into metadata for org_id={resolved_context.get('org_id')}")
+                    if resolved_context:
+                        meta_payload.update(resolved_context)
+                        logger.info(f"[DIAG] Inbound context merged: org_id={resolved_context.get('org_id')}")
+                    else:
+                        logger.warning(f"[DIAG] Inbound resolution failed for {phone_number} — using dispatch rule defaults, call WILL connect")
                 else:
-                    logger.warning("Inbound call has no phone_number in metadata")
+                    logger.warning("[DIAG] Inbound call has no phone_number in metadata")
 
             if meta_payload.get("org_id"):
                 kb_ids_list.append(meta_payload["org_id"])
