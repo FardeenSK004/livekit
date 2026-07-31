@@ -31,18 +31,18 @@ You'll receive a call. Answer it — the agent will greet you as an inbound call
 
 **Endpoint details:**
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `phone` | ✅ | Your phone number |
-| `country_code` | No | Defaults to `91` (India) |
-| `trunk_id` | ✅ | Outbound SIP trunk to place the call |
-| `prompt` | No | Agent instructions |
-| `voice` | No | TTS voice (default: `arushi`) |
-| `model` | No | LLM model (default: `openai`) |
+| Parameter      | Required | Description                          |
+| -------------- | -------- | ------------------------------------ |
+| `phone`        | ✅       | Your phone number                    |
+| `country_code` | No       | Defaults to `91` (India)             |
+| `trunk_id`     | ✅       | Outbound SIP trunk to place the call |
+| `prompt`       | No       | Agent instructions                   |
+| `voice`        | No       | TTS voice (default: `arushi`)        |
+| `model`        | No       | LLM model (default: `openai`)        |
 
 ---
 
-## Step 1: Create an Inbound SIP Trunk  ✅ DONE
+## Step 1: Create an Inbound SIP Trunk ✅ DONE
 
 Created trunk `plivo-inbound-trunk` with ID `ST_9crXjawUyeJp`.
 
@@ -52,8 +52,8 @@ Created trunk `plivo-inbound-trunk` with ID `ST_9crXjawUyeJp`.
 {
   "name": "plivo-inbound-trunk",
   "numbers": ["+911234567890"],
-  "auth_username": "MANTA2NJKXNKNKXX",
-  "auth_password": "MjEwYjYxNTg0OTM2ZDdjNTMyYjVhY2E5YWIyY2Rj",
+  "auth_username": "...",
+  "auth_password": "...",
   "metadata": {
     "provider": "plivo"
   }
@@ -61,6 +61,7 @@ Created trunk `plivo-inbound-trunk` with ID `ST_9crXjawUyeJp`.
 ```
 
 **Response:**
+
 ```json
 {
   "status": "success",
@@ -90,6 +91,7 @@ Links the inbound trunk to the agent. When a call arrives, LiveKit auto-creates 
 ```
 
 **Expected Response:**
+
 ```json
 {
   "status": "success",
@@ -122,16 +124,19 @@ Alternatively, use Plivo's **Answer URL** pointing to a proxy that forwards to L
 ## Step 4: Verify Setup
 
 ### List inbound trunks:
+
 ```
 GET /api/v1/sip/trunks/inbound
 ```
 
 ### List dispatch rules:
+
 ```
 GET /api/v1/sip/dispatch-rules
 ```
 
 ### Delete (if needed):
+
 ```
 DELETE /api/v1/sip/trunks/inbound/ST_xxxxx
 DELETE /api/v1/sip/dispatch-rules/SR_xxxxx
@@ -142,6 +147,7 @@ DELETE /api/v1/sip/dispatch-rules/SR_xxxxx
 ## Step 5: End-to-End Test
 
 1. Ensure the agent is running:
+
    ```bash
    mantra-agent start
    ```
@@ -153,7 +159,7 @@ DELETE /api/v1/sip/dispatch-rules/SR_xxxxx
    - Dispatch rule creates room `inbound_<random>`
    - `mantra-agent` is auto-dispatched to the room
    - SIP caller (you) is bridged into the room
-   - Agent greets: *"Hello, this is MantraCare. How can I help you today?"*
+   - Agent greets: _"Hello, this is MantraCare. How can I help you today?"_
 
 4. Monitor logs:
    ```
@@ -165,9 +171,9 @@ DELETE /api/v1/sip/dispatch-rules/SR_xxxxx
 
 ## Troubleshooting
 
-| Issue | Likely Cause | Fix |
-|-------|-------------|-----|
-| Call not reaching LiveKit | Plivo SIP endpoint wrong | Verify SIP endpoint format: `sip:ST_xxx@sip.livekit.cloud` |
-| Agent not answering | Agent not running | Start agent with `mantra-agent start` |
-| Dispatch rule not triggering | Trunk ID mismatch | Verify rule's `trunk_ids` matches trunk `sip_trunk_id` |
-| 403 on API calls | Proxy env vars interfering | Check `PLIVO_PROXY` — trunk/dispatch rules use direct `lk_client`, not proxy |
+| Issue                        | Likely Cause               | Fix                                                                          |
+| ---------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
+| Call not reaching LiveKit    | Plivo SIP endpoint wrong   | Verify SIP endpoint format: `sip:ST_xxx@sip.livekit.cloud`                   |
+| Agent not answering          | Agent not running          | Start agent with `mantra-agent start`                                        |
+| Dispatch rule not triggering | Trunk ID mismatch          | Verify rule's `trunk_ids` matches trunk `sip_trunk_id`                       |
+| 403 on API calls             | Proxy env vars interfering | Check `PLIVO_PROXY` — trunk/dispatch rules use direct `lk_client`, not proxy |
