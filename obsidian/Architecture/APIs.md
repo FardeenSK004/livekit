@@ -110,7 +110,9 @@ Returns `{ "url": "wss://..." }` — LiveKit server URL for frontend.
 
 ### GET /health
 
-Returns `{ "status": "ok", "service": "ui_server" }`.
+Readiness endpoint. Returns `{ "healthy": true|false }` — `false` when any infrastructure dependency fails OR any provider is at its concurrency limit OR the global agent pool (`MAX_CALL_CONCURRENCY`, default 5) is saturated.
+
+Checks: LiveKit, Redis, PostgreSQL, Deepgram STT, MantraAssist backend, S3, `provider_capacity_{plivo,zadarma,voice_link}`, `capacity_max_concurrency`.
 
 ---
 

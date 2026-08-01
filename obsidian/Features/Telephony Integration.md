@@ -12,9 +12,27 @@
 
 ## SIP Trunk Resolution
 
-- `_get_provider_from_trunk(trunk_id)` → fetches trunk from LiveKit, infers provider from address
-- Default provider: `zadarma`
+- `_get_provider_from_trunk(trunk_id)` → fetches trunk from LiveKit, infers provider from address (`twilio`/`plivo`/`zadarma`), falls back to `voicelink_client` for `voice_link`; returns `str | None` for unknown trunks
+- No default provider — all providers resolved equally; non-None results cached in Redis `trunk:provider:{trunk_id}` (TTL 30d)
 - Trunk ID from payload: `trunk_id` > `call_from_id` > `SIP_TRUNK_ID` env var
+
+## Call Capacity Gating
+
+Per-provider concurrency limits guard dispatch (middleware, POST dispatch paths):
+
+| Provider | Limit | Env override |
+|----------|-------|--------------|
+| Plivo | 2 | `PLIVO_MAX_CONCURRENCY` |
+| Zadarma | 3 | `ZADARMA_MAX_CONCURRENCY` |
+| VoiceLink | 5 | `VOICELINK_MAX_CONCURRENCY` |
+| Global (agent pool) | 5 | `MAX_CONCURRENCY` / `CARTESIA_MAX_CONCURRENCY` |
+
+- Provider embedded in LiveKit room name — `call_{provider}_{call_id}` (e.g. `call_plivo_t1`) — enables zero-Redis active-count via LiveKit room list; unknown trunks → `call_unknown_{id}` (not counted, not blocked)
+- Per-provider gate (webhook path only) → empty `503` when the call's provider is saturated; other providers keep dispatching
+- Global gate (all dispatch paths) → `503` when live `call_*` rooms ≥ `MAX_CALL_CONCURRENCY`
+- Rejected calls → `call_logs` row with status `Busy`, reason `provider_at_concurrency_limit` (provider, active/max, trunk, phone)
+- `/health` returns `{"healthy": false}` when any provider or the global pool is at capacity
+- LiveKit errors in gate fail closed → `503` (no silent gate bypass)
 
 ## Phone Number Format
 
@@ -22,9 +40,9 @@ E.164 format: `+{country_code}{phone_number}`. Handles both `+`-prefixed and bar
 
 ## Error Handling
 
-SIP failures are classified:
+SIP failures are classified in `trigger_sip` (`ui_server.py`):
 - `408`/timeout/no answer → `"No Answer"`
 - `486`/busy/decline → `"Busy"`
 - Other → `"Incomplete"`
 
-Status written to Redis `sip_error_status:{call_id}` (TTL: 300s) for agent to read during post-call.
+The webhook awaits the SIP call and returns an empty `503` when it fails (matching the capacity gate); the room is deleted, the dedup lock is released for retry, and the classification is written to Redis `sip_error_status:{call_id}` (TTL: 300s).

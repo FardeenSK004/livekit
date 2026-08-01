@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-08-01
+
+### Per-Provider Call Capacity & Health Gating
+- **feat:** Per-provider concurrency limits in `ui_server.py` — `PROVIDER_MAX_CONCURRENCY` (`plivo: 2`, `zadarma: 3`, `voice_link: 5`), env-overridable via `PLIVO_MAX_CONCURRENCY` / `ZADARMA_MAX_CONCURRENCY` / `VOICELINK_MAX_CONCURRENCY`.
+- **feat:** `/health` now reports per-provider and global capacity — returns `{"healthy": false}` when any provider is at its limit or total live `call_*` rooms reach `MAX_CALL_CONCURRENCY` (5, `CARTESIA_MAX_CONCURRENCY` fallback). Health check keys: `provider_capacity_{provider}`, `capacity_max_concurrency`.
+- **feat:** Middleware `health_gate_middleware` (POST dispatch paths only) — per-provider gate for `/api/v1/webhooks/telephony` returns empty `503` when the call's provider is saturated; global gate returns `503` when live rooms ≥ `MAX_CALL_CONCURRENCY`; dependency gate still blocks `503` on infra failure. Provider saturation never blocks another provider's traffic.
+- **feat:** Provider embedded in LiveKit room name for zero-Redis tracking — `call_{provider}_{call_id}` (e.g. `call_plivo_t1`, `call_voice_link_v1`); unknown trunks → `call_unknown_{id}` (not counted, not blocked).
+- **feat:** `_log_blocked_call()` → `save_call_log_to_db(status="Busy")` with structured JSON (provider, `blocked: true`, `reason: provider_at_concurrency_limit`, active/max, trunk, phone, timestamp) when the per-provider gate rejects a call.
+- **refactor:** Split `_run_dependency_checks()` (infra only, used by the coarse gate) from `_run_health_checks()` (deps + capacity, used by `/health`); `BYPASS_HEALTH_CHECKS` honored in both.
+- **refactor:** `_get_provider_from_trunk()` returns `str | None` — removed `DEFAULT_PROVIDER="zadarma"`; all providers resolved equally via address inference + `voicelink_client` fallback; only non-None results cached in Redis.
+- **fix:** `_active_call_rooms()` now re-raises LiveKit errors (fail-closed) instead of silently returning `[]` — previously caused intermittent gate bypass (200 instead of 503); middleware converts exceptions to `503`, `/health` records `capacity_max_concurrency: "error: ..."`.
+- **fix:** Plivo SIP failure statuses now surface as `503` from the webhook — `handle_outbound_call_webhook` awaits `trigger_sip()` instead of fire-and-forget, and returns an empty `503` (matching the capacity gate) when the SIP call fails (408→`No Answer`, 486→`Busy`, other→`Incomplete`). Previously the webhook returned `200` even when the call never connected. The SIP failure classification is still written to Redis `sip_error_status:{call_id}` and the room is deleted.
+- **chore:** Production cleanup — removed test/demo tooling (`tools/test_provider_capacity.py`, `tools/seed_rooms.py`, `tools/demo_7_calls.sh`, `tools/live_capacity_smoke.sh`) and `docs/CAPACITY_SYSTEM.md`; restored `_check_postgres()` in dependency checks; removed stale blank lines / dead code.
+
 ## 2026-07-30
 
 ### Voicelink Integration & SIP Fixes

@@ -1,11 +1,13 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-07-30  
-> **Status:** Active maintenance, Multi-KB per org (KB collections), Voicelink SIP inbound trunk provisioning, LiveKit native `sonic-3` TTS
+> **Last Updated:** 2026-08-01  
+> **Status:** Active maintenance, Multi-KB per org (KB collections), Voicelink SIP inbound trunk provisioning, LiveKit native `sonic-3` TTS, per-provider call capacity gating
 
 ## Recently Completed
 
+- [x] **SIP Failure → 503 (408/486):** Webhook now awaits `trigger_sip()` and returns empty `503` (matching the capacity gate) when the SIP call fails — 408→No Answer, 486→Busy, other→Incomplete. Failure classification written to Redis `sip_error_status:{call_id}`, room deleted, dedup lock released for retry.
+- [x] **Per-Provider Call Capacity & Health Gating:** `PROVIDER_MAX_CONCURRENCY` (plivo=2, zadarma=3, voice_link=5), global `MAX_CALL_CONCURRENCY`=5. Provider embedded in LiveKit room name (`call_{provider}_{call_id}`) for zero-Redis tracking. `/health` reports `false` when any provider or the global pool saturates. Middleware returns empty `503` per-provider (webhooks) and global (all dispatch paths); provider saturation never blocks another provider's traffic. Blocked calls logged to `call_logs` as `Busy` with `provider_at_concurrency_limit` reason.
 - [x] **Voicelink SIP Integration & Call Routing Fixes:** Fixed `voicelink_client` NameError, added inbound SIP setup support for `voice_link`, implemented Redis-backed trunk provider caching with `voicelink_client` fallback, and routed outbound VoiceLink calls through the proxied client (preventing 408 SIP timeout errors).
 - [x] **Outbound Call Walkthrough doc:** Created `Architecture/Outbound Call Walkthrough.md` — full end-to-end trace of a single outbound call with payload sample, code references, sequence diagram, failure modes, and design properties
 - [x] **Multi-KB per Org — KB Collections:** Added `kb_collections` table (migration `003_kb_collections.py`) where each row = one document = one KB collection per org. Agent resolves all collections for an org plus legacy fallback. Ingestion endpoints create/find collections.

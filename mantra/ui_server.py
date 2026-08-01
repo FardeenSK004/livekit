@@ -61,6 +61,69 @@ voicelink_session: aiohttp.ClientSession = (
 redis_client: redis.Redis = None
 http_client: httpx.AsyncClient = None      # Persistent client for health checks
 
+# ── Per-provider concurrency limits ────────────────────────────────────
+PROVIDER_MAX_CONCURRENCY = {
+    "plivo": int(os.getenv("PLIVO_MAX_CONCURRENCY", "2")),
+    "zadarma": int(os.getenv("ZADARMA_MAX_CONCURRENCY", "3")),
+    "voice_link": int(os.getenv("VOICELINK_MAX_CONCURRENCY", "5")),
+}
+MAX_CALL_CONCURRENCY = int(
+    os.getenv("MAX_CONCURRENCY", os.getenv("CARTESIA_MAX_CONCURRENCY", "5"))
+)
+
+# ── Per-provider capacity helpers ──────────────────────────────────────
+
+
+async def _active_call_rooms() -> list[str]:
+    if not lk_client:
+        raise RuntimeError("LiveKit client not initialised")
+    resp = await lk_client.room.list_rooms(api.ListRoomsRequest())
+    return [r.name for r in resp.rooms if (r.name or "").startswith("call_")]
+
+
+async def _active_per_provider(rooms: list[str]) -> dict[str, int]:
+    counts = {p: 0 for p in PROVIDER_MAX_CONCURRENCY}
+    ordered = sorted(counts.keys(), key=len, reverse=True)
+    for name in rooms:
+        if not name or not name.startswith("call_"):
+            continue
+        rest = name[5:]
+        for prov in ordered:
+            if rest.startswith(prov + "_"):
+                counts[prov] += 1
+                break
+    return counts
+
+
+async def _provider_at_capacity(provider: str) -> tuple[bool, int]:
+    limit = PROVIDER_MAX_CONCURRENCY.get(provider)
+    if limit is None:
+        return False, 0
+    rooms = await _active_call_rooms()
+    counts = await _active_per_provider(rooms)
+    active = counts.get(provider, 0)
+    return active >= limit, active
+
+
+async def _log_blocked_call(
+    call_id: str, provider: str, active_count: int,
+    trunk_id: str = "", phone: str = "",
+):
+    limit = PROVIDER_MAX_CONCURRENCY.get(provider, "?")
+    call_log = json.dumps({
+        "call_id": call_id,
+        "provider": provider,
+        "blocked": True,
+        "reason": "provider_at_concurrency_limit",
+        "active_calls": active_count,
+        "max_concurrency": limit,
+        "trunk_id": trunk_id,
+        "phone": phone,
+        "requested_at": datetime.now(tz=timezone.utc).isoformat(),
+    })
+    await save_call_log_to_db(call_id, call_log, "Busy", "")
+
+
 # ── Authentication ───────────────────────────────────────────────────────
 JWT_SECRET = os.getenv("JWT_SECRET")
 if not JWT_SECRET:
@@ -321,11 +384,11 @@ _DISPATCH_PATHS = frozenset({
 })
 
 
-async def _run_health_checks() -> bool:
-    """Run all service checks concurrently (Python's Promise.all via asyncio.gather)."""
+async def _run_dependency_checks() -> tuple[bool, dict[str, bool | str]]:
+    """Run infrastructure dependency checks only (no capacity). Used by the coarse gate."""
     if os.getenv("BYPASS_HEALTH_CHECKS") == "1":
         logger.warning("BYPASS_HEALTH_CHECKS is active. Skipping all service health checks.")
-        return True
+        return True, {}
 
     checks: dict[str, bool | str] = {}
 
@@ -425,6 +488,52 @@ async def _run_health_checks() -> bool:
             all_ok = False
             logger.warning(f"  - Healthcheck FAILED: {service} -> {status}")
 
+    return all_ok, checks
+
+
+async def _run_health_checks() -> bool:
+    """Run all dependency + capacity checks. Returns False if any check fails."""
+    if os.getenv("BYPASS_HEALTH_CHECKS") == "1":
+        logger.warning("BYPASS_HEALTH_CHECKS is active. Skipping all service health checks.")
+        return True
+
+    dep_ok, checks = await _run_dependency_checks()
+    if not dep_ok:
+        return False
+
+    rooms = []
+    try:
+        rooms = await _active_call_rooms()
+    except Exception as e:
+        checks["capacity_max_concurrency"] = f"error: {e}"
+        rooms = []
+
+    total = len(rooms)
+    if total >= MAX_CALL_CONCURRENCY:
+        checks["capacity_max_concurrency"] = f"BUSY {total}/{MAX_CALL_CONCURRENCY}"
+    else:
+        checks["capacity_max_concurrency"] = True
+
+    try:
+        pcounts = await _active_per_provider(rooms)
+    except Exception:
+        pcounts = {}
+    for provider, limit in PROVIDER_MAX_CONCURRENCY.items():
+        active = pcounts.get(provider, 0)
+        key = f"provider_capacity_{provider}"
+        if active >= limit:
+            checks[key] = f"BUSY {active}/{limit}"
+        else:
+            checks[key] = True
+
+    all_ok = True
+    for service, status in checks.items():
+        if status is True:
+            logger.info(f"  - Healthcheck OK: {service}")
+        else:
+            all_ok = False
+            logger.warning(f"  - Healthcheck FAILED: {service} -> {status}")
+
     return all_ok
 
 
@@ -449,13 +558,58 @@ async def health():
 
 @app.middleware("http")
 async def health_gate_middleware(request: Request, call_next):
-    """Reject dispatch requests before they reach a handler if any dependency is down."""
+    """Per-provider capacity gate + coarse dependency gate. 503 on blocked dispatch."""
     path = request.url.path
     if request.method == "POST" and path in _DISPATCH_PATHS:
-        ok = await _run_health_checks()
+        if path == "/api/v1/webhooks/telephony":
+            try:
+                body = await request.body()
+                payload = json.loads(body) if body else {}
+                call_id = str(
+                    payload.get("call_id")
+                    or payload.get("voice_id")
+                    or payload.get("event_id")
+                    or int(time.time())
+                )
+                trunk_id = (
+                    payload.get("trunk_id")
+                    or payload.get("call_from_id")
+                    or os.getenv("SIP_TRUNK_ID")
+                )
+                if trunk_id:
+                    provider = await _get_provider_from_trunk(trunk_id)
+                    if provider and provider in PROVIDER_MAX_CONCURRENCY:
+                        busy, active = await _provider_at_capacity(provider)
+                        if busy:
+                            logger.warning(
+                                f"Provider gate blocked {provider}: {active}/{PROVIDER_MAX_CONCURRENCY.get(provider)}"
+                            )
+                            asyncio.create_task(
+                                _log_blocked_call(
+                                    call_id, provider, active,
+                                    trunk_id=trunk_id,
+                                    phone=str(payload.get("client_phone", "")),
+                                )
+                            )
+                            return Response(status_code=503)
+            except Exception as e:
+                logger.error(f"provider capacity gate error, blocking: {e}")
+                return Response(status_code=503)
+
+        # ── Global capacity gate (agent pool) ───────────────────
+        try:
+            rooms = await _active_call_rooms()
+            if len(rooms) >= MAX_CALL_CONCURRENCY:
+                logger.warning(f"Global capacity gate blocked: {len(rooms)}/{MAX_CALL_CONCURRENCY}")
+                return Response(status_code=503)
+        except Exception as e:
+            logger.warning(f"Global capacity gate unavailable, continuing: {e}")
+
+        ok, _ = await _run_dependency_checks()
         if not ok:
             logger.warning(f"Health gate blocked {request.method} {path}")
             return Response(status_code=503)
+
     return await call_next(request)
 
 
@@ -2033,11 +2187,16 @@ async def handle_outbound_call_webhook(request: Request):
     provider = await _get_provider_from_trunk(trunk_id)
     logger.info(f"[DIAG] Webhook: call_id={call_id} phone={phone_number} trunk={trunk_id} provider={provider} AGENT_NAME={AGENT_NAME}")
 
+    # Embed provider in room name for capacity tracking (zero Redis)
+    room_suffix = provider if provider else "unknown"
+    room_name = f"call_{room_suffix}_{call_id}"
+
     # Stamp call_initiated_at before dispatching so the agent gets it
     payload_meta = payload.get("metadata")
     if not isinstance(payload_meta, dict):
         payload_meta = {}
     payload_meta["call_initiated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    payload_meta.setdefault("provider", provider)
     payload["metadata"] = payload_meta
 
     # Trigger agent dispatch — always use lk_client (direct, no proxy)
@@ -2057,8 +2216,8 @@ async def handle_outbound_call_webhook(request: Request):
             {"error": f"Agent dispatch failed: {str(e)}"}, status_code=500
         )
 
-    # Trigger SIP outbound call in background to prevent webhook timeouts
-    async def trigger_sip():
+    # Trigger SIP outbound call and surface its outcome (return True if connected)
+    async def trigger_sip() -> bool:
         try:
             sip_number = payload.get("call_from")
             if sip_number and not sip_number.startswith("+"):
@@ -2097,6 +2256,7 @@ async def handle_outbound_call_webhook(request: Request):
             )
             logger.info(f"[DIAG] Webhook: SIP Participant created: {sip_part.participant_identity}")
             _telemetry("sip_call_connected")
+            return True
         except Exception as e:
             logger.error(f"[DIAG] Webhook: SIP Call trigger failed for {room_name}: {e}\n{traceback.format_exc()}")
             _telemetry(f"sip_call_failed — {str(e)[:100]}")
@@ -2118,7 +2278,7 @@ async def handle_outbound_call_webhook(request: Request):
                 logger.warning(f"Could not check room participants for {room_name}: {check_err}")
 
             if call_already_connected:
-                return
+                return True
 
             # Store exact SIP failure reason in Redis for the agent to read
             if redis_client:
@@ -2146,8 +2306,19 @@ async def handle_outbound_call_webhook(request: Request):
             except Exception as cleanup_err:
                 logger.error(f"Failed to cleanup room after SIP failure: {cleanup_err}")
 
-    # Fire and forget the SIP task
-    asyncio.create_task(trigger_sip())
+            return False
+
+    # Await the SIP call so a failed call (408/486) is surfaced to the caller as 503
+    sip_connected = await trigger_sip()
+    if not sip_connected:
+        logger.warning(f"SIP call failed for call_id={call_id} — returning 503 to caller")
+        # Release the dedup lock so a retry with the same call_id is not rejected as a duplicate
+        if redis_client:
+            try:
+                await redis_client.delete(f"lock:call:{call_id}")
+            except Exception as lock_err:
+                logger.warning(f"Failed to release lock for {call_id}: {lock_err}")
+        return Response(status_code=503)
 
     logger.info(f"[DIAG] Webhook: Returning success response. call_id={call_id} room={room_name}")
     
@@ -2231,16 +2402,13 @@ async def _create_sip_outbound_trunk(
         raise
 
 
-DEFAULT_PROVIDER = "zadarma"
-
-
-async def _get_provider_from_trunk(trunk_id: str) -> str:
+async def _get_provider_from_trunk(trunk_id: str) -> str | None:
     if redis_client:
         stored = await redis_client.get(f"trunk:provider:{trunk_id}")
         if stored:
             return stored
 
-    provider = DEFAULT_PROVIDER
+    provider = None
 
     try:
         response = await lk_client.sip.list_outbound_trunk(
@@ -2252,10 +2420,12 @@ async def _get_provider_from_trunk(trunk_id: str) -> str:
                 provider = "twilio"
             elif "plivo" in address:
                 provider = "plivo"
+            elif "zadarma" in address:
+                provider = "zadarma"
     except Exception as e:
         logger.warning(f"Cannot list trunk {trunk_id} via lk_client: {e}")
 
-    if provider == DEFAULT_PROVIDER and voicelink_client:
+    if provider is None and voicelink_client:
         try:
             vl_resp = await voicelink_client.sip.list_outbound_trunk(
                 api.ListSIPOutboundTrunkRequest(trunk_ids=[trunk_id])
@@ -2265,7 +2435,7 @@ async def _get_provider_from_trunk(trunk_id: str) -> str:
         except Exception as e:
             logger.warning(f"Cannot list trunk {trunk_id} via voicelink_client: {e}")
 
-    if redis_client:
+    if redis_client and provider:
         await redis_client.set(f"trunk:provider:{trunk_id}", provider, ex=86400 * 30)
     return provider
 
