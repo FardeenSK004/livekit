@@ -10,14 +10,14 @@
 ## Architectural Patterns
 
 - **Redis Queueing:** Sorted sets for priority queuing
-- **Capacity Management:** Explicit limits enforced before dispatch
+- **Capacity Management:** Per-provider limits + global cap enforced before dispatch
 - **Zombie Cleanup:** Periodic reconciliation between Redis state and LiveKit rooms
-- **Two LiveKit clients:** Direct + Proxied (Plivo India)
+- **Three LiveKit clients:** Direct + Proxied (Plivo India) + Proxied (VoiceLink)
 
 ## Naming
 
 - `call_id` — Unique call identifier (from payload or auto-generated)
-- `room_name` — LiveKit room: `call_{call_id}` or `test_{call_id}`
+- `room_name` — LiveKit room: `call_{provider}_{call_id}` (e.g. `call_plivo_t1`), `test_{call_id}`, or `test_inbound_{call_id}`
 - `trunk_id` — SIP trunk identifier
 - Module loggers: `mantra.{module_name}`
 

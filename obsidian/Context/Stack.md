@@ -12,14 +12,14 @@
 - **OpenAI GPT-4o-mini** — Default LLM
 - **Gemini 2.5 Flash** — Alternative LLM
 - **DeepSeek v4 Flash** — Alternative LLM
-- **Cartesia Sonic-3** — Text-to-Speech
+- **LiveKit sonic-3** — Native TTS (no external API dependency)
 - **Silero VAD** — Voice Activity Detection
 - **Multilingual Turn Detector** — Turn detection
 
 ## Infrastructure
-- **PostgreSQL** — Call log storage + KB (Full-Text Search via `tsvector`)
-- **Redis >=8.0** — Queue, state, capacity
-- **AWS S3** — Recording storage
+- **PostgreSQL** — Call log storage + KB (Full-Text Search via `tsvector`) + org configs
+- **Redis >=8.0** — Queue, state, capacity, dedup locks
+- **AWS S3** — Recording storage + KB file storage
 - **LiveKit Cloud** — WebRTC + SIP
 
 ## Web Server

@@ -1,6 +1,6 @@
 # Voice Agent
 
-**File:** `mantra/agent.py` (995 lines)
+**File:** `mantra/agent.py` (1,629 lines)
 
 ## Overview
 
@@ -13,7 +13,7 @@ The core real-time voice AI agent. Connects to LiveKit rooms, handles the full S
    - `openai` → GPT-4o-mini (default)
    - `gemini` → Gemini 2.5 Flash
    - `deepseek` → DeepSeek v4 Flash (via OpenAI-compatible API)
-3. **TTS:** LiveKit Inference Sonic-3 (native LiveKit TTS, no Cartesia dependency)
+3. **TTS:** LiveKit native sonic-3 (no Cartesia dependency)
 4. **VAD:** Silero (`min_speech_duration=0.08`, `min_silence_duration=0.15`)
 5. **Turn Detection:** MultilingualModel
 
@@ -32,10 +32,24 @@ The core real-time voice AI agent. Connects to LiveKit rooms, handles the full S
 
 ## Safety Systems
 
-- **Inactivity Monitor:** 10s no-response timeout → force disconnect
-- **Farewell Safety Net:** Detects goodbye without `end_call` → force disconnect after 10s warmup, 3s poll
+- **Inactivity Monitor:** 5s prompt → 10s no-response timeout → force disconnect
+- **Farewell Safety Net:** Detects goodbye without `end_call` → force disconnect after 10s warmup, 3s poll (directional — different phrases for inbound vs outbound)
 - **Call Limiter:** 2m30s → farewell instructions; 3m → hard kill
 - **Crash Email:** `send_crash_email()` on entrypoint exceptions
+
+## Agent Tools
+
+### `search_knowledge_base(query, specific_tag?)`
+Function tool for RAG. Searches PostgreSQL FTS across all kb_collections for the org + legacy fallback. Returns formatted results to LLM. Tracks accessed pages for post-call metadata extraction.
+
+### `end_call()`
+Graceful disconnect. Triggers a 3s delay then force-disconnects the room. Required for LLM to end calls — safety net catches cases where LLM says goodbye without calling this.
+
+## Handoff to Human (`transfer_to_human`)
+
+**Status: DISABLED** — Code preserved but commented out in `agent.py` (lines ~279-422).
+
+The full implementation (when re-enabled): department-based transfer number resolution via `TRANSFER_NUMBERS` dict, SIP participant creation in same room, webhook notification, agent silence enforcement via `update_instructions()`, speech interruption via `session.interrupt()`. Known issue: race condition with tool return producing residual `"..."` utterance.
 
 ## Configuration via Metadata Payload
 
@@ -56,21 +70,6 @@ The core real-time voice AI agent. Connects to LiveKit rooms, handles the full S
   "client_phone": "+919876543210"
 }
 ```
-
-## Handoff to Human (`transfer_to_human`)
-
-**File:** `mantra/agent.py:279-378`
-
-An LLM-registered function tool. When the agent cannot resolve an issue or the user requests a human:
-
-1. **Guard** — `handoff_triggered` flag prevents duplicate calls
-2. **Resolve target** — Looks up `TRANSFER_NUMBERS` dict by department (`refund`/`support`/`billing`/`general`), falls back to `TRANSFER_DEFAULT_NUMBER`
-3. **Create SIP participant** — Dial the human agent into the **same LiveKit room** so AI + human + caller are all present
-4. **Webhook** — Sends `HANDOFF_REQUESTED` event to `MANTRAASSIST_BACKEND_URL/webhooks/n8n`
-5. **Silence enforcement** — `agent.update_instructions("You are SILENT...")` + `session.interrupt()` to stop TTS
-6. **Returns** `"TRANSFER_COMPLETE. Do not speak."`
-
-**Known issue:** Race condition between tool return and silence instructions — the LLM may produce a brief residual utterance (`"..."`) that fails TTS. See TODO.
 
 ## Post-Call Processing
 

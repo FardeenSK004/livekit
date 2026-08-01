@@ -4,11 +4,12 @@
 
 ## Providers
 
-| Provider | Routing | Endpoint | Notes |
+| Provider | Routing | Outbound Endpoint | Notes |
 |----------|---------|----------|-------|
 | Twilio | Direct | `POST /api/v1/sip/trunks/outbound/twilio` | Default address `live-kit-mc.pstn.twilio.com` |
-| Plivo | Proxied (India) | `POST /api/v1/sip/trunks/outbound/plivo` | On-the-fly trunk provisioning; `destination_country="in"` |
+| Plivo | Proxied (India) | `POST /api/v1/sip/trunks/outbound/plivo` | On-the-fly trunk provisioning; `destination_country="in"`; Zentrunk for inbound |
 | Zadarma | Direct | `POST /api/v1/sip/trunks/outbound/zadarma` | Backward-compatible with root endpoint |
+| VoiceLink | Proxied | `POST /api/v1/sip/trunks/outbound/voice_link` | `destination_country="in"`; LiveKit-native provider |
 
 ## SIP Trunk Resolution
 
@@ -25,6 +26,7 @@ Per-provider concurrency limits guard dispatch (middleware, POST dispatch paths)
 | Plivo | 2 | `PLIVO_MAX_CONCURRENCY` |
 | Zadarma | 3 | `ZADARMA_MAX_CONCURRENCY` |
 | VoiceLink | 5 | `VOICELINK_MAX_CONCURRENCY` |
+| Twilio | 2 | `TWILIO_MAX_CONCURRENCY` |
 | Global (agent pool) | 5 | `MAX_CONCURRENCY` / `CARTESIA_MAX_CONCURRENCY` |
 
 - Provider embedded in LiveKit room name — `call_{provider}_{call_id}` (e.g. `call_plivo_t1`) — enables zero-Redis active-count via LiveKit room list; unknown trunks → `call_unknown_{id}` (not counted, not blocked)
@@ -46,3 +48,13 @@ SIP failures are classified in `trigger_sip` (`ui_server.py`):
 - Other → `"Incomplete"`
 
 The webhook awaits the SIP call and returns an empty `503` when it fails (matching the capacity gate); the room is deleted, the dedup lock is released for retry, and the classification is written to Redis `sip_error_status:{call_id}` (TTL: 300s).
+
+## Inbound Setup
+
+`POST /api/v1/sip/inbound/setup` handles end-to-end provisioning:
+1. Check for existing trunk/rule (Plivo: 409 + Zentrunk link verification)
+2. Create/reuse LiveKit inbound trunk
+3. Create/reuse LiveKit dispatch rule
+4. Generate SIP URI from SIP domain
+5. Configure provider forwarding (Zadarma API HMAC-SHA1, Twilio REST, Plivo Zentrunk, VoiceLink placement)
+6. Store config in `org_configs` (only after provider forwarding succeeds)

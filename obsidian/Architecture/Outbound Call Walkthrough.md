@@ -150,7 +150,7 @@ else:
     llm_engine = openai.LLM(model="gpt-4o-mini")
 
 stt = deepgram.STT(model="nova-3", language="hi", smart_format=True)
-tts = inference.TTS(model="cartesia/sonic-3", voice=voice_id, ...)
+tts = inference.TTS(model="sonic-3", voice=voice_id, ...)
 vad = silero.VAD.load(...)
 ```
 
@@ -207,7 +207,7 @@ Controlled by `AgentSession` internally:
 - **Turn Detection** (MultilingualModel): Manages barge-in, endpointing, interruptions
 - **STT** (Deepgram Nova-3): Transcribes user speech (Hindi model handles Hinglish)
 - **LLM** (selected model): Generates response text
-- **TTS** (Cartesia Sonic-3): Synthesizes speech, played to the room
+- **TTS** (LiveKit native sonic-3): Synthesizes speech, played to the room
 - **Preemptive TTS**: Starts synthesizing before LLM completes for lower latency
 
 ### 3d. Background Monitors (3 parallel tasks)

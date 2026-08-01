@@ -1,38 +1,29 @@
 # Crash Alerts
 
-**File:** `mantra/email_alerts.py` (201 lines)
+**File:** `mantra/email_alerts.py` (244 lines)
 
 ## Overview
 
-SMTP-based crash notification system with optional meme generation for admin recipients.
+Automatic SMTP email alerts when the agent or UI server crashes. Uses formatted HTML with stack traces and optional meme images for admin recipients.
 
 ## Flow
 
-1. Exception caught in `agent.py` or `ui_server.py`
+1. Exception caught in global handler or agent entrypoint
 2. `send_crash_email(service_name, error, context_data)` called
-3. Executes via `asyncio.to_thread()` (non-blocking)
-4. Builds premium HTML email with:
-   - Error type + message
-   - Environment context (room name, job ID, PID, etc.)
-   - Full stack trace
-   - Optional meme image (admin recipients only)
-5. Sends via SMTP (port 465 SSL or 587 STARTTLS)
-
-## Meme Feature
-
-- Admin recipients (from `ADMIN_MAIL_ID`) get auto-generated memes
-- Meme templates: `["fine", "pigeon", "harold", "disastergirl", "rollsafe", ...]`
-- Generated via `memegen.link` with randomized template selection
-- Falls back gracefully if meme generation fails
+3. Runs via `asyncio.to_thread()` — non-blocking, doesn't freeze the event loop
+4. Sends premium HTML email to `ALERT_EMAIL_IDS` + `ADMIN_MAIL_ID`
+5. Admin recipients get randomized memes from `memegen.link` (tries 13 templates)
 
 ## Configuration
 
-| Env Var | Description |
-|---------|-------------|
-| `SMTP_HOST` | SMTP server |
-| `SMTP_PORT` | Port (default 587) |
-| `SMTP_USER` | SMTP username |
-| `SMTP_PASSWORD` | SMTP password |
-| `SMTP_FROM_EMAIL` | From address |
-| `ALERT_EMAIL_IDS` | Comma-separated alert recipients |
-| `ADMIN_MAIL_ID` | Admin recipients (get memes) |
+All SMTP env vars (see [[Knowledge/Environment.md]]):
+
+- `SMTP_HOST`, `SMTP_PORT` (587 for TLS, 465 for SSL)
+- `SMTP_USER`, `SMTP_PASSWORD` (Gmail app password)
+- `SMTP_FROM_EMAIL` (defaults to `SMTP_USER`)
+- `ALERT_EMAIL_IDS` — Comma-separated recipients (with memes)
+- `ADMIN_MAIL_ID` — Comma-separated admin recipients (with memes)
+
+## Meme Feature
+
+Admin recipients get a randomized crash meme image embedded inline. Templates include: fine, pigeon, harold, disastergirl, rollsafe, sad-biden, spiderman, spongebob, buzz, doge, drake, trade, wonka, fry, panik-kalm-panik. Top text: `{service_name} crashed`, bottom text: `Error: {exception_type}`. Falls back gracefully if memegen.link is unreachable.

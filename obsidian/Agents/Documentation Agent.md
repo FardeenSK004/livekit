@@ -1,19 +1,26 @@
 # Documentation Agent
 
-## Vault Location
+## Guidelines for updating this vault
 
-All project documentation lives in `obsidian/`.
+This is the **source of truth** for the project. Every code change must be reflected here.
 
-## Update Rules
+### When to update
 
-- Every code change must update relevant documentation
-- Architecture changes → update [[Architecture/Overview.md]] and [[Architecture/Design Decisions.md]]
-- New features → update [[Features/Feature Index.md]] and create feature page
-- Bugs found → update [[Development/Bugs.md]]
-- Work completed → update [[Development/Changelog.md]] and [[Development/Current Sprint.md]]
-- New conventions → update [[Knowledge/Conventions.md]]
+| Code change | Vault update required |
+|-------------|----------------------|
+| Architecture changes | Update `Architecture/Overview.md` + `Architecture/Design Decisions.md` |
+| New feature | Update `Features/Feature Index.md` + create feature page |
+| Modified feature | Update relevant feature page + `Home.md` stats |
+| Bug fix | Update `Development/Bugs.md` |
+| Work completed | Update `Development/Changelog.md` + `Development/Current Sprint.md` |
+| New conventions | Update `Knowledge/Conventions.md` |
+| New env vars | Update `Knowledge/Environment.md` |
+| Line count changes | Update `Context/Repository Map.md` + `Home.md` |
 
-## Linking Convention
+### Conventions
 
-- Use `[[WikiLink]]` format for all internal links
-- Link to code at `file:line` when referencing implementation details
+- Use `[[WikiLink]]` format for internal links
+- Use `` `code` `` for file paths, class names, variables
+- Use `file:line` format for source references (e.g. `agent.py:279-378`)
+- Keep the Feature Index table up to date with all features
+- After `git pull` or `git merge`, check for stale docs and update

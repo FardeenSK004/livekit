@@ -21,19 +21,19 @@ Step 3: VOICE AGENT (agent.py)
   ├── STT → LLM → TTS loop (real-time conversation)
   │   ├── STT: Deepgram Nova-3 (Hindi model for Hinglish)
   │   ├── LLM: GPT-4o-mini / Gemini / DeepSeek
-  │   ├── TTS: Cartesia Sonic-3 with fallback keys
+  │   ├── TTS: LiveKit native sonic-3 (no Cartesia dependency)
   │   └── VAD: Silero + Multilingual Turn Detection
   ├── end_call tool → graceful disconnect
   └── Post-call processing
 
 Step 4: POST-CALL (agent.py, finally block)
-  ├── Cancel background tasks (limiter, inactivity, safety net)
+  ├── Cancel background tasks (limiter, inactivity, safety net, transcript)
   ├── Capture history snapshot (transcript)
   ├── Stop recording → mix audio → upload MP3 to S3
-  ├── LLM analysis → summary, stage transition, sentiment
-  ├── Build webhook payload → send to MantraAssist backend
+  ├── LLM analysis → summary, stage transition, sentiment, appointment data, process_id
+  ├── Build webhook payload → send to MantraAssist backend (HMAC-signed)
   ├── Save call log to PostgreSQL
-  ├── Free capacity slot in Redis (calls:active)
+  ├── TOS telemetry with call summary, duration, S3 status
   └── Log completion summary
 ```
 
@@ -43,16 +43,15 @@ Step 4: POST-CALL (agent.py, finally block)
 Step 1: Agent auto-starts when LiveKit detects an inbound SIP room
 Step 2: Resolve KB scope
   ├── Parse metadata — extract phone_number
-  ├── POST /api/v1/telephony/resolve-inbound-call → backend
-  └── Returns: org_id, kb_id, kb_tags, prompt, voice, model
+  ├── Query PostgreSQL org_configs (fast path, DB-first)
+  └── Returns: org_id, kb_ids (all collections for org), kb_tags, prompt, voice, model
 Step 3: Build KB scope from resolved context
-  ├── org_id always appended as kb_id
-  ├── kb_id/kb_ids from payload appended
+  ├── org_id always appended as kb_id fallback
+  ├── All kb_collection UUIDs from org queried
   └── kb_tags from payload appended
-Step 4: Entrypoint detects missing Redis tracking → creates calls:active entry
-Step 5: Build agent instructions + register search_knowledge_base tool
-Step 6: Same voice pipeline as outbound
-Step 7: Same post-call processing
+Step 4: Build agent instructions + register search_knowledge_base + end_call tools
+Step 5: Same voice pipeline as outbound
+Step 6: Same post-call processing (with inbound-specific CALL_DATA_INBOUND_UPDATE webhook)
 ```
 
 ## Queue-Based Dispatch (deprecated path via dispatcher.py)
@@ -74,3 +73,6 @@ Webhook → Redis sorted set (queue:pending) → Dispatcher (0.5s poll)
 | `calls:active` | Hash | `call_id → room_name` mapping |
 | `calls:status:{call_id}` | String | Current call status |
 | `sip_error_status:{call_id}` | String | SIP error from UI server (TTL 300s) |
+| `lock:call:{call_id}` | String | Dedup lock for webhook (TTL 600s) |
+| `trunk:provider:{trunk_id}` | String | Cached trunk→provider mapping (TTL 30d) |
+| `{provider}:sip_trunk:{number}` | String | Provider SIP trunk mapping (TTL 30d) |

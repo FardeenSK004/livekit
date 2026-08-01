@@ -18,10 +18,9 @@ A knowledge base system for the LKT voice agent. Accepts content from **files, p
 
 | File | Path | Role |
 |------|------|------|
-| `knowledge_base.py` | `mantra/knowledge_base.py` (461 lines) | Core: `PostgresKnowledgeBase` abstract interface + FTS implementation, adaptive chunker, ingestion helpers |
-| `retriever.py` | `mantra/retriever.py` (50 lines) | `KnowledgeRetriever` wrapping `kb.search()` with in-memory per-session cache |
-| `agent.py` | `mantra/agent.py` (1513 lines) | `search_knowledge_base` tool registration (line 326-338), KB scope resolution from inbound context (lines 424-490) |
-| `ui_server.py` | `mantra/ui_server.py` (2143 lines) | Ingestion endpoints (`/api/v1/kb/ingest`), test chat (`/api/v1/kb/chat`), deletion (`/api/v1/kb/document`) |
+| `knowledge_base.py` | `mantra/knowledge_base.py` (561 lines) | Core: `PostgresKnowledgeBase` abstract interface + FTS implementation, adaptive chunker, ingestion helpers, collection management |
+| `retriever.py` | `mantra/retriever.py` (58 lines) | `KnowledgeRetriever` wrapping `kb.search()` with in-memory per-session cache + accessed page tracking |
+| `agent.py` | `mantra/agent.py` (1629 lines) | `search_knowledge_base` tool registration, KB scope resolution from inbound context |
 
 ## Architecture
 
@@ -86,11 +85,11 @@ CREATE TABLE kb_pages (
     title           TEXT NOT NULL,
     content         TEXT NOT NULL,
     source_type     TEXT NOT NULL,            -- 'file', 'text', 'url'
-    page_meta       JSONB DEFAULT '{}',       -- chunking strategy, heading path, token count, tags_name, document_id
+    page_meta       JSONB DEFAULT '{}',       -- chunking strategy, heading path, token count, tags_name, document_id, process_stage_data
     content_in_text TEXT NOT NULL,            -- text content for LLM consumption
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     text_search     tsvector GENERATED ALWAYS AS (
-                        to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content_in_text, ''))
+                        to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content_in_text, ''))
                     ) STORED
 );
 

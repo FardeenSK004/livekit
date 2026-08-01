@@ -3,10 +3,10 @@
 ## LiveKit Cloud
 
 - **Project:** `mantraassist-0ek43ife`
-- **Agent ID:** `CA_duZ3ZGAvJvRr`
+- **Agent ID:** `CA_zni3j8qMiM82`
 - **Config:** `livekit.toml`
-- Production scaling: 1 instance, 1 replica
-- SIP trunks configured for Twilio, Plivo, Zadarma
+- Production scaling: 1-2 instances, 1-2 replicas
+- SIP trunks configured for Twilio, Plivo, Zadarma, VoiceLink
 
 ## Deployment
 
@@ -21,9 +21,10 @@ Models pre-cached during build (Silero VAD, HuggingFace, Torch).
 
 ### Entrypoint (`entrypoint.sh`)
 
-Two modes:
+Three modes:
 - `agent` — `uv run python -m mantra.agent start`
 - `ui` — `uv run python -m mantra.ui_server`
+- `mcp` — `uv run python mcp/server.py`
 
 ### Local Development (`dev.sh`)
 
@@ -34,13 +35,13 @@ Launches both agent + UI server, prints API endpoints.
 | Service | Purpose | Connection |
 |---------|---------|------------|
 | LiveKit Cloud | WebRTC + SIP trunking | API key/secret |
-| PostgreSQL | Call log persistence | `lkdb` docker-compose (5433 local) |
-| Redis | Queue + state + capacity | Local (6379) |
+| PostgreSQL | Call log persistence + KB storage + org configs | `lkdb` docker-compose (5433 local) |
+| Redis | Queue + state + capacity + dedup locks | Local (6379) |
 | AWS S3 | Recording storage | Bucket + credentials |
 | SMTP (Gmail) | Crash email alerts | Gmail app password |
 | Deepgram API | Speech-to-text | API key |
 | OpenAI API | LLM (GPT-4o-mini) | API key |
 | Google AI API | LLM (Gemini) | API key |
 | DeepSeek API | LLM (DeepSeek) | API key |
-| Cartesia API | Text-to-speech | API key(s) |
 | MantraAssist Backend | CRM webhook target | HTTP + HMAC |
+| TOS Endpoint | Telemetry logging | HTTP + Bearer token |

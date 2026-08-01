@@ -2,13 +2,15 @@
 
 | Feature | Module | Description |
 |---------|--------|-------------|
-| [[Voice Agent.md\|Voice Agent]] | `mantra/agent.py` | Real-time STT→LLM→TTS voice conversation |
-| [[API Server.md\|API Server]] | `mantra/ui_server.py` | FastAPI HTTP server for webhooks, SIP, dashboard |
-| [[Dispatcher.md\|Dispatcher]] | `mantra/dispatcher.py` | Background Redis queue consumer |
-| [[MCP Server.md\|MCP Server]] | `mcp/server.py` | PostgreSQL Model Context Protocol server |
-| [[Dashboard.md\|Dashboard]] | `static/dashboard.html` + `dashboard.js` | Operations monitoring UI |
-| [[Telephony Integration.md\|Telephony Integration]] | `mantra/ui_server.py` | SIP trunk provisioning (Twilio, Plivo, Zadarma) |
-| [[Post-Call Processing.md\|Post-Call Processing]] | `mantra/agent.py` + `utils.py` | Recording, analysis, webhook, DB storage |
-| [[Crash Alerts.md\|Crash Alerts]] | `mantra/email_alerts.py` | SMTP crash notifications with meme support |
-| [[Test Console.md\|Test Console]] | `static/index.html` + `app.js` | Manual agent testing via WebRTC |
-| [[Knowledge Base.md\|Knowledge Base]] | `mantra/knowledge_base.py` | Vectorless KB with LLM keyword extraction + Postgres FTS |
+| Voice Agent | `mantra/agent.py` | Real-time STT→LLM→TTS voice pipeline with KB search and end_call tools |
+| API Server | `mantra/ui_server.py` | FastAPI HTTP server: webhooks, SIP trunks, per-provider capacity gating, KB ingestion, dashboard |
+| Dispatcher | `mantra/dispatcher.py` | Redis queue consumer for legacy call dispatch |
+| MCP Server | `mcp/server.py` | 13 PostgreSQL tools: patients, doctors, hospitals, appointments, call logs |
+| Dashboard | `static/dashboard.html` + `dashboard.js` | OpsCraft dark theme operations dashboard with SSE |
+| Telephony Integration | `mantra/ui_server.py` | 4-provider SIP support: Twilio, Plivo (Zentrunk), Zadarma, VoiceLink |
+| Post-Call Processing | `mantra/agent.py` + `utils.py` | Recording → S3 → LLM analysis → webhook → DB |
+| Crash Alerts | `mantra/email_alerts.py` | SMTP crash notifications with meme images for admin |
+| Test Console | `static/index.html` + `app.js` | Manual agent testing via WebRTC |
+| Knowledge Base | `mantra/knowledge_base.py` + `retriever.py` | PostgreSQL FTS with adaptive chunking, multi-KB collections per org |
+| KB Chat | `static/kb_chat.html` | Text-based KB testing UI |
+| Network Monitor | `static/network.html` | Network monitoring page |

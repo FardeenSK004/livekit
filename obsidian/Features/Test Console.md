@@ -1,28 +1,28 @@
 # Test Console
 
-**Files:**
-- `static/index.html` (475 lines) — HTML/CSS
-- `static/app.js` (253 lines) — Client logic
+**Files:** `static/index.html` (475 lines) + `static/app.js` (253 lines)
 
 ## Overview
 
-Manual agent testing interface. Connects to LiveKit rooms via WebRTC and displays real-time transcript.
+Manual agent testing UI for development. Provides WebRTC room connection, microphone integration, and transcript display.
+
+## Flow
+
+1. Enter test payload (JSON) in the editor
+2. Click "Connect" → POST `/dispatch-test` → get room token
+3. Join LiveKit room via WebRTC
+4. Microphone streams to agent, transcript appears in real time
+5. Disconnect button ends the session
 
 ## Features
 
-- **Structured Tab:** Client name, call ID, lead ID, prompt fields
-- **Raw JSON Tab:** Paste raw JSON payload, parse into structured fields
-- **Connect:** POST to `/dispatch-test` → get token → join LiveKit room
-- **Disconnect:** Leave room
-- **Transcript Display:** Real-time chat messages with interim support
-- **Mic Toggle:** Enable/disable microphone
-- **Visualizer:** Active speaker indicator during agent speech
+- Structured payload editor with toggleable fields
+- Live transcript display (user + agent messages)
+- Mic on/off toggle
+- Active speaker visualizer
+- Room connection state display
+- OpsCraft dark theme
 
-## WebRTC Flow
+## Testing Inbound Calls
 
-```
-POST /dispatch-test → get { room, token, url }
-Room.connect(url, token)
-Publish microphone → Subscribe to agent audio
-DataReceived → transcript JSON messages
-```
+Use `POST /api/v1/test/inbound-call` endpoint to simulate inbound calls — dispatches agent with `direction: inbound` metadata and triggers SIP outbound call to the tester's phone.

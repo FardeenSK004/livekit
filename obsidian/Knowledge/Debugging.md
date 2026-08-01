@@ -14,9 +14,10 @@
 - Agent will report Busy/No Answer in post-call
 
 ### No audio / TTS issues
-- Check Cartesia API keys and rate limits
+- TTS is LiveKit native `sonic-3` — no Cartesia API keys needed
 - Verify voice ID is valid in `VOICE_MAPPING`
-- Check `CARTESIA_MAX_CONCURRENCY` in env
+- Check voice_speed is within 0.1–2.0 range
+- Verify LiveKit Inference is available
 
 ### Redis connection issues
 - Verify `REDIS_URL` in `.env.local`

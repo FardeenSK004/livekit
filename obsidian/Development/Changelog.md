@@ -90,7 +90,7 @@
   - Dispatcher reports: `call_dequeued`, `call_dispatched`, `dispatch_failed`.
   - UI server reports: `webhook_received`, `agent_dispatched`, `sip_call_initiating`, `sip_call_connected`, `sip_call_failed`.
 - **feat:** Added `health_gate_middleware` to `ui_server.py` — blocks dispatch requests (`POST /dispatch-test`, `/api/v1/webhooks/telephony`, SIP trunk endpoints) with HTTP 503 if any critical service is down.
-- **feat:** Comprehensive startup healthcheck — runs parallel checks on LiveKit, Redis, Deepgram, Cartesia, MantraAssist backend, PostgreSQL, S3 on server start.
+- **feat:** Comprehensive startup healthcheck — runs parallel checks on LiveKit, Redis, Deepgram, TTS (LiveKit native sonic-3), MantraAssist backend, PostgreSQL, S3 on server start.
 - **feat:** Redis deduplication lock (`lock:call:{call_id}`, TTL 600s) on `handle_outbound_call_webhook` and `create_and_call_plivo` to prevent concurrent duplicate webhooks.
 - **feat:** Room participant check in SIP failure handler — before cleanup, verifies SIP participant isn't already in room (duplicate guard from race condition fix v2).
 - **fix:** `send_to_backend` URL corrected from `/webhooks/n8n` to `/api/v1/webhooks/n8n`.
@@ -103,7 +103,7 @@
 ## 2026-07-25
 
 - **feat:** Comprehensive `/health` readiness endpoint — returns `healthy` / `stay` only when ALL services pass
-  - Checks: LiveKit API, Redis, PostgreSQL, Deepgram STT, Cartesia TTS, n8n backend, TOS endpoint, S3 bucket
+  - Checks: LiveKit API, Redis, PostgreSQL, Deepgram STT, TTS (LiveKit native sonic-3), n8n backend, TOS endpoint, S3 bucket
   - Runs all checks in parallel with individual timeouts
   - Returns HTTP 200 + `"status": "healthy"` when every service is reachable
   - Returns HTTP 503 + `"status": "stay"` with per-service error breakdown otherwise
