@@ -10,7 +10,7 @@
 4. **Stop recording & upload to S3** — Mix tracks → trim silence → MP3 → S3
 5. **Build transcript** — JSON array of `{bot/user: message}`
 6. **LLM analysis** — `analyze_call()` generates summary, process_id, stage transition, sentiment, appointment data (with IST timezone conversion). Uses KB-tracked `process_stage_data` for process-aware analysis. Skipped for Busy/No Answer/Incomplete calls.
-7. **Build webhook payload** — Direction-aware: `CALL_DATA_UPDATE` (outbound) or `CALL_DATA_INBOUND_UPDATE` (inbound) with appropriate fields
+7. **Build webhook payload** — Direction-aware: `CALL_DATA_INBOUND_UPDATE` (inbound) or `CALL_DATA_UPDATE` (outbound), with **`CALL_RETRY`** override when `call_status == "No Answer"` (same payload, different event)
 8. **Save to PostgreSQL** — `save_call_log_to_db()` upsert
 9. **Send to backend** — HMAC-signed POST to MantraAssist `/api/v1/webhooks/n8n` with 3 retries
 10. **TOS telemetry** — Post-call summary with call_status, duration, S3 status, transcript flag

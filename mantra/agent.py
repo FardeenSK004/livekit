@@ -1269,7 +1269,6 @@ Follow these specific instructions:
             )
         except Exception as email_err:
             logger.error(f"[DIAG] Failed to dispatch crash email: {email_err}")
-    finally:
         logger.info("[DIAG] ======== ENTERING FINALLY BLOCK ========")
         logger.info(f"[DIAG] connection_state={ctx.room.connection_state} user_joined={call_state.get('user_joined')} agent_state={call_state.get('agent_state','unknown')}")
         # 1. Cancel background tasks
@@ -1324,10 +1323,6 @@ Follow these specific instructions:
                         logger.info(f"[DIAG] finalize(): Parsed raw job metadata with {len(call_payload)} keys")
                 except Exception as e:
                     logger.error(f"[DIAG] finalize(): Failed to parse call metadata: {e}")
-                    call_payload = {}
-                logger.info(f"[DIAG] finalize(): call_payload keys: {list(call_payload.keys())[:20]}")
-                logger.info(f"[DIAG] finalize(): call_id={call_payload.get('call_id')} lead_id={call_payload.get('lead_id')} direction={call_payload.get('direction')}")
-
                 # For inbound calls, get process_id from the KB document actually used during the call
                 if call_payload.get("direction") == "inbound":
                     try:
@@ -1512,8 +1507,9 @@ Follow these specific instructions:
                     }
                 }
             else:
+                event_name = "CALL_RETRY" if call_status == "No Answer" else "CALL_DATA_UPDATE"
                 webhook_payload = {
-                    "event": "CALL_DATA_UPDATE",
+                    "event": event_name,
                     "data": {
                         "client_id": call_payload.get("lead_id"),
                         "call_id": resolved_call_id,

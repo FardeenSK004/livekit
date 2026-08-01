@@ -332,7 +332,7 @@ Returns a JSON object with:
 ### 5g. Build & Send Webhook
 
 ```python
-event_name = "CALL_DATA_UPDATE"  # "CALL_DATA_INBOUND_UPDATE" for inbound
+event_name = "CALL_RETRY" if call_status == "No Answer" else "CALL_DATA_UPDATE"
 webhook_payload = {
     "event": event_name,
     "data": {
