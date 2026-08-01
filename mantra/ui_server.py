@@ -66,6 +66,7 @@ PROVIDER_MAX_CONCURRENCY = {
     "plivo": int(os.getenv("PLIVO_MAX_CONCURRENCY", "2")),
     "zadarma": int(os.getenv("ZADARMA_MAX_CONCURRENCY", "3")),
     "voice_link": int(os.getenv("VOICELINK_MAX_CONCURRENCY", "5")),
+    "twilio": int(os.getenv("TWILIO_MAX_CONCURRENCY", "2")),
 }
 MAX_CALL_CONCURRENCY = int(
     os.getenv("MAX_CONCURRENCY", os.getenv("CARTESIA_MAX_CONCURRENCY", "5"))
@@ -554,6 +555,60 @@ async def health():
     return JSONResponse(
         content={"healthy": healthy}
     )
+
+
+# @app.get("/health/accept")
+# async def health_accept(request: Request):
+#     trunk_id = request.query_params.get("sip_trunk_id")
+#     if not trunk_id:
+#         logger.warning("Health accept denied: missing sip_trunk_id")
+#         return JSONResponse(content={"healthy": False})
+
+#     provider = await _get_provider_from_trunk(trunk_id)
+#     if not provider or provider not in PROVIDER_MAX_CONCURRENCY:
+#         logger.warning(
+#             f"Health accept: unknown provider for trunk {trunk_id}, falling back to generic check"
+#         )
+#         healthy = await _run_health_checks()
+#         return JSONResponse(content={"healthy": healthy})
+
+#     busy, active = await _provider_at_capacity(provider)
+#     limit = PROVIDER_MAX_CONCURRENCY[provider]
+#     if busy:
+#         logger.warning(
+#             f"Health denied: {provider} at capacity ({active}/{limit}) "
+#             f"for trunk {trunk_id}"
+#         )
+#         return JSONResponse(content={"healthy": False})
+
+#     # Global capacity gate — also applies to health checks
+#     try:
+#         global_rooms = await _active_call_rooms()
+#         if len(global_rooms) >= MAX_CALL_CONCURRENCY:
+#             logger.warning(
+#                 f"Health denied: global cap full ({len(global_rooms)}/{MAX_CALL_CONCURRENCY}) "
+#                 f"for trunk {trunk_id}"
+#             )
+#             return JSONResponse(content={"healthy": False})
+#     except Exception as e:
+#         logger.warning(f"Global capacity check unavailable, continuing: {e}")
+
+#     import uuid
+#     reservation_id = uuid.uuid4().hex[:12]
+#     if redis_client:
+#         await redis_client.setex(f"reserve:{provider}:{reservation_id}", 30, trunk_id)
+#     active_after = active + (1 if redis_client else 0)
+#     logger.info(
+#         f"Health accept: {provider} reserved slot ({active_after}/{limit}) "
+#         f"trunk={trunk_id} reservation={reservation_id}"
+#     )
+#     return JSONResponse(content={
+#         "healthy": True,
+#         "provider": provider,
+#         "reservation_id": reservation_id,
+#         "active": active_after,
+#         "max": limit,
+#     })
 
 
 @app.middleware("http")
@@ -1680,6 +1735,45 @@ async def _update_twilio_sip_forwarding(phone_number: str, sip_uri: str) -> dict
                 raise Exception(f"Twilio API error: {text}")
 
 
+async def _plivo_number_is_linked_to_zentrunk(phone_number: str) -> bool:
+    """
+    Return True if the Plivo number is already linked to the LiveKit SIP domain's
+    Zentrunk inbound trunk, i.e. provider forwarding is genuinely configured.
+    """
+    plivo_auth_id = os.getenv("PLIVO_AUTH_ID")
+    plivo_auth_token = os.getenv("PLIVO_AUTH_TOKEN")
+    if not plivo_auth_id or not plivo_auth_token:
+        return True  # Cannot verify; keep the caller's existing behaviour.
+
+    number_clean = phone_number.replace("+", "").replace(" ", "")
+    import base64
+    auth = base64.b64encode(f"{plivo_auth_id}:{plivo_auth_token}".encode()).decode()
+    headers = {
+        'Authorization': f'Basic {auth}',
+        'Content-Type': 'application/json'
+    }
+    base_url = f"https://api.plivo.com/v1/Account/{plivo_auth_id}"
+    trunk_label = f"LiveKit ({_get_sip_domain().split('.')[0]})"
+    expected_trunk_name = f"Inbound via {trunk_label}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{base_url}/Zentrunk/Trunk/", headers=headers) as resp:
+            trunk_list = json.loads(await resp.text()) if resp.status == 200 else {"objects": []}
+
+        trunk_id = None
+        for trunk_obj in trunk_list.get("objects", []):
+            if trunk_obj.get("name") == expected_trunk_name:
+                trunk_id = trunk_obj.get("trunk_id")
+                break
+        if not trunk_id:
+            return False
+        async with session.get(f"{base_url}/Number/{number_clean}/", headers=headers) as resp:
+            if resp.status != 200:
+                return False
+            number_obj = json.loads(await resp.text())
+        return number_obj.get("app_id") == trunk_id
+
+
 async def _update_plivo_sip_forwarding(phone_number: str, sip_uri: str) -> dict:
     """
     Configures Plivo Zentrunk SIP trunking for inbound calls.
@@ -1709,17 +1803,27 @@ async def _update_plivo_sip_forwarding(phone_number: str, sip_uri: str) -> dict:
     trunk_label = f"LiveKit ({sip_domain.split('.')[0]})"
     
     async with aiohttp.ClientSession() as session:
-        # 1. Create or find existing Zentrunk origination URI for this SIP domain
+        # 1. Create or find existing Zentrunk origination URI for this SIP domain.
+        #    The URI name is deterministic per SIP domain, so match by name as well
+        #    as by uri field — a URI may exist under this name even when the uri
+        #    field doesn't contain our current sip_domain string.
         async with session.get(f"{base_url}/Zentrunk/URI/", headers=headers) as resp:
             uri_list = json.loads(await resp.text()) if resp.status == 200 else {"objects": []}
-        
+
         uri_uuid = None
         for uri_obj in uri_list.get("objects", []):
             if sip_domain in uri_obj.get("uri", "") and "transport=tls" in uri_obj.get("uri", ""):
                 uri_uuid = uri_obj.get("uri_uuid")
                 logger.info(f"Found existing Zentrunk origination URI {uri_uuid}: {uri_obj.get('uri')}")
                 break
-        
+
+        if not uri_uuid:
+            for uri_obj in uri_list.get("objects", []):
+                if uri_obj.get("name") == trunk_label:
+                    uri_uuid = uri_obj.get("uri_uuid")
+                    logger.info(f"Found existing Zentrunk origination URI {uri_uuid} by name: {trunk_label}")
+                    break
+
         if not uri_uuid:
             uri_data = {"uri": origination_host, "name": trunk_label}
             async with session.post(f"{base_url}/Zentrunk/URI/", headers=headers, json=uri_data) as resp:
@@ -1730,21 +1834,50 @@ async def _update_plivo_sip_forwarding(phone_number: str, sip_uri: str) -> dict:
                     logger.info(f"Created Zentrunk origination URI {uri_uuid}: {origination_host}")
                 else:
                     raise Exception(f"Failed to create Zentrunk URI: {result}")
-        
-        # 2. Create or find existing Zentrunk inbound trunk using this URI
+
+        # 2. Create or find existing Zentrunk inbound trunk using this URI.
+        #    The trunk name is deterministic per SIP domain, so a trunk created for a
+        #    previous number already exists under this name. Match by name as well as by
+        #    primary_uri_uuid so we reuse it instead of hitting Plivo's
+        #    "A trunk with the same name ... already exists" error.
+        expected_trunk_name = f"Inbound via {trunk_label}"
         async with session.get(f"{base_url}/Zentrunk/Trunk/", headers=headers) as resp:
             trunk_list = json.loads(await resp.text()) if resp.status == 200 else {"objects": []}
-        
+
         trunk_id = None
         for trunk_obj in trunk_list.get("objects", []):
             if trunk_obj.get("primary_uri_uuid") == uri_uuid:
                 trunk_id = trunk_obj.get("trunk_id")
                 logger.info(f"Found existing Zentrunk inbound trunk {trunk_id}: {trunk_obj.get('name')}")
                 break
-        
+
+        if not trunk_id:
+            for trunk_obj in trunk_list.get("objects", []):
+                if trunk_obj.get("name") == expected_trunk_name:
+                    trunk_id = trunk_obj.get("trunk_id")
+                    logger.info(f"Found existing Zentrunk inbound trunk {trunk_id} by name: {expected_trunk_name}")
+                    existing_uri = trunk_obj.get("primary_uri_uuid")
+                    if existing_uri and existing_uri != uri_uuid:
+                        # Trunk points to a different (possibly stale) URI; repoint it at ours.
+                        try:
+                            async with session.post(
+                                f"{base_url}/Zentrunk/Trunk/{trunk_id}/",
+                                headers=headers,
+                                json={"primary_uri_uuid": uri_uuid},
+                            ) as resp:
+                                if resp.status in (200, 202):
+                                    logger.info(f"Repointed Zentrunk inbound trunk {trunk_id} to URI {uri_uuid}")
+                                else:
+                                    logger.warning(f"Could not repoint Zentrunk trunk {trunk_id}: {await resp.text()}")
+                        except Exception as e:
+                            logger.warning(f"Error repointing Zentrunk trunk {trunk_id}: {e}")
+                    elif existing_uri:
+                        uri_uuid = existing_uri
+                    break
+
         if not trunk_id:
             trunk_data = {
-                "name": f"Inbound via {trunk_label}",
+                "name": expected_trunk_name,
                 "trunk_direction": "inbound",
                 "primary_uri_uuid": uri_uuid
             }
@@ -1938,16 +2071,27 @@ async def _setup_inbound_sip_process(payload: dict | None) -> JSONResponse:
         else:
             logger.info(f"force_new=true: Skipping existing trunk/rule checks for {number}")
         
-        # If number already fully configured, return clear error to MantraAssist
+        # If number already fully configured, return clear error to MantraAssist.
+        # Provider forwarding is the last and most fragile step of setup; if it failed
+        # previously we must NOT report "already configured" — instead fall through and
+        # complete the setup idempotently using the existing trunk/rule.
         if existing_trunk_id and existing_rule_id:
-            return JSONResponse({
-                "status_code": 409,
-                "status": "error",
-                "error": "number_already_configured",
-                "message": f"Phone number {number} is already configured",
-                "existing_trunk_id": existing_trunk_id,
-                "existing_dispatch_rule_id": existing_rule_id
-            }, status_code=409)
+            already_configured = True
+            if provider == "plivo":
+                try:
+                    already_configured = await _plivo_number_is_linked_to_zentrunk(number)
+                except Exception as e:
+                    logger.warning(f"Could not verify Plivo forwarding for {number}: {e}")
+            if already_configured:
+                return JSONResponse({
+                    "status_code": 409,
+                    "status": "error",
+                    "error": "number_already_configured",
+                    "message": f"Phone number {number} is already configured",
+                    "existing_trunk_id": existing_trunk_id,
+                    "existing_dispatch_rule_id": existing_rule_id
+                }, status_code=409)
+            logger.info(f"Number {number} partially configured (provider forwarding missing); completing setup with existing trunk/rule")
         
         # 2. Create Inbound Trunk (or reuse existing)
         if existing_trunk_id:
@@ -2018,7 +2162,32 @@ async def _setup_inbound_sip_process(payload: dict | None) -> JSONResponse:
             rule_id = rule.sip_dispatch_rule_id
             logger.info(f"Created LiveKit SIP Dispatch Rule: {rule_id}")
         
-        # 3.5 Create or update org_configs mapping
+        # 4. Generate SIP URI
+        sip_domain = _get_sip_domain()
+        # Use the clean_number so that provider sends the INVITE with To: <clean_number>@<sip_domain>
+        # This allows LiveKit to correctly match the inbound SIP trunk which has this number in its numbers array.
+        sip_uri = f"sip:{clean_number}@{sip_domain}"
+        
+        # 5. Update provider SIP forwarding
+        logger.info(f"Updating {provider} SIP ID for {number} to {sip_uri}")
+        try:
+            provider_response = await _update_provider_sip_forwarding(provider, number, sip_uri)
+        except Exception as e:
+            # If provider fails (e.g., number not in provider account), return clear error.
+            # org_configs has not been saved yet, so a retry will complete the setup
+            # instead of being rejected as "already configured".
+            return JSONResponse({
+                "status_code": 400,
+                "status": "error",
+                "error": f"{provider}_configuration_failed",
+                "message": f"Failed to configure {provider} for {number}: {str(e)}. Ensure the number exists in your {provider} account.",
+                "sip_trunk_id": trunk_id,
+                "sip_dispatch_rule_id": rule_id,
+                "sip_uri": sip_uri
+            }, status_code=400)
+
+        # 5.5 Create or update org_configs mapping (only after provider forwarding has
+        # succeeded, so the DB row reflects an actually-configured number)
         try:
             conn = await get_db_connection()
             org_config_id = await conn.fetchval("""
@@ -2057,29 +2226,7 @@ async def _setup_inbound_sip_process(payload: dict | None) -> JSONResponse:
             # We continue even if this fails, to not break existing functionality completely,
             # though the agent might fall back to MantraAssist.
             org_config_id = None
-        
-        # 4. Generate SIP URI
-        sip_domain = _get_sip_domain()
-        # Use the clean_number so that provider sends the INVITE with To: <clean_number>@<sip_domain>
-        # This allows LiveKit to correctly match the inbound SIP trunk which has this number in its numbers array.
-        sip_uri = f"sip:{clean_number}@{sip_domain}"
-        
-        # 5. Update provider SIP forwarding
-        logger.info(f"Updating {provider} SIP ID for {number} to {sip_uri}")
-        try:
-            provider_response = await _update_provider_sip_forwarding(provider, number, sip_uri)
-        except Exception as e:
-            # If provider fails (e.g., number not in provider account), return clear error
-            return JSONResponse({
-                "status_code": 400,
-                "status": "error",
-                "error": f"{provider}_configuration_failed",
-                "message": f"Failed to configure {provider} for {number}: {str(e)}. Ensure the number exists in your {provider} account.",
-                "sip_trunk_id": trunk_id,
-                "sip_dispatch_rule_id": rule_id,
-                "sip_uri": sip_uri
-            }, status_code=400)
-        
+
         return JSONResponse({
             "status_code": 200,
             "status": "success",
@@ -2283,11 +2430,11 @@ async def handle_outbound_call_webhook(request: Request):
             # Store exact SIP failure reason in Redis for the agent to read
             if redis_client:
                 err_str = str(e).lower()
-                if any(token in err_str for token in ("408", "timeout", "no answer")):
+                if any(token in err_str for token in ("timeout", "no answer")):
                     status_guess = "No Answer"
                 elif any(
                     token in err_str
-                    for token in ("486", "busy", "603", "decline", "rejected")
+                    for token in ("486","408", "busy", "603", "decline", "rejected")
                 ):
                     status_guess = "Busy"
                 else:
@@ -2416,12 +2563,15 @@ async def _get_provider_from_trunk(trunk_id: str) -> str | None:
         )
         if response.items:
             address = (response.items[0].address or "").lower()
+            logger.info(f"Trunk lookup: {trunk_id} address={address}")
             if "twilio" in address:
                 provider = "twilio"
             elif "plivo" in address:
                 provider = "plivo"
             elif "zadarma" in address:
                 provider = "zadarma"
+            else:
+                logger.warning(f"Trunk {trunk_id} address '{address}' does not match known providers")
     except Exception as e:
         logger.warning(f"Cannot list trunk {trunk_id} via lk_client: {e}")
 

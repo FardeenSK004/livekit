@@ -2,6 +2,13 @@
 
 ## 2026-08-01
 
+### Inbound SIP Setup — Plivo Zentrunk Trunk Reuse & Retry Self-Healing
+- **fix:** Plivo Zentrunk inbound trunk is now found by its deterministic name (`Inbound via LiveKit ({domain})`) as well as by `primary_uri_uuid` in `_update_plivo_sip_forwarding()`. Previously a trunk created for an earlier number was missed by the URI-only match, so setup for a new number tried to create a duplicate and Plivo rejected it with "A trunk with the same name ... already exists" — even though no trunk was created by this attempt.
+- **feat:** `_plivo_list_all()` — paginated helper for Plivo list endpoints (URI + trunk), so lookups no longer miss objects past the default 20-item page.
+- **feat:** When a reused Zentrunk trunk points to a stale URI, it is repointed (`primary_uri_uuid`) to the current LiveKit SIP domain.
+- **fix:** Retries after a failed provider config no longer return a false `409 number_already_configured`. The 409 gate now verifies, for Plivo, that the number is genuinely linked to the domain's Zentrunk trunk (`_plivo_number_is_linked_to_zentrunk()`); if not, setup falls through and completes idempotently reusing the existing LiveKit trunk + dispatch rule.
+- **fix:** `org_configs` is now written only after provider forwarding succeeds, so a DB row reflects an actually-configured number instead of a partially-failed setup.
+
 ### Per-Provider Call Capacity & Health Gating
 - **feat:** Per-provider concurrency limits in `ui_server.py` — `PROVIDER_MAX_CONCURRENCY` (`plivo: 2`, `zadarma: 3`, `voice_link: 5`), env-overridable via `PLIVO_MAX_CONCURRENCY` / `ZADARMA_MAX_CONCURRENCY` / `VOICELINK_MAX_CONCURRENCY`.
 - **feat:** `/health` now reports per-provider and global capacity — returns `{"healthy": false}` when any provider is at its limit or total live `call_*` rooms reach `MAX_CALL_CONCURRENCY` (5, `CARTESIA_MAX_CONCURRENCY` fallback). Health check keys: `provider_capacity_{provider}`, `capacity_max_concurrency`.
