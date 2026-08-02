@@ -7,7 +7,7 @@
 | 3 | **In-memory audio recording** | Avoids disk I/O in container; mixed via numpy → pydub → MP3 in-memory | 2025 |
 | 4 | **HMAC-signed webhooks** | Ensures authenticity of post-call data to MantraAssist backend | 2025 |
 | 5 | **LiveKit native sonic-3 TTS** | Removed Cartesia dependency entirely — TTS runs natively via LiveKit Inference, zero external API keys needed | 2026-07 |
-| 6 | **Hindi STT for Hinglish** | Deepgram Nova-3 Hindi model better catches Indian English + Hinglish code-switching | 2025 |
+| 6 | **Multilingual STT + language matching** | Deepgram Nova-3 `language=multi` + prompt rules so agent mirrors caller language each turn (avoids sticking in Hindi after one Hindi filler) | 2026-08 |
 | 7 | **Per-provider capacity gating** | Plivo=2, Zadarma=3, VoiceLink=5, Twilio=2 with global cap=5; provider embedded in room name for zero-Redis tracking | 2026-08 |
 | 8 | **3-minute call limiter** | Prevents runaway costs; soft farewell at 2m30s, hard kill at 3m | 2025 |
 | 9 | **Farewell safety net** | LLMs sometimes say goodbye without calling `end_call`; async monitor catches this | 2025 |

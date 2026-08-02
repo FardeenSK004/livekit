@@ -5,6 +5,8 @@
 .env.*
 !.env.example
 .venv/
+.deepeval/
+.claude/
 env/
 venv/
 ENV/

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-02
+
+### Inbound webhook int coercion + language matching
+- **fix:** `CALL_DATA_INBOUND_UPDATE` coerces `org_id` / `process_id` / `new_stage_id` string→int when present; missing stays `null`.
+- **fix:** Language matching prompt + STT `language=multi` so agent does not stick in Hindi after one Hindi filler.
+
 ## 2026-08-01
 
 ### Inbound SIP Setup — Plivo Zentrunk Trunk Reuse & Retry Self-Healing

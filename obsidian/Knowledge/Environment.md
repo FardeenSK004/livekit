@@ -13,7 +13,7 @@ LIVEKIT_SIP_DOMAIN=    # Optional: override auto-detected SIP domain
 
 ### AI Services
 ```
-DEEPGRAM_API_KEY=       # STT (Nova-3, language=hi)
+DEEPGRAM_API_KEY=       # STT (Nova-3, language=multi)
 OPENAI_API_KEY=         # LLM (GPT-4o-mini)
 GOOGLE_API_KEY=         # LLM (Gemini 2.5 Flash)
 DEEPSEEK_API_KEY=       # LLM (DeepSeek v4 Flash)

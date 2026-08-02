@@ -10,7 +10,7 @@
 4. **Stop recording & upload to S3** — Mix tracks → trim silence → MP3 → S3
 5. **Build transcript** — JSON array of `{bot/user: message}`
 6. **LLM analysis** — `analyze_call()` generates summary, process_id, stage transition, sentiment, appointment data (with IST timezone conversion). Uses KB-tracked `process_stage_data` for process-aware analysis. Skipped for Busy/No Answer/Incomplete calls.
-7. **Build webhook payload** — Direction-aware: `CALL_DATA_INBOUND_UPDATE` (inbound) or `CALL_DATA_UPDATE` (outbound), with **`CALL_RETRY`** override when `call_status == "No Answer"` (same payload, different event)
+7. **Build webhook payload** — Direction-aware: `CALL_DATA_INBOUND_UPDATE` (inbound) or `CALL_DATA_UPDATE` (outbound), with **`CALL_RETRY`** override when `call_status == "No Answer"` (same payload, different event). Inbound numeric fields (`org_id`, `process_id`, `new_stage_id`) are coerced string→int via `_as_int()`; missing values stay `null`.
 8. **Save to PostgreSQL** — `save_call_log_to_db()` upsert
 9. **Send to backend** — HMAC-signed POST to MantraAssist `/api/v1/webhooks/n8n` with 3 retries
 10. **TOS telemetry** — Post-call summary with call_status, duration, S3 status, transcript flag
@@ -37,8 +37,8 @@ LLM-driven call analysis with process-aware staging:
 - HMAC-SHA256 signed (`x-signature` header)
 - 3 retries with exponential backoff (2^N seconds)
 - Timestamp-based replay protection (`x-timestamp`)
-- Inbound payloads carry: `org_id`, `call_recording`, `process_id` (from KB), `new_stage_id`, `client_phone_number`, `next_call_on`, `called_on`
-- Outbound payloads carry: `client_id`, `call_id`, `call_status`, `ai_summary`, `recording_url`, `call_duration_seconds`, `new_stage_id`, `client_custom_fields`
+- Inbound payloads carry: `org_id` (int), `call_recording`, `process_id` (int|null, from KB when searched), `new_stage_id` (int|null), `client_phone_number`, `next_call_on`, `called_on`
+- Outbound payloads carry: `client_id`, `call_id`, `call_status`, `ai_summary`, `recording_url`, `call_duration_seconds`, `new_stage_id`, `client_custom_fields`, `next_call_on` (null when none)
 
 ## KB Document Tracking
 

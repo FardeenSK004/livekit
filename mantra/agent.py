@@ -111,6 +111,14 @@ def create_bg_task(coro):
     task.add_done_callback(_bg_tasks.discard)
     return task
 
+def _as_int(value):
+    """Coerce value to int for backend Zod schemas. Returns None if not coercible."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
 
 _global_kb: PostgresKnowledgeBase | None = None
 
@@ -626,8 +634,12 @@ async def entrypoint(ctx: JobContext):
 CORE BEHAVIOR:
 - This is a PHONE CALL. Speak naturally.
 - Keep responses SHORT (1-2 sentences).
-- Use natural fillers: "Got it", "Sure", "Theek hai", "Haan".
-- You are BILINGUAL. Start in English. If the user speaks Hindi or asks for it, switch to Hindi immediately.
+- Use natural fillers that match the caller's language (English: "Got it", "Sure"; Hindi: "Theek hai", "Haan").
+- LANGUAGE MATCHING (CRITICAL):
+  * Start in English.
+  * MATCH the caller's language every turn. English → English. Hindi → Hindi.
+  * One Hindi filler (e.g. "arre", "yaar", "ji") in mostly English does NOT mean switch to Hindi.
+  * If the caller switches back to English, switch back immediately. Never stay stuck in Hindi.
 - Sound like a helpful human friend, not a robot.
 - Do NOT use markdown, bullet points, or special characters.
 - If the user pauses, wait patiently for them to finish.
@@ -885,9 +897,9 @@ Follow these specific instructions:
             min_speech_duration=0.08,
             min_silence_duration=0.15,
         ),
-        # Using Hindi STT as it's better at catching Hinglish/Indian English
+        # Multilingual STT so English stays English and Hindi/Hinglish still work
         stt=deepgram.STT(
-            model="nova-3", language="hi", smart_format=True, numerals=True
+            model="nova-3", language="multi", smart_format=True, numerals=True
         ),
         llm=llm_engine,
         tts=tts_engine,
@@ -1489,10 +1501,10 @@ Follow these specific instructions:
                 webhook_payload = {
                     "event": "CALL_DATA_INBOUND_UPDATE",
                     "data": {
-                        "org_id": call_payload.get("org_id"),
+                        "org_id": _as_int(call_payload.get("org_id")),
                         "call_recording": recording_url or "",
-                        "process_id": call_payload.get("process_id"),
-                        "new_stage_id": new_stage_id,
+                        "process_id": _as_int(call_payload.get("process_id")),
+                        "new_stage_id": _as_int(new_stage_id),
                         "client_name": call_payload.get("client_name") or "",
                         "client_email": call_payload.get("client_email") or "",
                         "client_phone_number": call_state.get("caller_phone_number") or "",

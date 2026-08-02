@@ -19,7 +19,7 @@ Step 3: VOICE AGENT (agent.py)
   ├── Wait for remote participant (60s timeout)
   ├── Generate greeting via LLM
   ├── STT → LLM → TTS loop (real-time conversation)
-  │   ├── STT: Deepgram Nova-3 (Hindi model for Hinglish)
+  │   ├── STT: Deepgram Nova-3 (`language=multi` for EN/HI/Hinglish)
   │   ├── LLM: GPT-4o-mini / Gemini / DeepSeek
   │   ├── TTS: LiveKit native sonic-3 (no Cartesia dependency)
   │   └── VAD: Silero + Multilingual Turn Detection
@@ -52,6 +52,7 @@ Step 3: Build KB scope from resolved context
 Step 4: Build agent instructions + register search_knowledge_base + end_call tools
 Step 5: Same voice pipeline as outbound
 Step 6: Same post-call processing (with inbound-specific CALL_DATA_INBOUND_UPDATE webhook)
+        └── org_id / process_id / new_stage_id coerced string→int; missing stays null
 ```
 
 ## Queue-Based Dispatch (deprecated path via dispatcher.py)

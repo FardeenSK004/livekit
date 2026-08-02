@@ -3,7 +3,7 @@
 | Term | Definition |
 |------|------------|
 | **Agent** | LiveKit voice agent (`mantra/agent.py`) that processes real-time voice conversations |
-| **Deepgram** | STT provider (Nova-3) for speech recognition; configured with `language="hi"` for Hinglish |
+| **Deepgram** | STT provider (Nova-3) for speech recognition; configured with `language="multi"` for EN/HI/Hinglish |
 | **Dispatcher** | Background process that dequeues calls from Redis and dispatches to LiveKit (legacy queue path) |
 | **HMAC** | Hash-based Message Authentication Code used for webhook signing |
 | **LiveKit** | WebRTC infrastructure platform for real-time audio/video |

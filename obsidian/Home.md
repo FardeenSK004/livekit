@@ -3,7 +3,7 @@
 > **Version:** 0.3.0  
 > **Package:** `livekit-agent`  
 > **Repository:** `git@github.com:FardeenSK004/livekit.git` (fork of Mantracare-Org/livekit)  
-> **Last Updated:** 2026-08-01
+> **Last Updated:** 2026-08-02
 
 ---
 
@@ -53,6 +53,7 @@ Telephony Provider → Webhook → FastAPI → Agent Dispatch → LiveKit Cloud 
 
 ## Recent Changelog
 
+- **2026-08-02:** Inbound webhook `org_id`/`process_id`/`new_stage_id` string→int coercion; language matching + STT `multi`
 - **2026-08-01:** Per-provider call capacity gating (Plivo=2, Zadarma=3, VoiceLink=5, Twilio=2), Plivo Zentrunk trunk reuse & retry self-healing, SIP failure → 503 response, health gate per-provider rejection logging, Voicelink SIP inbound/outbound integration
 - **2026-07-27:** TTS migration to LiveKit native `sonic-3` (removed Cartesia dependency), TOS telemetry refinement, directional farewell detection
 - **2026-07-26:** TOS telemetry pipeline across agent/dispatcher/ui_server, health gate middleware, Redis dedup lock on webhooks

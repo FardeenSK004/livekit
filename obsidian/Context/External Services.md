@@ -9,7 +9,7 @@
 
 ## Deepgram
 - **Purpose:** Speech-to-Text (Nova-3)
-- **Language:** `hi` (Hindi — better for Hinglish)
+- **Language:** `multi` (English + Hindi/Hinglish)
 - **Auth:** API key in `.env.local`
 
 ## OpenAI

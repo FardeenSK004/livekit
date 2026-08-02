@@ -8,7 +8,7 @@ The core real-time voice AI agent. Connects to LiveKit rooms, handles the full S
 
 ## Voice Pipeline
 
-1. **STT:** Deepgram Nova-3 (configured with `language="hi"` for Hinglish)
+1. **STT:** Deepgram Nova-3 (`language="multi"` — English + Hindi/Hinglish)
 2. **LLM:** Selectable via metadata:
    - `openai` → GPT-4o-mini (default)
    - `gemini` → Gemini 2.5 Flash
@@ -16,6 +16,14 @@ The core real-time voice AI agent. Connects to LiveKit rooms, handles the full S
 3. **TTS:** LiveKit native sonic-3 (no Cartesia dependency)
 4. **VAD:** Silero (`min_speech_duration=0.08`, `min_silence_duration=0.15`)
 5. **Turn Detection:** MultilingualModel
+
+## Language Matching
+
+Agent instructions require turn-by-turn language matching:
+- Default/open in English
+- Reply in the caller's language each turn (English → English, Hindi → Hindi)
+- One Hindi filler (`arre`, `yaar`, `ji`) in mostly-English speech does **not** switch the agent to Hindi
+- If the caller switches back to English, agent switches back immediately
 
 ## Voice Mapping
 

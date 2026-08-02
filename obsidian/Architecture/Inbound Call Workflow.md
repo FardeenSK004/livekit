@@ -27,7 +27,8 @@ Step 4: KB & PROMPT SCOPING
   └── `AssistantFunctions` initialized with scoped `kb_ids` and `kb_tags`
 
 Step 5: REAL-TIME CONVERSATION (STT → LLM → TTS)
-  ├── STT: Deepgram Nova-3 (Hinglish/Multilingual)
+  ├── STT: Deepgram Nova-3 (`language=multi`)
+  ├── Language matching: reply in caller's language each turn (EN/HI)
   ├── LLM: DeepSeek / GPT-4o-mini
   ├── TTS: LiveKit native sonic-3
   └── Tools: `search_knowledge_base` (PostgreSQL FTS), `end_call`
@@ -36,7 +37,7 @@ Step 6: POST-CALL PROCESSING
   ├── Session recorder captures transcript & audio
   ├── MP3 mixed & uploaded to AWS S3
   ├── LLM analysis (summary, sentiment, stage transition, process_id from KB)
-  ├── Inbound-specific webhook: `CALL_DATA_INBOUND_UPDATE` to MantraAssist backend
+  ├── Inbound webhook: `CALL_DATA_INBOUND_UPDATE` — `org_id`/`process_id`/`new_stage_id` coerced string→int (null if missing)
   └── Call log saved to PostgreSQL `call_logs` table
 ```
 

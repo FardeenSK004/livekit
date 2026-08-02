@@ -149,7 +149,7 @@ elif model_name == "deepseek":
 else:
     llm_engine = openai.LLM(model="gpt-4o-mini")
 
-stt = deepgram.STT(model="nova-3", language="hi", smart_format=True)
+stt = deepgram.STT(model="nova-3", language="multi", smart_format=True)
 tts = inference.TTS(model="sonic-3", voice=voice_id, ...)
 vad = silero.VAD.load(...)
 ```
@@ -205,7 +205,7 @@ Controlled by `AgentSession` internally:
 
 - **VAD** (Silero): Detects when the user starts/stops speaking
 - **Turn Detection** (MultilingualModel): Manages barge-in, endpointing, interruptions
-- **STT** (Deepgram Nova-3): Transcribes user speech (Hindi model handles Hinglish)
+- **STT** (Deepgram Nova-3): Transcribes user speech (`language=multi` for EN/HI/Hinglish)
 - **LLM** (selected model): Generates response text
 - **TTS** (LiveKit native sonic-3): Synthesizes speech, played to the room
 - **Preemptive TTS**: Starts synthesizing before LLM completes for lower latency

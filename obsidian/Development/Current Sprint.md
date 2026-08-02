@@ -1,11 +1,12 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-08-01  
+> **Last Updated:** 2026-08-02  
 > **Status:** Active maintenance, Multi-KB per org (KB collections), Voicelink SIP inbound trunk provisioning, LiveKit native `sonic-3` TTS, per-provider call capacity gating
 
 ## Recently Completed
 
+- [x] **Inbound webhook int coercion + language matching (2026-08-02):** `CALL_DATA_INBOUND_UPDATE` coerces `org_id` / `process_id` / `new_stage_id` string→int via `_as_int()` when present (missing stays `null`). Agent prompt matches caller language every turn; STT switched Deepgram Nova-3 `language=hi` → `language=multi`.
 - [x] **Plivo Zentrunk Trunk Reuse & Retry Self-Healing (inbound/setup):** Plivo trunk now found by name (not just `primary_uri_uuid`) so new-number setup reuses the domain trunk instead of failing with "already exists". 409 gate verifies Plivo number is actually linked to the trunk; partially-configured numbers complete setup idempotently on retry. `org_configs` written only after provider forwarding succeeds.
 - [x] **SIP Failure → 503 (408/486):** Webhook now awaits `trigger_sip()` and returns empty `503` (matching the capacity gate) when the SIP call fails — 408→No Answer, 486→Busy, other→Incomplete. Failure classification written to Redis `sip_error_status:{call_id}`, room deleted, dedup lock released for retry.
 - [x] **Per-Provider Call Capacity & Health Gating:** `PROVIDER_MAX_CONCURRENCY` (plivo=2, zadarma=3, voice_link=5), global `MAX_CALL_CONCURRENCY`=5. Provider embedded in LiveKit room name (`call_{provider}_{call_id}`) for zero-Redis tracking. `/health` reports `false` when any provider or the global pool saturates. Middleware returns empty `503` per-provider (webhooks) and global (all dispatch paths); provider saturation never blocks another provider's traffic. Blocked calls logged to `call_logs` as `Busy` with `provider_at_concurrency_limit` reason.
