@@ -50,7 +50,6 @@ from livekit.agents import (
 )
 from livekit.agents import TurnHandlingOptions
 
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.plugins import openai, google, silero, deepgram
 
 from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_to_iso8601, save_call_log_to_db, report_telemetry
@@ -877,7 +876,7 @@ Follow these specific instructions:
 
     session = AgentSession(
         turn_handling=TurnHandlingOptions(
-            turn_detection=MultilingualModel(),
+            turn_detection=inference.TurnDetector(),
             endpointing={
                 "mode": "dynamic",
                 "min_delay": 0.1,
@@ -895,7 +894,7 @@ Follow these specific instructions:
         ),
         vad=silero.VAD.load(
             min_speech_duration=0.08,
-            min_silence_duration=0.15,
+            min_silence_duration=0.25,
         ),
         # Multilingual STT so English stays English and Hindi/Hinglish still work
         stt=deepgram.STT(
@@ -1271,7 +1270,7 @@ Follow these specific instructions:
         try:
             if ctx.job.metadata:
                 context_data["Job metadata"] = ctx.job.metadata
-        except:
+        except Exception:
             pass
         try:
             await send_crash_email(
@@ -1281,6 +1280,7 @@ Follow these specific instructions:
             )
         except Exception as email_err:
             logger.error(f"[DIAG] Failed to dispatch crash email: {email_err}")
+    finally:
         logger.info("[DIAG] ======== ENTERING FINALLY BLOCK ========")
         logger.info(f"[DIAG] connection_state={ctx.room.connection_state} user_joined={call_state.get('user_joined')} agent_state={call_state.get('agent_state','unknown')}")
         # 1. Cancel background tasks
@@ -1594,14 +1594,13 @@ Follow these specific instructions:
 
 async def _force_disconnect_room(ctx: JobContext):
     """Delete the room via LiveKit API. Falls back to local disconnect."""
+    lk_api = api.LiveKitAPI(
+        url=os.getenv("LIVEKIT_URL"),
+        api_key=os.getenv("LIVEKIT_API_KEY"),
+        api_secret=os.getenv("LIVEKIT_API_SECRET"),
+    )
     try:
-        lk_api = api.LiveKitAPI(
-            url=os.getenv("LIVEKIT_URL"),
-            api_key=os.getenv("LIVEKIT_API_KEY"),
-            api_secret=os.getenv("LIVEKIT_API_SECRET"),
-        )
         await lk_api.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
-        await lk_api.aclose()
         # logger.info(f"{Fore.RED}➖ Room Destroyed via API: {ctx.room.name}{Style.RESET_ALL}")
     except Exception as e:
         logger.error(f"Failed to delete room via API: {e}")
@@ -1610,6 +1609,8 @@ async def _force_disconnect_room(ctx: JobContext):
             # logger.info(f"{Fore.RED}➖ Room Disconnected locally: {ctx.room.name}{Style.RESET_ALL}")
         except Exception as e2:
             logger.error(f"Local disconnect also failed: {e2}")
+    finally:
+        await lk_api.aclose()
 
 
 def run_agent():
