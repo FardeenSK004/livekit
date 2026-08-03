@@ -2347,6 +2347,7 @@ async def handle_outbound_call_webhook(request: Request):
     tos_task_id = payload.get("tos_task_id") or payload.get("metadata", {}).get("tos_task_id")
 
     call_id = payload.get("call_id") or payload.get("voice_id") or payload.get("event_id") or int(time.time())
+    room_name = f"call_{call_id}"  # fallback until trunk_id resolved below
 
     def _telemetry(message_suffix: str):
         if tos_task_id:
