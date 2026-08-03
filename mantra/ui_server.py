@@ -2525,8 +2525,8 @@ async def handle_outbound_call_webhook(request: Request):
                         "call_custom_fields": payload.get("call_custom_fields", {}),
                     }
                 }
-                asyncio.create_task(send_to_backend(n8n_payload))
-                logger.info(f"SIP failure delivered to n8n backend: {sip_status}")
+                delivered = await send_to_backend(n8n_payload)
+                logger.info(f"SIP failure delivered to n8n backend: {sip_status} (success={delivered})")
 
     asyncio.create_task(_process_call())
 
