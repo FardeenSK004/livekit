@@ -23,7 +23,7 @@ from xml.sax.saxutils import escape
 from fastapi import HTTPException, File, UploadFile, Form
 from prometheus_fastapi_instrumentator import Instrumentator
 from mantra.email_alerts import send_crash_email
-from mantra.utils import save_call_log_to_db, report_telemetry
+from mantra.utils import save_call_log_to_db, report_telemetry, send_to_backend
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from livekit import api
@@ -2477,16 +2477,17 @@ async def handle_outbound_call_webhook(request: Request):
                 pass
 
             if not call_already_connected:
+                err_str = str(e).lower()
+                if any(token in err_str for token in ("timeout", "no answer")):
+                    sip_status = "No Answer"
+                elif any(token in err_str for token in ("486", "408", "busy", "603", "decline", "rejected")):
+                    sip_status = "Busy"
+                else:
+                    sip_status = "Incomplete"
+
                 if redis_client:
-                    err_str = str(e).lower()
-                    if any(token in err_str for token in ("timeout", "no answer")):
-                        status_guess = "No Answer"
-                    elif any(token in err_str for token in ("486", "408", "busy", "603", "decline", "rejected")):
-                        status_guess = "Busy"
-                    else:
-                        status_guess = "Incomplete"
                     try:
-                        await redis_client.set(f"sip_error_status:{call_id}", status_guess, ex=300)
+                        await redis_client.set(f"sip_error_status:{call_id}", sip_status, ex=300)
                     except Exception:
                         pass
 
@@ -2501,6 +2502,31 @@ async def handle_outbound_call_webhook(request: Request):
                         await redis_client.delete(f"lock:call:{call_id}")
                     except Exception:
                         pass
+
+                # Deliver SIP failure to n8n backend
+                event_name = "CALL_RETRY" if sip_status == "No Answer" else "CALL_DATA_UPDATE"
+                n8n_payload = {
+                    "event": event_name,
+                    "data": {
+                        "client_id": payload.get("lead_id"),
+                        "call_id": call_id,
+                        "call_status": sip_status,
+                        "call_transcript": None,
+                        "ai_summary": f"SIP call failed: {sip_status}",
+                        "recording_url": None,
+                        "call_duration_seconds": 0,
+                        "next_call_on": None,
+                        "called_on": payload.get("metadata", {}).get("call_initiated_at"),
+                        "ai_call_id": None,
+                        "process_id": payload.get("process_id"),
+                        "new_stage_id": payload.get("stage_id"),
+                        "metadata": payload.get("metadata", {}),
+                        "client_custom_fields": payload.get("client_custom_fields", {}),
+                        "call_custom_fields": payload.get("call_custom_fields", {}),
+                    }
+                }
+                asyncio.create_task(send_to_backend(n8n_payload))
+                logger.info(f"SIP failure delivered to n8n backend: {sip_status}")
 
     asyncio.create_task(_process_call())
 
