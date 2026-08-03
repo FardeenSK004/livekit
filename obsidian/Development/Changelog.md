@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-08-03
+
+### Trunk-Based Call Capacity Gating
+- **refactor:** Replaced per-provider capacity (`PROVIDER_MAX_CONCURRENCY`) with per-trunk capacity. Each trunk gets an independent limit derived from its provider's default (Plivo=2, Zadarma=3, VoiceLink=5, Twilio=3).
+- **refactor:** Room naming changed from `call_{provider}_{call_id}` → `call_{trunk_id}_{call_id}` across webhook handler, Plivo outbound endpoint, and dispatcher.
+- **feat:** `_resolve_trunk_limit(trunk_id)` — resolves trunk→provider→limit via in-memory `_TRUNK_TO_PROVIDER` cache, falling back to `_get_provider_from_trunk()` (LiveKit API + Redis cache). Unknown trunks default to limit 1.
+- **feat:** `_trunk_at_capacity(trunk_id)` and `_active_per_trunk(rooms, trunk_id)` replace `_provider_at_capacity` and `_active_per_provider`. Counting uses room name prefix matching on `call_{trunk_id}_`.
+- **feat:** `_extract_trunk_ids(rooms)` — parses trunk IDs from room names (`call_ST_abc_123` → `ST_abc` by `rsplit("_", 1)`).
+- **refactor:** Health check now reports per-trunk capacity (`trunk_capacity_{trunk_id}`) instead of per-provider.
+- **refactor:** Middleware gate now uses `_trunk_at_capacity(trunk_id)` — two Plivo trunks each get independent 2-call pool.
+- **chore:** Renamed `PROVIDER_MAX_CONCURRENCY` → `PROVIDER_DEFAULT_CONCURRENCY` (twilio limit changed 2→3).
+- Files: `mantra/ui_server.py` (lines 64-138, 556-567, 672-690, 2350-2376, 2875), `mantra/dispatcher.py` (lines 51, 187)
+
+### Zombie Room Cleanup
+- **feat:** `cleanup_zombie_rooms()` in `mantra/dispatcher.py` — runs every 60s in the dispatcher loop. Lists LiveKit rooms, deletes `call_*` rooms with `num_participants == 0` via `delete_room()`.
+- **feat:** One-shot startup cleanup in `ui_server.py` lifespan — identical logic, runs immediately after startup health check. Writes warning log for each zombie deleted.
+- Files: `mantra/dispatcher.py` (lines 117-136, 169), `mantra/ui_server.py` (lines 214-232)
+
+### DB Migration — Call Metadata Columns
+- **feat:** Added `caller_number` (VARCHAR 20), `called_number` (VARCHAR 20), `trunk_id` (VARCHAR 100) to `call_logs`. Index on `trunk_id`.
+- **feat:** `save_call_log_to_db()` in `mantra/utils.py` now accepts and upserts all three columns.
+- **feat:** Agent `finalize()` extracts `caller_number` ← `call_payload.call_from`, `called_number` ← `call_payload.client_phone`, `trunk_id` ← `call_payload.call_from_id`.
+- **feat:** `_log_blocked_call()` now passes `caller_number` from `payload.call_from` alongside existing `trunk_id` and `phone`.
+- Migration: `migrations/add_trunk_fields.sql`
+
+### DB Migration — kb_collections Process/Stage Descriptions
+- **feat:** Added `process_description` (TEXT), `stage_description` (TEXT) to `kb_collections`.
+- **feat:** Ingest endpoint (`/api/v1/kb/ingest`) extracts first process's `description`/`name` and first stage's `description`/`name` from `process_stage_data` JSON.
+- **feat:** `get_or_create_collection()` (abstract + Postgres impl) accepts and upserts both columns.
+- **feat:** `list_collections()` returns the new columns.
+- Migration: `migrations/add_trunk_fields.sql`
+- Files: `mantra/knowledge_base.py` (lines 94, 255, 270), `mantra/ui_server.py` (lines 909-932)
+
 ## 2026-08-02
 
 ### Inbound webhook int coercion + language matching

@@ -61,18 +61,30 @@ voicelink_session: aiohttp.ClientSession = (
 redis_client: redis.Redis = None
 http_client: httpx.AsyncClient = None      # Persistent client for health checks
 
-# ── Per-provider concurrency limits ────────────────────────────────────
-PROVIDER_MAX_CONCURRENCY = {
+# ── Per-trunk concurrency limits (derived from provider defaults) ──────
+PROVIDER_DEFAULT_CONCURRENCY = {
     "plivo": int(os.getenv("PLIVO_MAX_CONCURRENCY", "2")),
     "zadarma": int(os.getenv("ZADARMA_MAX_CONCURRENCY", "3")),
     "voice_link": int(os.getenv("VOICELINK_MAX_CONCURRENCY", "5")),
-    "twilio": int(os.getenv("TWILIO_MAX_CONCURRENCY", "2")),
+    "twilio": int(os.getenv("TWILIO_MAX_CONCURRENCY", "3")),
 }
 MAX_CALL_CONCURRENCY = int(
     os.getenv("MAX_CONCURRENCY", os.getenv("CARTESIA_MAX_CONCURRENCY", "5"))
 )
 
-# ── Per-provider capacity helpers ──────────────────────────────────────
+# ── Per-trunk capacity helpers ─────────────────────────────────────────
+
+_TRUNK_TO_PROVIDER: dict[str, str] = {}
+
+async def _resolve_trunk_limit(trunk_id: str) -> tuple[str | None, int]:
+    provider = _TRUNK_TO_PROVIDER.get(trunk_id)
+    if provider is None:
+        provider = await _get_provider_from_trunk(trunk_id)
+        if provider:
+            _TRUNK_TO_PROVIDER[trunk_id] = provider
+    if provider and provider in PROVIDER_DEFAULT_CONCURRENCY:
+        return provider, PROVIDER_DEFAULT_CONCURRENCY[provider]
+    return provider, 1
 
 
 async def _active_call_rooms() -> list[str]:
@@ -82,47 +94,53 @@ async def _active_call_rooms() -> list[str]:
     return [r.name for r in resp.rooms if (r.name or "").startswith("call_")]
 
 
-async def _active_per_provider(rooms: list[str]) -> dict[str, int]:
-    counts = {p: 0 for p in PROVIDER_MAX_CONCURRENCY}
-    ordered = sorted(counts.keys(), key=len, reverse=True)
+async def _extract_trunk_ids(rooms: list[str]) -> list[str]:
+    trunk_ids: list[str] = []
     for name in rooms:
         if not name or not name.startswith("call_"):
             continue
-        rest = name[5:]
-        for prov in ordered:
-            if rest.startswith(prov + "_"):
-                counts[prov] += 1
-                break
-    return counts
+        parts = name[5:].rsplit("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            trunk_ids.append(parts[0])
+    return trunk_ids
 
 
-async def _provider_at_capacity(provider: str) -> tuple[bool, int]:
-    limit = PROVIDER_MAX_CONCURRENCY.get(provider)
-    if limit is None:
+async def _active_per_trunk(rooms: list[str], trunk_id: str) -> int:
+    prefix = f"call_{trunk_id}_"
+    return sum(1 for r in rooms if r and r.startswith(prefix))
+
+
+async def _trunk_at_capacity(trunk_id: str) -> tuple[bool, int]:
+    provider, limit = await _resolve_trunk_limit(trunk_id)
+    if provider is None:
         return False, 0
     rooms = await _active_call_rooms()
-    counts = await _active_per_provider(rooms)
-    active = counts.get(provider, 0)
+    active = await _active_per_trunk(rooms, trunk_id)
     return active >= limit, active
 
 
 async def _log_blocked_call(
-    call_id: str, provider: str, active_count: int,
-    trunk_id: str = "", phone: str = "",
+    call_id: str, provider: str | None, active_count: int,
+    trunk_id: str = "", phone: str = "", caller_number: str = "",
 ):
-    limit = PROVIDER_MAX_CONCURRENCY.get(provider, "?")
+    limit = PROVIDER_DEFAULT_CONCURRENCY.get(provider or "", "?")
     call_log = json.dumps({
         "call_id": call_id,
         "provider": provider,
         "blocked": True,
-        "reason": "provider_at_concurrency_limit",
+        "reason": "trunk_at_concurrency_limit",
         "active_calls": active_count,
         "max_concurrency": limit,
         "trunk_id": trunk_id,
         "phone": phone,
         "requested_at": datetime.now(tz=timezone.utc).isoformat(),
     })
-    await save_call_log_to_db(call_id, call_log, "Busy", "")
+    await save_call_log_to_db(
+        call_id, call_log, "Busy", "",
+        caller_number=caller_number,
+        called_number=phone,
+        trunk_id=trunk_id,
+    )
 
 
 # ── Authentication ───────────────────────────────────────────────────────
@@ -210,6 +228,31 @@ async def lifespan(app: FastAPI):
         logger.info("Startup healthcheck: ALL SERVICES HEALTHY")
     else:
         logger.warning("Startup healthcheck: one or more services down — refusing dispatch")
+    # ────────────────────────────────────────────────────────────────
+
+    # ── Startup zombie-room cleanup ─────────────────────────────────
+    if lk_client:
+        try:
+            response = await lk_client.room.list_rooms(api.ListRoomsRequest())
+            zombie_count = 0
+            for room in response.rooms:
+                if not room.name or not room.name.startswith("call_"):
+                    continue
+                if room.num_participants == 0:
+                    logger.warning(
+                        f"Startup zombie room detected: {room.name} (0 participants). Deleting."
+                    )
+                    try:
+                        await lk_client.room.delete_room(
+                            api.DeleteRoomRequest(room=room.name)
+                        )
+                        zombie_count += 1
+                    except Exception as e:
+                        logger.error(f"Failed to delete zombie room {room.name}: {e}")
+            if zombie_count > 0:
+                logger.info(f"Startup zombie cleanup: deleted {zombie_count} empty rooms")
+        except Exception as e:
+            logger.error(f"Startup zombie room cleanup failed: {e}")
     # ────────────────────────────────────────────────────────────────
 
     yield
@@ -516,12 +559,17 @@ async def _run_health_checks() -> bool:
         checks["capacity_max_concurrency"] = True
 
     try:
-        pcounts = await _active_per_provider(rooms)
+        trunk_ids = await _extract_trunk_ids(rooms)
     except Exception:
-        pcounts = {}
-    for provider, limit in PROVIDER_MAX_CONCURRENCY.items():
-        active = pcounts.get(provider, 0)
-        key = f"provider_capacity_{provider}"
+        trunk_ids = []
+    seen: set[str] = set()
+    for trunk_id in trunk_ids:
+        if trunk_id in seen:
+            continue
+        seen.add(trunk_id)
+        provider, limit = await _resolve_trunk_limit(trunk_id)
+        active = await _active_per_trunk(rooms, trunk_id)
+        key = f"trunk_capacity_{trunk_id}"
         if active >= limit:
             checks[key] = f"BUSY {active}/{limit}"
         else:
@@ -632,23 +680,24 @@ async def health_gate_middleware(request: Request, call_next):
                     or os.getenv("SIP_TRUNK_ID")
                 )
                 if trunk_id:
-                    provider = await _get_provider_from_trunk(trunk_id)
-                    if provider and provider in PROVIDER_MAX_CONCURRENCY:
-                        busy, active = await _provider_at_capacity(provider)
+                    provider, limit = await _resolve_trunk_limit(trunk_id)
+                    if provider is not None:
+                        busy, active = await _trunk_at_capacity(trunk_id)
                         if busy:
                             logger.warning(
-                                f"Provider gate blocked {provider}: {active}/{PROVIDER_MAX_CONCURRENCY.get(provider)}"
+                                f"Trunk gate blocked {trunk_id} ({provider}): {active}/{limit}"
                             )
                             asyncio.create_task(
                                 _log_blocked_call(
                                     call_id, provider, active,
                                     trunk_id=trunk_id,
                                     phone=str(payload.get("client_phone", "")),
+                                    caller_number=str(payload.get("call_from", "")),
                                 )
                             )
                             return Response(status_code=503)
             except Exception as e:
-                logger.error(f"provider capacity gate error, blocking: {e}")
+                logger.error(f"trunk capacity gate error, blocking: {e}")
                 return Response(status_code=503)
 
         # ── Global capacity gate (agent pool) ───────────────────
@@ -878,9 +927,25 @@ async def ingest_kb_data(request: Request):
             except Exception as e:
                 logger.error(f"Failed to delete old chunks for document {document_id}: {e}")
 
+        # Extract process and stage descriptions from process_stage_data for kb_collections
+        proc_desc = ""
+        stage_desc = ""
+        if process_stage_data:
+            try:
+                psd = json.loads(process_stage_data) if isinstance(process_stage_data, str) else process_stage_data
+            except json.JSONDecodeError:
+                psd = process_stage_data
+            if isinstance(psd, list) and len(psd) > 0:
+                proc_desc = psd[0].get("description") or psd[0].get("name") or ""
+                stages = psd[0].get("stages")
+                if isinstance(stages, list) and len(stages) > 0:
+                    stage_desc = stages[0].get("description") or stages[0].get("name") or ""
+
         # Get or create a KB collection for this (org_id, document_id)
         collection = await kb.get_or_create_collection(
-            org_id, doc_id, name=upload_file.filename if upload_file else doc_id
+            org_id, doc_id, name=upload_file.filename if upload_file else doc_id,
+            process_description=proc_desc,
+            stage_description=stage_desc,
         )
         collection_id = str(collection["id"])
         logger.info(f"Using KB collection {collection_id} for org {org_id} document {doc_id}")
@@ -2282,7 +2347,6 @@ async def handle_outbound_call_webhook(request: Request):
     tos_task_id = payload.get("tos_task_id") or payload.get("metadata", {}).get("tos_task_id")
 
     call_id = payload.get("call_id") or payload.get("voice_id") or payload.get("event_id") or int(time.time())
-    room_name = f"call_{call_id}"
 
     def _telemetry(message_suffix: str):
         if tos_task_id:
@@ -2334,9 +2398,8 @@ async def handle_outbound_call_webhook(request: Request):
     provider = await _get_provider_from_trunk(trunk_id)
     logger.info(f"[DIAG] Webhook: call_id={call_id} phone={phone_number} trunk={trunk_id} provider={provider} AGENT_NAME={AGENT_NAME}")
 
-    # Embed provider in room name for capacity tracking (zero Redis)
-    room_suffix = provider if provider else "unknown"
-    room_name = f"call_{room_suffix}_{call_id}"
+    # Embed trunk_id in room name for capacity tracking (zero Redis)
+    room_name = f"call_{trunk_id}_{call_id}"
 
     # Stamp call_initiated_at before dispatching so the agent gets it
     payload_meta = payload.get("metadata")
@@ -2836,7 +2899,7 @@ async def create_and_call_plivo(request: Request):
 
         # 3. Trigger Agent Dispatch — use direct client (no proxy needed for LiveKit Cloud)
         call_id = payload.get("call_id") or payload.get("voice_id") or int(time.time())
-        room_name = f"call_{call_id}"
+        room_name = f"call_{trunk_id}_{call_id}"
         
         # Check Redis deduplication lock to prevent concurrent duplicate calls for the same call_id
         if redis_client:

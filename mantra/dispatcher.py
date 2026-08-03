@@ -47,8 +47,8 @@ async def get_lk_client():
 
 async def dispatch_call(lk_client: api.LiveKitAPI, payload: dict):
     call_id = payload.get("call_id") or payload.get("voice_id")
-    room_name = payload.get("_resolved_room_name", f"call_{call_id}")
-    phone_number = payload.get("_resolved_phone_number")
+    trunk_id = payload.get("_resolved_trunk_id")
+    room_name = payload.get("_resolved_room_name") or (f"call_{trunk_id}_{call_id}" if trunk_id else f"call_{call_id}")
     trunk_id = payload.get("_resolved_trunk_id")
     sip_number = payload.get("_resolved_sip_number")
 
@@ -115,6 +115,33 @@ async def cleanup_zombies(redis_client, lk_client):
         logger.error(f"Zombie cleanup failed: {e}")
 
 
+async def cleanup_zombie_rooms(lk_client, redis_client):
+    """Delete LiveKit rooms with zero participants that are inflating provider capacity counts."""
+    try:
+        response = await lk_client.room.list_rooms(api.ListRoomsRequest())
+        zombie_count = 0
+        for room in response.rooms:
+            if not room.name or not room.name.startswith("call_"):
+                continue
+            if room.num_participants == 0:
+                logger.warning(
+                    f"Zombie room detected: {room.name} (0 participants). Deleting."
+                )
+                try:
+                    await lk_client.room.delete_room(
+                        api.DeleteRoomRequest(room=room.name)
+                    )
+                    zombie_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to delete zombie room {room.name}: {e}")
+
+        if zombie_count > 0:
+            logger.info(f"Zombie room cleanup: deleted {zombie_count} empty rooms")
+
+    except Exception as e:
+        logger.error(f"Zombie room cleanup failed: {e}")
+
+
 async def main():
     redis_client = redis.from_url(redis_url, decode_responses=True)
     await redis_client.ping()
@@ -138,6 +165,7 @@ async def main():
                 now = time.time()
                 if now - last_zombie_check > 60:
                     await cleanup_zombies(redis_client, lk_client)
+                    await cleanup_zombie_rooms(lk_client, redis_client)
                     last_zombie_check = now
 
                 # 2. Check Capacity
@@ -156,7 +184,8 @@ async def main():
                         call_entry, score = popped[0]
                         payload = json.loads(call_entry)
                         call_id = payload.get("call_id") or payload.get("voice_id")
-                        room_name = payload.get("_resolved_room_name", f"call_{call_id}")
+                        trunk_id = payload.get("_resolved_trunk_id")
+                        room_name = payload.get("_resolved_room_name") or (f"call_{trunk_id}_{call_id}" if trunk_id else f"call_{call_id}")
                         tos_task_id = payload.get("metadata", {}).get("tos_task_id")
 
                         logger.info(

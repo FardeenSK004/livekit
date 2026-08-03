@@ -13,6 +13,9 @@ The application uses a single table `call_logs` in an isolated database.
 | `call_log` | JSONB | Complete call data payload |
 | `status` | TEXT | Call status (Completed, Busy, No Answer, Error, Incomplete) |
 | `recording_url` | TEXT | S3 URL of recording |
+| `caller_number` | VARCHAR(20) | Calling number (SIP trunk Caller ID) |
+| `called_number` | VARCHAR(20) | Called number (client phone) |
+| `trunk_id` | VARCHAR(100) | LiveKit SIP Trunk ID used for the call |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | Record creation timestamp |
 
 **Queries:**
@@ -49,6 +52,8 @@ Groups KB pages into named collections per org. One collection = one document.
 | `document_id` | TEXT NOT NULL | Unique document identifier per org |
 | `name` | TEXT | Display name (filename or doc ID) |
 | `description` | TEXT | Optional description |
+| `process_description` | TEXT | Main process description from `process_stage_data` |
+| `stage_description` | TEXT | First stage description from `process_stage_data` |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | Creation timestamp |
 
 **Constraints:** `UNIQUE(org_id, document_id)` — one collection per document per org.
@@ -109,8 +114,8 @@ Default port mapping: `5433` (local `lkdb` docker-compose) / `5432` (container i
 | `calls:active` | Hash | `call_id → room_name` | — |
 | `calls:status:{call_id}` | String | Per-call status | — |
 | `lock:call:{call_id}` | String | Dedup lock for webhooks | 600s |
+| `sip_error_status:{call_id}` | String | SIP failure classification (No Answer / Busy / Incomplete) | 300s |
 | `trunk:provider:{trunk_id}` | String | Cached trunk→provider mapping | 30d |
 | `{provider}:sip_trunk:{number}` | String | Provider SIP trunk mapping | 30d |
-| `reserve:{provider}:{id}` | String | Capacity reservation slot | 30s |
 
 Connection via `REDIS_URL` env var.

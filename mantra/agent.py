@@ -1548,11 +1548,17 @@ Follow these specific instructions:
                 # Save to local Postgres DB
                 try:
                     c_id = webhook_payload.get("data", {}).get("call_id", ctx.job.id)
+                    caller_number = call_payload.get("call_from") or ""
+                    called_number = call_payload.get("client_phone") or ""
+                    call_trunk_id = call_payload.get("call_from_id") or call_payload.get("trunk_id") or ""
                     await save_call_log_to_db(
                         call_id=str(c_id),
                         call_log=json.dumps(webhook_payload.get("data", {}), indent=2),
                         status=call_status,
                         recording_url=recording_url,
+                        caller_number=caller_number,
+                        called_number=called_number,
+                        trunk_id=call_trunk_id,
                     )
                     logger.info(f"[DIAG] finalize(): Call log saved to DB for call_id={c_id}")
                 except Exception as db_err:

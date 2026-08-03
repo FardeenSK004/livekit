@@ -91,7 +91,7 @@ class KnowledgeBase(ABC):
         pass
 
     @abstractmethod
-    async def get_or_create_collection(self, org_id: str, document_id: str, name: str = "") -> dict:
+    async def get_or_create_collection(self, org_id: str, document_id: str, name: str = "", process_description: str = "", stage_description: str = "") -> dict:
         """Find or create a KB collection for (org_id, document_id). Returns collection dict."""
         pass
 
@@ -252,18 +252,20 @@ class PostgresKnowledgeBase(KnowledgeBase):
             )
             return deleted_pages
 
-    async def get_or_create_collection(self, org_id: str, document_id: str, name: str = "") -> dict:
+    async def get_or_create_collection(self, org_id: str, document_id: str, name: str = "", process_description: str = "", stage_description: str = "") -> dict:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO kb_collections (org_id, document_id, name)
-                VALUES ($1, $2, COALESCE(NULLIF($3, ''), $2))
+                INSERT INTO kb_collections (org_id, document_id, name, process_description, stage_description)
+                VALUES ($1, $2, COALESCE(NULLIF($3, ''), $2), NULLIF($4, ''), NULLIF($5, ''))
                 ON CONFLICT (org_id, document_id) DO UPDATE SET
-                    name = EXCLUDED.name
-                RETURNING id, org_id, document_id, name, description, created_at
+                    name = EXCLUDED.name,
+                    process_description = EXCLUDED.process_description,
+                    stage_description = EXCLUDED.stage_description
+                RETURNING id, org_id, document_id, name, description, created_at, process_description, stage_description
                 """,
-                org_id, document_id, name,
+                org_id, document_id, name, process_description, stage_description,
             )
             return dict(row)
 
@@ -271,7 +273,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id, org_id, document_id, name, description, created_at FROM kb_collections WHERE org_id = $1 ORDER BY created_at",
+                "SELECT id, org_id, document_id, name, description, process_description, stage_description, created_at FROM kb_collections WHERE org_id = $1 ORDER BY created_at",
                 org_id,
             )
             return [dict(r) for r in rows]

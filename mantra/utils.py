@@ -20,7 +20,13 @@ logger = logging.getLogger("mantra.utils")
 
 
 async def save_call_log_to_db(
-    call_id: str, call_log: str, status: str, recording_url: str
+    call_id: str,
+    call_log: str,
+    status: str,
+    recording_url: str,
+    caller_number: str = "",
+    called_number: str = "",
+    trunk_id: str = "",
 ):
     """Save call details to the isolated PostgreSQL logging database."""
     db_user = os.getenv("POSTGRES_USER")
@@ -45,14 +51,17 @@ async def save_call_log_to_db(
         logger.info(f"Successfully connected to PostgreSQL at {db_host}:{db_port}")
         # Insert or update the call log
         query = """
-        INSERT INTO call_logs (call_id, call_log, status, recording_url)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO call_logs (call_id, call_log, status, recording_url, caller_number, called_number, trunk_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (call_id) DO UPDATE 
         SET call_log = EXCLUDED.call_log,
             status = EXCLUDED.status,
-            recording_url = EXCLUDED.recording_url;
+            recording_url = EXCLUDED.recording_url,
+            caller_number = EXCLUDED.caller_number,
+            called_number = EXCLUDED.called_number,
+            trunk_id = EXCLUDED.trunk_id;
         """
-        await conn.execute(query, call_id, call_log, status, recording_url)
+        await conn.execute(query, call_id, call_log, status, recording_url, caller_number, called_number, trunk_id)
         logger.info(f"Successfully saved call log to DB for call_id: {call_id}")
     except Exception as e:
         logger.error(f"Failed to save call log to DB: {e}")

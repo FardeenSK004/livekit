@@ -1,11 +1,15 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-08-02  
-> **Status:** Active maintenance, Multi-KB per org (KB collections), Voicelink SIP inbound trunk provisioning, LiveKit native `sonic-3` TTS, per-provider call capacity gating
+> **Last Updated:** 2026-08-03  
+> **Status:** Active maintenance, trunk-based per-trunk call capacity gating, zombie room cleanup, DB enrichment
 
 ## Recently Completed
 
+- [x] **Trunk-Based Call Capacity Gating (2026-08-03):** Replaced provider-based concurrency with per-trunk capacity. Room naming changed from `call_{provider}_{call_id}` to `call_{trunk_id}_{call_id}`. Each trunk gets independent limit: Plivo trunks=2, Zadarma=3, VoiceLink=5, Twilio=3 (derived from `PROVIDER_DEFAULT_CONCURRENCY`). `_resolve_trunk_limit(trunk_id)` maps trunk→provider→limit via in-memory cache + LiveKit API + Redis fallback. Health check reports `trunk_capacity_{trunk_id}` per trunk. Middleware gate uses `_trunk_at_capacity(trunk_id)`.
+- [x] **Zombie Room Cleanup (2026-08-03):** `cleanup_zombie_rooms()` in `dispatcher.py` (runs every 60s) + one-shot startup cleanup in `ui_server.py` lifespan. Lists LiveKit rooms, deletes `call_*` rooms with `num_participants == 0`. Prevents stale rooms from inflating capacity counts.
+- [x] **DB Migration — Call Metadata (2026-08-03):** Added `caller_number`, `called_number`, `trunk_id` columns to `call_logs`. `save_call_log_to_db()` updated with new params. Agent `finalize()` extracts from `call_payload` (`call_from`, `client_phone`, `call_from_id`). `_log_blocked_call()` also passes caller number.
+- [x] **DB Migration — kb_collections Process/Stage Descriptions (2026-08-03):** Added `process_description`, `stage_description` columns to `kb_collections`. Ingest endpoint extracts first process's description/name and first stage's description from `process_stage_data` JSON. `get_or_create_collection()` upserts both columns. Migration file: `migrations/add_trunk_fields.sql`.
 - [x] **Inbound webhook int coercion + language matching (2026-08-02):** `CALL_DATA_INBOUND_UPDATE` coerces `org_id` / `process_id` / `new_stage_id` string→int via `_as_int()` when present (missing stays `null`). Agent prompt matches caller language every turn; STT switched Deepgram Nova-3 `language=hi` → `language=multi`.
 - [x] **Plivo Zentrunk Trunk Reuse & Retry Self-Healing (inbound/setup):** Plivo trunk now found by name (not just `primary_uri_uuid`) so new-number setup reuses the domain trunk instead of failing with "already exists". 409 gate verifies Plivo number is actually linked to the trunk; partially-configured numbers complete setup idempotently on retry. `org_configs` written only after provider forwarding succeeds.
 - [x] **SIP Failure → 503 (408/486):** Webhook now awaits `trigger_sip()` and returns empty `503` (matching the capacity gate) when the SIP call fails — 408→No Answer, 486→Busy, other→Incomplete. Failure classification written to Redis `sip_error_status:{call_id}`, room deleted, dedup lock released for retry.
