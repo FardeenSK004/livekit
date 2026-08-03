@@ -801,8 +801,8 @@ Follow these specific instructions:
         if not isinstance(ai_p, dict):
             ai_p = {}
 
-        # Priority for Model: ai_payload.ai_model -> payload.model -> default "openai"
-        model_name = ai_p.get("ai_model") or payload.get("model") or "openai"
+        # Priority for Model: ai_payload.ai_model -> payload.model -> default "deepseek"
+        model_name = ai_p.get("ai_model") or payload.get("model") or "deepseek"
         model_name = str(model_name).lower()
 
         # Priority for Voice: ai_payload.voice_id -> payload.voice_id -> voice_name -> voice -> default "arushi"
@@ -819,7 +819,7 @@ Follow these specific instructions:
         # Priority for Speed: ai_payload.voice_speed -> payload.voice_speed -> default 1.05
         voice_speed = ai_p.get("voice_speed") or payload.get("voice_speed") or 1
     else:
-        model_name = "openai"
+        model_name = "deepseek"
         voice_input = "arushi"
         voice_id = VOICE_MAPPING["arushi"]
         voice_speed = 1.0
@@ -848,10 +848,14 @@ Follow these specific instructions:
             llm_engine = openai.LLM(model="gpt-4o-mini")
         else:
             logger.info("Using DeepSeek LLM")
-            llm_engine = openai.LLM(
-                model="deepseek-v4-flash",
+            import openai as openai_client
+            client = openai_client.AsyncClient(
                 api_key=deepseek_key,
                 base_url="https://api.deepseek.com",
+            )
+            llm_engine = openai.LLM(
+                model="deepseek-v4-flash",
+                client=client,
             )
     else:
         logger.info("Using OpenAI LLM")
@@ -1519,7 +1523,7 @@ Follow these specific instructions:
                     }
                 }
             else:
-                event_name = "CALL_RETRY" if call_status == "No Answer" else "CALL_DATA_UPDATE"
+                event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Failed"] else "CALL_DATA_UPDATE"
                 webhook_payload = {
                     "event": event_name,
                     "data": {
