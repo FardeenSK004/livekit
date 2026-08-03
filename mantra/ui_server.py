@@ -2410,26 +2410,19 @@ async def handle_outbound_call_webhook(request: Request):
     payload_meta.setdefault("provider", provider)
     payload["metadata"] = payload_meta
 
-    # Trigger agent dispatch — always use lk_client (direct, no proxy)
-    # LiveKit Cloud API calls don't need the Indian proxy; region pinning is on the trunk itself
-    try:
-        logger.info(f"[DIAG] Webhook: Step 1 — Creating agent dispatch for room={room_name} agent_name={AGENT_NAME}")
-        dispatch = await lk_client.agent_dispatch.create_dispatch(
-            api.CreateAgentDispatchRequest(
-                room=room_name, agent_name=AGENT_NAME, metadata=json.dumps(payload)
-            )
-        )
-        logger.info(f"[DIAG] Webhook: Dispatch created: {dispatch.id}")
-        _telemetry(f"agent_dispatched — room={room_name}")
-    except Exception as e:
-        logger.error(f"Agent dispatch failed: {e}\n{traceback.format_exc()}")
-        return JSONResponse(
-            {"error": f"Agent dispatch failed: {str(e)}"}, status_code=500
-        )
-
-    # Trigger SIP outbound call and surface its outcome (return True if connected)
-    async def trigger_sip() -> bool:
+    # Trigger agent dispatch + SIP call as background task — return 200 immediately
+    async def _process_call():
+        """Background: dispatch agent, place SIP call, handle failures."""
         try:
+            logger.info(f"[DIAG] Webhook: Step 1 — Creating agent dispatch for room={room_name} agent_name={AGENT_NAME}")
+            await lk_client.agent_dispatch.create_dispatch(
+                api.CreateAgentDispatchRequest(
+                    room=room_name, agent_name=AGENT_NAME, metadata=json.dumps(payload)
+                )
+            )
+            logger.info(f"[DIAG] Webhook: Dispatch created for room={room_name}")
+            _telemetry(f"agent_dispatched — room={room_name}")
+
             sip_number = payload.get("call_from")
             if sip_number and not sip_number.startswith("+"):
                 sip_number = f"+{sip_number}"
@@ -2450,7 +2443,6 @@ async def handle_outbound_call_webhook(request: Request):
                 f"[DIAG] Webhook: Step 2 — Initiating SIP call to {phone_number} via trunk {trunk_id} using {proxy_msg}"
                 + (f" (Caller ID: {sip_number})" if sip_number else "")
             )
-
             _telemetry(f"sip_call_initiating — phone={phone_number}")
 
             sip_part = await sip_client.sip.create_sip_participant(
@@ -2467,9 +2459,9 @@ async def handle_outbound_call_webhook(request: Request):
             )
             logger.info(f"[DIAG] Webhook: SIP Participant created: {sip_part.participant_identity}")
             _telemetry("sip_call_connected")
-            return True
+
         except Exception as e:
-            logger.error(f"[DIAG] Webhook: SIP Call trigger failed for {room_name}: {e}\n{traceback.format_exc()}")
+            logger.error(f"[DIAG] Webhook: SIP/Agent call processing failed for {room_name}: {e}\n{traceback.format_exc()}")
             _telemetry(f"sip_call_failed — {str(e)[:100]}")
 
             call_already_connected = False
@@ -2480,86 +2472,39 @@ async def handle_outbound_call_webhook(request: Request):
                 for p in participants.participants:
                     if p.identity == f"sip_{call_id}":
                         call_already_connected = True
-                        logger.info(
-                            f"SIP participant {p.identity} already in room {room_name} — "
-                            f"this is a duplicate trigger_sip, skipping cleanup"
-                        )
                         break
-            except Exception as check_err:
-                logger.warning(f"Could not check room participants for {room_name}: {check_err}")
+            except Exception:
+                pass
 
-            if call_already_connected:
-                return True
+            if not call_already_connected:
+                if redis_client:
+                    err_str = str(e).lower()
+                    if any(token in err_str for token in ("timeout", "no answer")):
+                        status_guess = "No Answer"
+                    elif any(token in err_str for token in ("486", "408", "busy", "603", "decline", "rejected")):
+                        status_guess = "Busy"
+                    else:
+                        status_guess = "Incomplete"
+                    try:
+                        await redis_client.set(f"sip_error_status:{call_id}", status_guess, ex=300)
+                    except Exception:
+                        pass
 
-            # Store exact SIP failure reason in Redis for the agent to read
-            if redis_client:
-                err_str = str(e).lower()
-                if any(token in err_str for token in ("timeout", "no answer")):
-                    status_guess = "No Answer"
-                elif any(
-                    token in err_str
-                    for token in ("486","408", "busy", "603", "decline", "rejected")
-                ):
-                    status_guess = "Busy"
-                else:
-                    status_guess = "Incomplete"
                 try:
-                    await redis_client.set(
-                        f"sip_error_status:{call_id}", status_guess, ex=300
-                    )
-                except Exception as re:
-                    logger.error(f"Failed to save SIP error to Redis: {re}")
+                    await lk_client.room.delete_room(api.DeleteRoomRequest(room=room_name))
+                    logger.info(f"Deleted room {room_name} due to SIP failure")
+                except Exception:
+                    pass
 
-            # Delete the room to signal the agent to terminate immediately
-            try:
-                await lk_client.room.delete_room(api.DeleteRoomRequest(room=room_name))
-                logger.info(f"Deleted room {room_name} due to SIP failure")
-            except Exception as cleanup_err:
-                logger.error(f"Failed to cleanup room after SIP failure: {cleanup_err}")
+                if redis_client:
+                    try:
+                        await redis_client.delete(f"lock:call:{call_id}")
+                    except Exception:
+                        pass
 
-            return False
+    asyncio.create_task(_process_call())
 
-    # Await the SIP call so a failed call (408/486) is surfaced to the caller as 503
-    sip_connected = await trigger_sip()
-    if not sip_connected:
-        logger.warning(f"SIP call failed for call_id={call_id} — returning 503 to caller")
-        # Release the dedup lock so a retry with the same call_id is not rejected as a duplicate
-        if redis_client:
-            try:
-                await redis_client.delete(f"lock:call:{call_id}")
-            except Exception as lock_err:
-                logger.warning(f"Failed to release lock for {call_id}: {lock_err}")
-        return Response(status_code=503)
-
-    logger.info(f"[DIAG] Webhook: Returning success response. call_id={call_id} room={room_name}")
-    
-    # Generate token for anyone needing to join/monitor the call
-    token = (
-        api.AccessToken(os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET"))
-        .with_identity(f"monitor_{call_id}")
-        .with_name("Call Monitor")
-        .with_grants(
-            api.VideoGrants(
-                room_join=True,
-                room=room_name,
-                can_publish=False,
-                can_subscribe=True,
-            )
-        )
-    )
-
-    return JSONResponse(
-        {
-            "status": "success",
-            "message": f"Agent dispatched for {event_name}",
-            "client_name": payload.get("client_name", "Unknown"),
-            "purpose": (payload.get("prompt") or "Voice interaction")[:100]
-            + ("..." if len((payload.get("prompt") or "")) > 100 else ""),
-            "room": room_name,
-            "token": token.to_jwt(),
-            "url": os.getenv("LIVEKIT_URL"),
-        }
-    )
+    return Response(status_code=200)
 
 
 async def _create_sip_outbound_trunk(
