@@ -131,14 +131,72 @@ async def save_call_event(
             await conn.close()
 
 
+async def _claim_backend_delivery(call_id: str) -> bool:
+    """First writer wins per call_id. Prevents ui_server + agent double-webhooks."""
+    if not call_id:
+        return True
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        return True
+    try:
+        import redis.asyncio as redis
+
+        client = redis.from_url(redis_url, decode_responses=True)
+        try:
+            claimed = await client.set(f"backend_sent:{call_id}", "1", nx=True, ex=3600)
+            if not claimed:
+                logger.info(
+                    f"Backend webhook already claimed for call_id={call_id} — skipping duplicate"
+                )
+            return bool(claimed)
+        finally:
+            await client.aclose()
+    except Exception as e:
+        logger.warning(f"backend delivery claim failed for call_id={call_id}, allowing send: {e}")
+        return True
+
+
+async def _release_backend_delivery(call_id: str) -> None:
+    """Allow a retry if the claimed delivery never succeeded."""
+    if not call_id:
+        return
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        return
+    try:
+        import redis.asyncio as redis
+
+        client = redis.from_url(redis_url, decode_responses=True)
+        try:
+            await client.delete(f"backend_sent:{call_id}")
+        finally:
+            await client.aclose()
+    except Exception as e:
+        logger.warning(f"backend delivery release failed for call_id={call_id}: {e}")
+
+
 async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
-    """POST the post-call payload to the MantraAssist backend with HMAC signing."""
+    """POST the post-call payload to the MantraAssist backend with HMAC signing.
+
+    Dedupes by call_id via Redis SET NX so only one of ui_server/agent delivers.
+    """
     base_url = os.getenv("MANTRAASSIST_BACKEND_URL", "").rstrip("/")
     webhook_secret = os.getenv("MANTRAASSIST_WEBHOOK_SECRET", "")
 
     if not base_url:
         logger.warning("MANTRAASSIST_BACKEND_URL not set — skipping backend webhook")
         return False
+
+    call_id = ""
+    try:
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(data, dict):
+            call_id = str(data.get("call_id") or "")
+    except Exception:
+        call_id = ""
+
+    if not await _claim_backend_delivery(call_id):
+        return True  # already delivered (or in-flight) by the other path
 
     url = f"{base_url}/api/v1/webhooks/n8n"
 
@@ -170,7 +228,7 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
     else:
         logger.warning("MANTRAASSIST_WEBHOOK_SECRET not set — sending unsigned request")
 
-    logger.info(f"Delivering post-call webhook to: {url}")
+    logger.info(f"Delivering post-call webhook to: {url} call_id={call_id or 'unknown'}")
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -178,7 +236,7 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
                 resp = await client.post(url, content=payload_str, headers=headers)
                 resp.raise_for_status()
                 logger.info(
-                    f"Backend webhook delivered successfully (HTTP {resp.status_code})"
+                    f"Backend webhook delivered successfully (HTTP {resp.status_code}) call_id={call_id or 'unknown'}"
                 )
                 return True
         except Exception as e:
@@ -187,6 +245,7 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
         if attempt < max_retries:
             await asyncio.sleep(2 ** (attempt - 1))
 
+    await _release_backend_delivery(call_id)
     return False
 
 

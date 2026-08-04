@@ -1521,7 +1521,7 @@ Follow these specific instructions:
                         "client_name": call_payload.get("client_name") or "",
                         "client_email": call_payload.get("client_email") or "",
                         "client_phone_number": call_state.get("caller_phone_number") or "",
-                        "call_duration": duration,
+                        "call_duration_seconds": duration,
                         "call_transcript": transcript_data or "",
                         "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else "",
                         "called_on": call_state.get("call_initiated_at") or "",
@@ -1533,26 +1533,37 @@ Follow these specific instructions:
                 }
             else:
                 event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Failed"] else "CALL_DATA_UPDATE"
-                webhook_payload = {
-                    "event": event_name,
-                    "data": {
-                        "client_id": call_payload.get("lead_id"),
-                        "call_id": resolved_call_id,
-                        "call_status": call_status,
-                        "call_transcript": transcript_data,
-                        "ai_summary": summary_text,
-                        "recording_url": recording_url,
-                        "call_duration_seconds": duration,
-                        "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else None,
-                        "called_on": call_state.get("call_initiated_at") or None,
-                        "ai_call_id": ctx.job.id,
-                        "process_id": call_payload.get("process_id"),
-                        "new_stage_id": new_stage_id,
-                        "metadata": call_payload.get("metadata", {}),
-                        "client_custom_fields": client_custom_fields or {},
-                        "call_custom_fields": call_payload.get("call_custom_fields", {}),
+                if event_name == "CALL_RETRY":
+                    webhook_payload = {
+                        "event": event_name,
+                        "data": {
+                            "call_id": resolved_call_id,
+                            "called_on": call_state.get("call_initiated_at"),
+                            "call_status": call_status,
+                            "ai_call_id": ctx.job.id,
+                        },
                     }
-                }
+                else:
+                    webhook_payload = {
+                        "event": event_name,
+                        "data": {
+                            "client_id": call_payload.get("lead_id"),
+                            "call_id": resolved_call_id,
+                            "call_status": call_status,
+                            "call_transcript": transcript_data,
+                            "ai_summary": summary_text,
+                            "recording_url": recording_url,
+                            "call_duration_seconds": duration,
+                            "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else None,
+                            "called_on": call_state.get("call_initiated_at") or None,
+                            "ai_call_id": ctx.job.id,
+                            "process_id": call_payload.get("process_id"),
+                            "new_stage_id": new_stage_id,
+                            "metadata": call_payload.get("metadata", {}),
+                            "client_custom_fields": client_custom_fields or {},
+                            "call_custom_fields": call_payload.get("call_custom_fields", {}),
+                        },
+                    }
 
             # 8. Send to MantraAssist backend and save to local DB
             logger.info(f"[DIAG] finalize(): Step 8 — Saving to DB and delivering webhook...")

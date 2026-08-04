@@ -2445,27 +2445,41 @@ async def handle_outbound_call_webhook(request: Request):
             except Exception:
                 pass
 
-        event_name = "CALL_RETRY" if sip_status == "No Answer" else "CALL_DATA_UPDATE"
-        n8n_payload = {
-            "event": event_name,
-            "data": {
-                "client_id": payload.get("lead_id"),
-                "call_id": call_id,
-                "call_status": sip_status,
-                "call_transcript": None,
-                "ai_summary": f"{reason}: {sip_status}",
-                "recording_url": None,
-                "call_duration_seconds": 0,
-                "next_call_on": None,
-                "called_on": payload.get("metadata", {}).get("call_initiated_at"),
-                "ai_call_id": None,
-                "process_id": payload.get("process_id"),
-                "new_stage_id": payload.get("stage_id"),
-                "metadata": payload.get("metadata", {}),
-                "client_custom_fields": payload.get("client_custom_fields", {}),
-                "call_custom_fields": payload.get("call_custom_fields", {}),
-            },
-        }
+        # Match agent retryable statuses so Busy/No Answer are CALL_RETRY (once via send_to_backend dedupe)
+        event_name = (
+            "CALL_RETRY" if sip_status in ("No Answer", "Busy") else "CALL_DATA_UPDATE"
+        )
+        if event_name == "CALL_RETRY":
+            n8n_payload = {
+                "event": event_name,
+                "data": {
+                    "call_id": call_id,
+                    "called_on": payload.get("metadata", {}).get("call_initiated_at"),
+                    "call_status": sip_status,
+                    "ai_call_id": None,
+                },
+            }
+        else:
+            n8n_payload = {
+                "event": event_name,
+                "data": {
+                    "client_id": payload.get("lead_id"),
+                    "call_id": call_id,
+                    "call_status": sip_status,
+                    "call_transcript": None,
+                    "ai_summary": f"{reason}: {sip_status}",
+                    "recording_url": None,
+                    "call_duration_seconds": 0,
+                    "next_call_on": None,
+                    "called_on": payload.get("metadata", {}).get("call_initiated_at"),
+                    "ai_call_id": None,
+                    "process_id": payload.get("process_id"),
+                    "new_stage_id": payload.get("stage_id"),
+                    "metadata": payload.get("metadata", {}),
+                    "client_custom_fields": payload.get("client_custom_fields", {}),
+                    "call_custom_fields": payload.get("call_custom_fields", {}),
+                },
+            }
         delivered = await send_to_backend(n8n_payload)
         logger.info(
             f"Call failure delivered to n8n backend: {sip_status} reason={reason} (success={delivered})"
