@@ -2,6 +2,15 @@
 
 ## 2026-08-04
 
+### Post-Call Webhook Delivery & Finalize Refactoring
+- **fix:** Added `_finalized` single-execution guard in `finalize()` in `mantra/agent.py` to prevent duplicate post-call execution and double-webhook delivery.
+- **fix:** Guarded all `fnc_ctx` and `recorder` accesses in `finalize()` against uninitialized/None states, preventing `AttributeError` / `UnboundLocalError` from terminating finalization early.
+- **fix:** Added 15s timeout on `SessionRecorder.analyze_call` and 10s timeout on `upload_to_s3` in `mantra/agent.py` so slow LLM or S3 requests never block post-call backend delivery.
+- **fix:** Added 12s timeout to `stream.collect()` in `mantra/utils.py` `analyze_call` method.
+- **fix:** Reduced Redis claim TTL in `_claim_backend_delivery` from 3600s (1 hour) to 300s (5 minutes) so failed/interrupted claims don't lock `call_id` retries for an hour.
+- **feat:** Created `scripts/reprocess_unsent_calls.py` to automatically scan PostgreSQL for connected calls that missed backend webhook delivery and re-deliver their payloads.
+- Files: `mantra/agent.py`, `mantra/utils.py`, `scripts/reprocess_unsent_calls.py`
+
 ### Webhook Schema & Inbound Call KB Analysis
 - **fix:** Enhanced `get_process_stage_data_for_kb_ids` in `mantra/knowledge_base.py` to query both `kb_pages` (`page_meta->process_stage_data`) and `kb_collections` fallback (`process_description`, `stage_description`), ensuring KB process/stage structures are always present for inbound call analysis.
 - **fix:** Fixed missing `process_id` in `SessionRecorder.analyze_call` return dictionary in `mantra/utils.py` — previously `analyze_call` dropped `process_id`, causing `derived_process_id` to evaluate to `None` and downstream PDO prepared statement parameter errors.

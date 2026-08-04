@@ -1316,6 +1316,11 @@ Follow these specific instructions:
 
         # 3. Shielded finalization
         async def finalize():
+            if call_state.get("_finalized"):
+                logger.info("[DIAG] finalize(): Call already finalized — skipping duplicate execution")
+                return
+            call_state["_finalized"] = True
+
             recording_url = None
             transcript_data = None
             summary_text = None
@@ -1325,8 +1330,11 @@ Follow these specific instructions:
             next_call_on = None
             current_stage_id = None
             new_stage_id = None
+            derived_process_id = None
             client_custom_fields = {}
             call_payload = {}
+            webhook_payload = {}
+            delivered = False
 
             try:
                 logger.info("[DIAG] finalize(): Starting post-call processing...")
@@ -1337,29 +1345,29 @@ Follow these specific instructions:
                 # 1. Pre-load call metadata
                 logger.info("[DIAG] finalize(): Step 1 — Loading call metadata...")
                 try:
-                    # Use _effective_call_metadata (which includes resolved inbound context)
-                    # as the primary source, fall back to re-parsing raw job metadata
                     if _effective_call_metadata:
                         call_payload = dict(_effective_call_metadata)
                         logger.info(f"[DIAG] finalize(): Using _effective_call_metadata with {len(call_payload)} keys")
                     else:
                         call_payload = (
-                            json.loads(ctx.job.metadata) if ctx.job.metadata else {}
+                            json.loads(ctx.job.metadata) if (ctx.job and ctx.job.metadata) else {}
                         )
                         logger.info(f"[DIAG] finalize(): Parsed raw job metadata with {len(call_payload)} keys")
                 except Exception as e:
                     logger.error(f"[DIAG] finalize(): Failed to parse call metadata: {e}")
-                # For inbound calls, get process_id from the KB document actually used during the call
+
+                # For inbound calls, get process_id from KB document used during call
                 if call_payload.get("direction") == "inbound":
                     try:
-                        used_pids = fnc_ctx.used_kb_process_ids
-                        if used_pids:
-                            call_payload["process_id"] = used_pids[0]
-                            logger.info(f"Using KB-tracked process_id for inbound: {used_pids[0]}")
+                        if fnc_ctx and hasattr(fnc_ctx, "used_kb_process_ids"):
+                            used_pids = fnc_ctx.used_kb_process_ids
+                            if used_pids:
+                                call_payload["process_id"] = used_pids[0]
+                                logger.info(f"Using KB-tracked process_id for inbound: {used_pids[0]}")
                     except Exception as e:
                         logger.error(f"Failed to extract KB usage metadata: {e}")
 
-                # Determine call status based on whether the user joined and actually spoke
+                # Determine call status based on whether user joined and spoke
                 user_spoke = False
                 for msg in history_snapshot:
                     role = msg.role.name if hasattr(msg.role, "name") else str(msg.role)
@@ -1367,11 +1375,10 @@ Follow these specific instructions:
                         user_spoke = True
                         break
 
-                call_id = call_payload.get("call_id") or call_payload.get("voice_id") or ctx.job.id
-                logger.info(f"[DIAG] finalize(): user_joined={call_state['user_joined']} user_spoke={user_spoke} history_size={len(history_snapshot)}")
+                call_id = call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")
+                logger.info(f"[DIAG] finalize(): user_joined={call_state.get('user_joined')} user_spoke={user_spoke} history_size={len(history_snapshot)}")
 
-                if not call_state["user_joined"]:
-                    # Use call_initiated_at to determine how long the call was ringing
+                if not call_state.get("user_joined"):
                     initiated_str = call_state.get("call_initiated_at") or (call_payload.get("metadata", {}) or {}).get("call_initiated_at")
                     ring_time = 0
                     if initiated_str:
@@ -1393,25 +1400,31 @@ Follow these specific instructions:
                     call_status = "Completed"
                 logger.info(f"[DIAG] finalize(): call_status determined as '{call_status}'")
 
-                # 2. Flush recording tasks and build recording
+                # 2. Flush recording tasks and upload to S3 (bounded by 10s timeout)
                 logger.info(f"[DIAG] finalize(): Step 2 — Stopping recording...")
                 try:
-                    await recorder.stop_recording()
-                    logger.info(f"[DIAG] finalize(): Recording stopped. track_count={len(recorder._tracks)}")
-                    mp3_bytes = recorder.get_combined_mp3_bytes()
-                    if mp3_bytes:
-                        logger.info(f"[DIAG] finalize(): Got {len(mp3_bytes)} bytes of MP3 audio, uploading to S3...")
-                        call_id_for_key = (
-                            call_payload.get("call_id")
-                            or call_payload.get("voice_id")
-                            or ctx.job.id
-                        )
-                        s3_key = f"recordings/{call_id_for_key}.mp3"
-                        loop = asyncio.get_running_loop()
-                        recording_url = await loop.run_in_executor(None, upload_to_s3, mp3_bytes, s3_key)
-                        logger.info(f"[DIAG] finalize(): S3 recording: {'uploaded' if recording_url else 'upload failed'}")
-                    else:
-                        logger.info("[DIAG] finalize(): No audio data captured for recording")
+                    if recorder and hasattr(recorder, "stop_recording"):
+                        await recorder.stop_recording()
+                        logger.info(f"[DIAG] finalize(): Recording stopped. track_count={len(getattr(recorder, '_tracks', []))}")
+                        mp3_bytes = recorder.get_combined_mp3_bytes()
+                        if mp3_bytes:
+                            logger.info(f"[DIAG] finalize(): Got {len(mp3_bytes)} bytes of MP3 audio, uploading to S3...")
+                            call_id_for_key = (
+                                call_payload.get("call_id")
+                                or call_payload.get("voice_id")
+                                or (ctx.job.id if ctx.job else "unknown")
+                            )
+                            s3_key = f"recordings/{call_id_for_key}.mp3"
+                            loop = asyncio.get_running_loop()
+                            recording_url = await asyncio.wait_for(
+                                loop.run_in_executor(None, upload_to_s3, mp3_bytes, s3_key),
+                                timeout=10.0
+                            )
+                            logger.info(f"[DIAG] finalize(): S3 recording: {'uploaded' if recording_url else 'upload failed'}")
+                        else:
+                            logger.info("[DIAG] finalize(): No audio data captured for recording")
+                except asyncio.TimeoutError:
+                    logger.warning("[DIAG] finalize(): S3 recording upload timed out after 10s — proceeding without recording_url")
                 except Exception as e:
                     logger.error(f"[DIAG] finalize(): Recording/S3 step failed: {e}", exc_info=True)
 
@@ -1421,21 +1434,23 @@ Follow these specific instructions:
                     transcript_data = SessionRecorder.build_transcript(
                         list(history_snapshot)
                     )
-                    logger.info(f"[DIAG] finalize(): Transcript built ({len(history_snapshot)} messages, {len(transcript_data)} chars)")
+                    logger.info(f"[DIAG] finalize(): Transcript built ({len(history_snapshot)} messages, {len(transcript_data or '')} chars)")
                 except Exception as e:
                     logger.error(f"[DIAG] finalize(): Transcript step failed: {e}", exc_info=True)
 
                 # 4. Calculate duration
-                if hasattr(recorder, "recording_duration_seconds"):
+                if recorder and hasattr(recorder, "recording_duration_seconds"):
                     duration = int(recorder.recording_duration_seconds)
 
-                # 5. Run unified analysis
+                # 5. Run unified analysis (bounded by 15s timeout)
                 current_stage_id = call_payload.get("stage_id")
                 stage_details = call_payload.get("stageDetails", [])
-
-                # Get process_stage_data from KB pages accessed during the call, or query DB for all KB process_stage_data for the org
-                kb_process_stage_data = fnc_ctx.used_process_stage_data if hasattr(fnc_ctx, 'used_process_stage_data') and fnc_ctx.used_process_stage_data else None
-                if not kb_process_stage_data and fnc_ctx.kb_ids:
+                kb_process_stage_data = (
+                    fnc_ctx.used_process_stage_data 
+                    if (fnc_ctx and hasattr(fnc_ctx, 'used_process_stage_data') and fnc_ctx.used_process_stage_data) 
+                    else None
+                )
+                if not kb_process_stage_data and fnc_ctx and hasattr(fnc_ctx, 'kb_ids') and fnc_ctx.kb_ids:
                     try:
                         kb = get_global_kb()
                         kb_process_stage_data = await kb.get_process_stage_data_for_kb_ids(fnc_ctx.kb_ids)
@@ -1446,8 +1461,6 @@ Follow these specific instructions:
 
                 summary_text = None
                 new_stage_id = current_stage_id
-                derived_process_id = None
-                next_call_on = None
                 client_custom_fields = call_payload.get("client_custom_fields", {})
                 if not isinstance(client_custom_fields, dict):
                     client_custom_fields = {}
@@ -1476,14 +1489,17 @@ Follow these specific instructions:
                             logger.info(f"[DIAG] finalize(): Step 5 — Running analyze_call with {len(list(history_snapshot))} messages...")
                             client_country_code = call_payload.get("client_country_code") or call_payload.get("country_code", "")
                             
-                            analysis = await SessionRecorder.analyze_call(
-                                llm_engine=llm_engine,
-                                history=list(history_snapshot),
-                                current_stage_id=current_stage_id,
-                                stage_details=stage_details,
-                                duration=duration,
-                                client_country_code=client_country_code,
-                                process_stage_data=kb_process_stage_data,
+                            analysis = await asyncio.wait_for(
+                                SessionRecorder.analyze_call(
+                                    llm_engine=llm_engine,
+                                    history=list(history_snapshot),
+                                    current_stage_id=current_stage_id,
+                                    stage_details=stage_details,
+                                    duration=duration,
+                                    client_country_code=client_country_code,
+                                    process_stage_data=kb_process_stage_data,
+                                ),
+                                timeout=15.0
                             )
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]
@@ -1493,15 +1509,11 @@ Follow these specific instructions:
                             next_call_on = analysis["next_call_on"]
 
                             if analysis.get("appointment_date_time"):
-                                client_custom_fields["appointment_date_time"] = (
-                                    analysis["appointment_date_time"]
-                                )
+                                client_custom_fields["appointment_date_time"] = analysis["appointment_date_time"]
                             if analysis.get("doctor"):
                                 client_custom_fields["doctor"] = analysis["doctor"]
                             if analysis.get("hospital_location"):
-                                client_custom_fields["hospital_location"] = analysis[
-                                    "hospital_location"
-                                ]
+                                client_custom_fields["hospital_location"] = analysis["hospital_location"]
 
                             logger.info(
                                 f"Analysis completed. Process: {derived_process_id}, New Stage ID: {new_stage_id}, Next Call On: {next_call_on}"
@@ -1510,15 +1522,19 @@ Follow these specific instructions:
                             logger.warning(
                                 "Skipping analysis: LLM or history unavailable after session close"
                             )
+                    except asyncio.TimeoutError:
+                        logger.warning("[DIAG] finalize(): analyze_call timed out after 15s — using fallback summary")
+                        summary_text = "Call completed. Summary timed out during processing."
                     except Exception as e:
                         logger.error(
                             f"Analysis or summary generation failed: {e}", exc_info=True
                         )
+
             except Exception as e:
                 logger.error(f"[DIAG] finalize(): Pipeline error in finalize: {e}", exc_info=True)
 
             # 6. Build webhook payload — separate structures for inbound vs outbound
-            resolved_call_id = call_payload.get("call_id") or call_payload.get("voice_id") or ctx.job.id
+            resolved_call_id = call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")
             direction = call_payload.get("direction")
 
             effective_process_id = _as_int(call_payload.get("process_id") or derived_process_id)
@@ -1541,7 +1557,7 @@ Follow these specific instructions:
                         "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else "",
                         "called_on": call_state.get("call_initiated_at") or "",
                         "meta_data": {
-                            "document_id": str(call_payload.get("call_id") or call_payload.get("voice_id") or ctx.job.id or ""),
+                            "document_id": str(call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")),
                             "provider": (call_payload.get("metadata", {}) or {}).get("provider", ""),
                         },
                     }
@@ -1555,7 +1571,7 @@ Follow these specific instructions:
                             "call_id": resolved_call_id,
                             "called_on": call_state.get("call_initiated_at"),
                             "call_status": call_status,
-                            "ai_call_id": ctx.job.id,
+                            "ai_call_id": ctx.job.id if ctx.job else "",
                         },
                     }
                 else:
@@ -1571,7 +1587,7 @@ Follow these specific instructions:
                             "call_duration_seconds": duration,
                             "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else None,
                             "called_on": call_state.get("call_initiated_at") or None,
-                            "ai_call_id": ctx.job.id,
+                            "ai_call_id": ctx.job.id if ctx.job else "",
                             "process_id": effective_process_id,
                             "stage_id": effective_stage_id,
                             "new_stage_id": effective_stage_id,
@@ -1584,10 +1600,9 @@ Follow these specific instructions:
             # 8. Send to MantraAssist backend and save to local DB
             logger.info(f"[DIAG] finalize(): Step 8 — Saving to DB and delivering webhook...")
             try:
-
                 # Save to local Postgres DB
                 try:
-                    c_id = webhook_payload.get("data", {}).get("call_id", ctx.job.id)
+                    c_id = webhook_payload.get("data", {}).get("call_id", (ctx.job.id if ctx.job else ""))
                     caller_number = call_payload.get("call_from") or ""
                     called_number = call_payload.get("client_phone") or ""
                     call_trunk_id = call_payload.get("call_from_id") or call_payload.get("trunk_id") or ""
@@ -1612,7 +1627,7 @@ Follow these specific instructions:
                 await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if delivered else 'no'}")
 
                 # Log backend delivery event to audit trail
-                backend_cid = resolved_call_id or ctx.job.id
+                backend_cid = resolved_call_id or (ctx.job.id if ctx.job else "")
                 await save_call_event(
                     call_id=str(backend_cid),
                     event_type="backend_sent" if delivered else "backend_failed",
@@ -1626,7 +1641,7 @@ Follow these specific instructions:
                 delivered = False
                 try:
                     await save_call_event(
-                        call_id=str(resolved_call_id or ctx.job.id),
+                        call_id=str(resolved_call_id or (ctx.job.id if ctx.job else "")),
                         event_type="backend_failed",
                         event_source="agent",
                         event_payload={"event": webhook_payload.get("event", "unknown")},
@@ -1641,14 +1656,14 @@ Follow these specific instructions:
 
             logger.info(
                 f"[DIAG] ======== POST-CALL COMPLETE ========\n"
-                f"  Call ID: {ctx.job.id}\n"
+                f"  Call ID: {ctx.job.id if ctx.job else 'N/A'}\n"
                 f"  Lead: {webhook_payload.get('data', {}).get('client_id', 'N/A')}\n"
                 f"  Status: {webhook_payload.get('data', {}).get('call_status', 'N/A')}\n"
                 f"  Duration: {duration}s\n"
                 f"  S3: {'✓' if recording_url else '✗'}\n"
                 f"  Backend: {'✓' if delivered else '✗'}\n"
                 f"  TOS: {'✓' if tos_sent else '✗'}\n"
-                f"  Transcript length: {len(transcript_data) if transcript_data else 0} chars\n"
+                f"  Transcript length: {len(transcript_data or '')} chars\n"
                 f"  Summary: {summary_text[:200] if summary_text else 'None'}"
             )
 

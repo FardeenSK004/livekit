@@ -305,6 +305,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
         """Fetch process_stage_data arrays from all KB pages associated with the given kb_ids, or build from kb_collections."""
         if not kb_ids:
             return []
+        str_kb_ids = [str(k) for k in kb_ids]
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -313,7 +314,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
                 WHERE (kb_id = ANY($1::text[]) OR page_meta->>'org_id' = ANY($1::text[])) 
                   AND (page_meta->'process_stage_data' IS NOT NULL OR page_meta->>'process_stage_data' IS NOT NULL)
                 """,
-                kb_ids,
+                str_kb_ids,
             )
             seen_ids = set()
             result = []
@@ -335,14 +336,14 @@ class PostgresKnowledgeBase(KnowledgeBase):
                                     result.append(entry)
 
             if not result:
-                cols = await conn.fetch(
-                    "SELECT id, org_id, document_id, name, process_description, stage_description FROM kb_collections WHERE org_id = ANY($1::text[])",
-                    kb_ids,
-                )
-                for c in cols:
-                    proc_desc = c["process_description"]
-                    stage_desc = c["stage_description"]
-                    if proc_desc or stage_desc:
+                try:
+                    cols = await conn.fetch(
+                        "SELECT id, org_id, document_id, name FROM kb_collections WHERE org_id = ANY($1::text[])",
+                        str_kb_ids,
+                    )
+                    for c in cols:
+                        proc_desc = c.get("process_description", "") if hasattr(c, "get") else ""
+                        stage_desc = c.get("stage_description", "") if hasattr(c, "get") else ""
                         result.append({
                             "id": c["document_id"],
                             "name": c["name"] or "Process",
@@ -355,6 +356,8 @@ class PostgresKnowledgeBase(KnowledgeBase):
                                 }
                             ]
                         })
+                except Exception:
+                    pass
 
             return result
 

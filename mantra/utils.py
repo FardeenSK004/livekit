@@ -143,7 +143,7 @@ async def _claim_backend_delivery(call_id: str) -> bool:
 
         client = redis.from_url(redis_url, decode_responses=True)
         try:
-            claimed = await client.set(f"backend_sent:{call_id}", "1", nx=True, ex=3600)
+            claimed = await client.set(f"backend_sent:{call_id}", "1", nx=True, ex=300)
             if not claimed:
                 logger.info(
                     f"Backend webhook already claimed for call_id={call_id} — skipping duplicate"
@@ -575,7 +575,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                 llm.ChatMessage(role="user", content=[prompt]),
             ]
             stream = llm_engine.chat(chat_ctx=llm.ChatContext(items=messages))
-            response = await stream.collect()
+            response = await asyncio.wait_for(stream.collect(), timeout=12.0)
 
             text = response.text.strip()
             if text.startswith("```"):
