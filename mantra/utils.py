@@ -589,6 +589,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             res_dict = json.loads(text)
 
             summary = res_dict.get("summary") or ""
+            process_id = res_dict.get("process_id")
             new_stage_id = res_dict.get("new_stage_id")
             next_call_on = res_dict.get("next_call_on")
             appointment_date_time = res_dict.get("appointment_date_time")
@@ -596,13 +597,40 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             hospital_location = res_dict.get("hospital_location")
             sentiment_score = res_dict.get("sentiment_score", 0.5)
 
+            if process_id is not None:
+                try:
+                    process_id = int(process_id)
+                except (ValueError, TypeError):
+                    process_id = None
+            if process_id is None and process_stage_data and len(process_stage_data) > 0:
+                first_proc = process_stage_data[0]
+                if isinstance(first_proc, dict) and "id" in first_proc:
+                    try:
+                        process_id = int(first_proc["id"])
+                    except (ValueError, TypeError):
+                        pass
+
             if new_stage_id is not None:
                 try:
                     new_stage_id = int(new_stage_id)
-                except ValueError:
+                except (ValueError, TypeError):
                     new_stage_id = fallback_stage_id
             else:
                 new_stage_id = fallback_stage_id
+
+            if new_stage_id is None and process_stage_data and len(process_stage_data) > 0:
+                first_proc = process_stage_data[0]
+                if isinstance(first_proc, dict):
+                    stages = first_proc.get("stages", [])
+                    if isinstance(stages, list) and len(stages) > 0:
+                        first_stage = stages[0]
+                        if isinstance(first_stage, dict):
+                            sid = first_stage.get("stage_id") or first_stage.get("id")
+                            if sid is not None:
+                                try:
+                                    new_stage_id = int(sid)
+                                except (ValueError, TypeError):
+                                    pass
 
             if not summary:
                 summary = await SessionRecorder.generate_summary(llm_engine, history)
@@ -613,6 +641,21 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             )
             summary = await SessionRecorder.generate_summary(llm_engine, history)
             new_stage_id = fallback_stage_id
+            process_id = None
+            if process_stage_data and len(process_stage_data) > 0:
+                first_proc = process_stage_data[0]
+                if isinstance(first_proc, dict):
+                    if "id" in first_proc:
+                        try: process_id = int(first_proc["id"])
+                        except (ValueError, TypeError): pass
+                    if new_stage_id is None:
+                        stages = first_proc.get("stages", [])
+                        if isinstance(stages, list) and len(stages) > 0 and isinstance(stages[0], dict):
+                            sid = stages[0].get("stage_id") or stages[0].get("id")
+                            if sid is not None:
+                                try: new_stage_id = int(sid)
+                                except (ValueError, TypeError): pass
+
             next_call_on = None
             appointment_date_time = ""
             doctor = ""
@@ -626,6 +669,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
 
         return {
             "summary": summary,
+            "process_id": process_id,
             "new_stage_id": new_stage_id,
             "next_call_on": next_call_on,
             "appointment_date_time": appointment_date_time,

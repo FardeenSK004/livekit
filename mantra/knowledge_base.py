@@ -301,6 +301,63 @@ class PostgresKnowledgeBase(KnowledgeBase):
                 kb_ids.append(org_id)
             return kb_ids
 
+    async def get_process_stage_data_for_kb_ids(self, kb_ids: list[str]) -> list:
+        """Fetch process_stage_data arrays from all KB pages associated with the given kb_ids, or build from kb_collections."""
+        if not kb_ids:
+            return []
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT page_meta FROM kb_pages 
+                WHERE (kb_id = ANY($1::text[]) OR page_meta->>'org_id' = ANY($1::text[])) 
+                  AND (page_meta->'process_stage_data' IS NOT NULL OR page_meta->>'process_stage_data' IS NOT NULL)
+                """,
+                kb_ids,
+            )
+            seen_ids = set()
+            result = []
+            for r in rows:
+                meta = json.loads(r["page_meta"]) if isinstance(r["page_meta"], str) else r["page_meta"]
+                if isinstance(meta, dict):
+                    psd = meta.get("process_stage_data")
+                    if isinstance(psd, str):
+                        try:
+                            psd = json.loads(psd)
+                        except Exception:
+                            pass
+                    if isinstance(psd, list):
+                        for entry in psd:
+                            if isinstance(entry, dict):
+                                pid = entry.get("id")
+                                if pid is not None and pid not in seen_ids:
+                                    seen_ids.add(pid)
+                                    result.append(entry)
+
+            if not result:
+                cols = await conn.fetch(
+                    "SELECT id, org_id, document_id, name, process_description, stage_description FROM kb_collections WHERE org_id = ANY($1::text[])",
+                    kb_ids,
+                )
+                for c in cols:
+                    proc_desc = c["process_description"]
+                    stage_desc = c["stage_description"]
+                    if proc_desc or stage_desc:
+                        result.append({
+                            "id": c["document_id"],
+                            "name": c["name"] or "Process",
+                            "description": proc_desc or "",
+                            "stages": [
+                                {
+                                    "stage_id": c["document_id"],
+                                    "name": c["name"] or "Stage",
+                                    "description": stage_desc or "",
+                                }
+                            ]
+                        })
+
+            return result
+
     async def close(self):
         if self._pool:
             await self._pool.close()

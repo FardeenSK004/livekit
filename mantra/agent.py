@@ -569,6 +569,7 @@ async def entrypoint(ctx: JobContext):
                 phone_number = meta_payload.get("phone_number", "")
                 logger.info(f"[DIAG] Inbound call detected — phone_number={phone_number}")
                 if phone_number:
+                    call_state["caller_phone_number"] = phone_number
                     resolved_context = await resolve_inbound_context(phone_number)
                     if resolved_context:
                         meta_payload.update(resolved_context)
@@ -1432,8 +1433,16 @@ Follow these specific instructions:
                 current_stage_id = call_payload.get("stage_id")
                 stage_details = call_payload.get("stageDetails", [])
 
-                # Get process_stage_data from KB pages accessed during the call
-                kb_process_stage_data = fnc_ctx.used_process_stage_data if hasattr(fnc_ctx, 'used_process_stage_data') else None
+                # Get process_stage_data from KB pages accessed during the call, or query DB for all KB process_stage_data for the org
+                kb_process_stage_data = fnc_ctx.used_process_stage_data if hasattr(fnc_ctx, 'used_process_stage_data') and fnc_ctx.used_process_stage_data else None
+                if not kb_process_stage_data and fnc_ctx.kb_ids:
+                    try:
+                        kb = get_global_kb()
+                        kb_process_stage_data = await kb.get_process_stage_data_for_kb_ids(fnc_ctx.kb_ids)
+                        if kb_process_stage_data:
+                            logger.info(f"Loaded {len(kb_process_stage_data)} process_stage_data entries from DB for KB ids: {fnc_ctx.kb_ids}")
+                    except Exception as e:
+                        logger.error(f"Failed to fetch fallback KB process_stage_data from DB: {e}")
 
                 summary_text = None
                 new_stage_id = current_stage_id
@@ -1479,6 +1488,8 @@ Follow these specific instructions:
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]
                             derived_process_id = analysis.get("process_id")
+                            if derived_process_id and not call_payload.get("process_id"):
+                                call_payload["process_id"] = derived_process_id
                             next_call_on = analysis["next_call_on"]
 
                             if analysis.get("appointment_date_time"):
@@ -1510,18 +1521,22 @@ Follow these specific instructions:
             resolved_call_id = call_payload.get("call_id") or call_payload.get("voice_id") or ctx.job.id
             direction = call_payload.get("direction")
 
+            effective_process_id = _as_int(call_payload.get("process_id") or derived_process_id)
+            effective_stage_id = _as_int(new_stage_id if new_stage_id is not None else current_stage_id)
+
             if direction == "inbound":
                 webhook_payload = {
                     "event": "CALL_DATA_INBOUND_UPDATE",
                     "data": {
                         "org_id": _as_int(call_payload.get("org_id")),
                         "call_recording": recording_url or "",
-                        "process_id": _as_int(call_payload.get("process_id")),
-                        "new_stage_id": _as_int(new_stage_id),
+                        "process_id": effective_process_id,
+                        "stage_id": effective_stage_id,
+                        "new_stage_id": effective_stage_id,
                         "client_name": call_payload.get("client_name") or "",
                         "client_email": call_payload.get("client_email") or "",
                         "client_phone_number": call_state.get("caller_phone_number") or "",
-                        "call_duration_seconds": duration,
+                        "call_duration": duration,
                         "call_transcript": transcript_data or "",
                         "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else "",
                         "called_on": call_state.get("call_initiated_at") or "",
@@ -1557,8 +1572,9 @@ Follow these specific instructions:
                             "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else None,
                             "called_on": call_state.get("call_initiated_at") or None,
                             "ai_call_id": ctx.job.id,
-                            "process_id": call_payload.get("process_id"),
-                            "new_stage_id": new_stage_id,
+                            "process_id": effective_process_id,
+                            "stage_id": effective_stage_id,
+                            "new_stage_id": effective_stage_id,
                             "metadata": call_payload.get("metadata", {}),
                             "client_custom_fields": client_custom_fields or {},
                             "call_custom_fields": call_payload.get("call_custom_fields", {}),

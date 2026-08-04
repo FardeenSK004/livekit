@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-08-04
+
+### Webhook Schema & Inbound Call KB Analysis
+- **fix:** Enhanced `get_process_stage_data_for_kb_ids` in `mantra/knowledge_base.py` to query both `kb_pages` (`page_meta->process_stage_data`) and `kb_collections` fallback (`process_description`, `stage_description`), ensuring KB process/stage structures are always present for inbound call analysis.
+- **fix:** Fixed missing `process_id` in `SessionRecorder.analyze_call` return dictionary in `mantra/utils.py` — previously `analyze_call` dropped `process_id`, causing `derived_process_id` to evaluate to `None` and downstream PDO prepared statement parameter errors.
+- **fix:** Added automatic fallback extraction for `process_id` and `stage_id` from `process_stage_data` in `analyze_call` when LLM returns null or fails to parse.
+- **fix:** Inbound calls perform full KB analysis using `SessionRecorder.analyze_call` on conversation history against `process_stage_data` (sourced from accessed KB pages or queried directly from `kb_pages` / `kb_collections` in DB by `kb_ids`).
+- **fix:** The derived `process_id` and `stage_id` / `new_stage_id` are populated in the standard `CALL_DATA_INBOUND_UPDATE` payload and sent to the n8n backend webhook without altering the payload schema.
+- Files: `mantra/agent.py`, `mantra/utils.py`, `mantra/knowledge_base.py`
+
 ## 2026-08-03
 
 ### Trunk-Based Call Capacity Gating
