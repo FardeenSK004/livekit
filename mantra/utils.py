@@ -70,6 +70,67 @@ async def save_call_log_to_db(
             await conn.close()
 
 
+async def save_call_event(
+    call_id: str,
+    event_type: str,
+    event_source: str,
+    event_payload: dict,
+    event_status: str = "success",
+    event_error: str = "",
+    event_log: str = "",
+):
+    """Save a single call-lifecycle event to the call_events audit table.
+
+    event_type examples:
+      webhook_received, dispatch_created, sip_initiated, sip_connected,
+      sip_failed, entrypoint_started, backend_sent, backend_failed
+
+    event_source: 'ui_server' | 'agent'
+    """
+    db_user = os.getenv("POSTGRES_USER")
+    db_password = os.getenv("POSTGRES_PASSWORD")
+    db_name = os.getenv("POSTGRES_DB")
+    db_host = os.getenv("POSTGRES_HOST")
+    db_port = os.getenv("POSTGRES_PORT")
+
+    if not all([db_user, db_password, db_name, db_host, db_port]):
+        return
+
+    conn = None
+    try:
+        conn = await asyncpg.connect(
+            user=db_user,
+            password=db_password,
+            database=db_name,
+            host=db_host,
+            port=db_port,
+            timeout=3.0,
+        )
+        await conn.execute(
+            """
+            INSERT INTO call_events (call_id, event_type, event_source, event_payload, event_log, event_status, event_error)
+            VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+            ON CONFLICT (call_id, event_type) DO UPDATE
+            SET event_payload = EXCLUDED.event_payload,
+                event_log     = EXCLUDED.event_log,
+                event_status  = EXCLUDED.event_status,
+                event_error   = EXCLUDED.event_error;
+            """,
+            str(call_id),
+            event_type,
+            event_source,
+            json.dumps(event_payload, default=str),
+            str(event_log or "")[:8000],
+            event_status,
+            event_error or "",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to save call event {event_type}/{call_id}: {e}")
+    finally:
+        if conn:
+            await conn.close()
+
+
 async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
     """POST the post-call payload to the MantraAssist backend with HMAC signing."""
     base_url = os.getenv("MANTRAASSIST_BACKEND_URL", "").rstrip("/")

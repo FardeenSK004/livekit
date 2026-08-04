@@ -52,7 +52,7 @@ from livekit.agents import TurnHandlingOptions
 
 from livekit.plugins import openai, google, silero, deepgram
 
-from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_to_iso8601, save_call_log_to_db, report_telemetry
+from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_to_iso8601, save_call_log_to_db, save_call_event, report_telemetry
 
 # Import knowledge base
 from mantra.knowledge_base import PostgresKnowledgeBase
@@ -541,6 +541,15 @@ async def entrypoint(ctx: JobContext):
     await _telemetry("agent_started", f"room={ctx.room.name}")
     await ctx.connect()
     await _telemetry("room_connected", f"room={ctx.room.name}")
+
+    # Log entrypoint_started event to audit trail
+    create_bg_task(save_call_event(
+        call_id=str(call_id),
+        event_type="entrypoint_started",
+        event_source="agent",
+        event_payload={"room": ctx.room.name, "job_id": ctx.job.id},
+        event_log=f"room={ctx.room.name} job_id={ctx.job.id}",
+    ))
 
     logger.info(f"--- Starting agent session ---")
     logger.info(f"Room: {ctx.room.name}")
@@ -1574,9 +1583,32 @@ Follow these specific instructions:
                 tos_sent = True
                 logger.info(f"[DIAG] finalize(): Webhook delivery result: {'success' if delivered else 'failed'}")
                 await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if delivered else 'no'}")
+
+                # Log backend delivery event to audit trail
+                backend_cid = resolved_call_id or ctx.job.id
+                await save_call_event(
+                    call_id=str(backend_cid),
+                    event_type="backend_sent" if delivered else "backend_failed",
+                    event_source="agent",
+                    event_payload={k: v for k, v in webhook_payload.items() if k != "prompt"},
+                    event_status="success" if delivered else "failed",
+                    event_log=f"status={call_status} duration={duration}s {'delivered' if delivered else 'failed'}",
+                )
             except Exception as e:
                 logger.error(f"[DIAG] finalize(): Webhook delivery failed: {e}", exc_info=True)
                 delivered = False
+                try:
+                    await save_call_event(
+                        call_id=str(resolved_call_id or ctx.job.id),
+                        event_type="backend_failed",
+                        event_source="agent",
+                        event_payload={"event": webhook_payload.get("event", "unknown")},
+                        event_status="failed",
+                        event_error=str(e)[:500],
+                        event_log=f"status={call_status} error={str(e)[:200]}",
+                    )
+                except Exception:
+                    pass
 
             await _telemetry(f"call_complete — status={call_status}, duration={duration}s")
 
