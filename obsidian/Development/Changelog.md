@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-05
+
+### Standard-String Timestamps for `next_call_on`
+- **fix:** Renamed `normalize_to_iso8601` → `normalize_datetime` in `mantra/utils.py`. It now returns `next_call_on` as a standard server-local time string (`YYYY-MM-DD HH:MM:SSZ`, `Z` suffix appended) instead of ISO-8601 (`YYYY-MM-DDTHH:MM:SS`).
+- **fix:** `analyze_call` LLM prompt in `mantra/utils.py` no longer hardcodes IST — `next_call_on` / `appointment_date_time` are now instructed to be emitted in the server's local time (`YYYY-MM-DD HH:MM:SS`), matching the `datetime.now()`-based `current_time_str`.
+- **fix:** Updated `mantra/agent.py` import and both `CALL_DATA_INBOUND_UPDATE` / `CALL_DATA_UPDATE` webhook payloads to use the renamed helper, so `next_call_on` is delivered as a plain string in server-local time.
+- Files: `mantra/utils.py`, `mantra/agent.py`
+
 ## 2026-08-04
 
 ### Post-Call Webhook Delivery & Finalize Refactoring

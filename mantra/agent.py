@@ -52,7 +52,7 @@ from livekit.agents import TurnHandlingOptions
 
 from livekit.plugins import openai, google, silero, deepgram
 
-from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_to_iso8601, save_call_log_to_db, save_call_event, report_telemetry
+from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_datetime, save_call_log_to_db, save_call_event, report_telemetry
 
 # Import knowledge base
 from mantra.knowledge_base import PostgresKnowledgeBase
@@ -1554,7 +1554,7 @@ Follow these specific instructions:
                         "client_phone_number": call_state.get("caller_phone_number") or "",
                         "call_duration": duration,
                         "call_transcript": transcript_data or "",
-                        "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else "",
+                        "next_call_on": normalize_datetime(next_call_on) if next_call_on else "",
                         "called_on": call_state.get("call_initiated_at") or "",
                         "meta_data": {
                             "document_id": str(call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")),
@@ -1585,7 +1585,7 @@ Follow these specific instructions:
                             "ai_summary": summary_text,
                             "recording_url": recording_url,
                             "call_duration_seconds": duration,
-                            "next_call_on": normalize_to_iso8601(next_call_on) if next_call_on else None,
+                            "next_call_on": normalize_datetime(next_call_on) if next_call_on else None,
                             "called_on": call_state.get("call_initiated_at") or None,
                             "ai_call_id": ctx.job.id if ctx.job else "",
                             "process_id": effective_process_id,
