@@ -43,6 +43,7 @@ async def _run(conn: asyncpg.Connection):
     logger.info(f"[{MIGRATION_ID}] Creating call_events table...")
     await conn.execute(CREATE_TABLE_SQL)
     await conn.execute(CREATE_INDEX_SQL)
+    await conn.execute("SELECT setval(pg_get_serial_sequence('call_events', 'id'), COALESCE(MAX(id), 1)) FROM call_events;")
     logger.info(f"[{MIGRATION_ID}] call_events table ready.")
 
 

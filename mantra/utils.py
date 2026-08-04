@@ -106,24 +106,50 @@ async def save_call_event(
             port=db_port,
             timeout=3.0,
         )
-        await conn.execute(
-            """
-            INSERT INTO call_events (call_id, event_type, event_source, event_payload, event_log, event_status, event_error)
-            VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
-            ON CONFLICT (call_id, event_type) DO UPDATE
-            SET event_payload = EXCLUDED.event_payload,
-                event_log     = EXCLUDED.event_log,
-                event_status  = EXCLUDED.event_status,
-                event_error   = EXCLUDED.event_error;
-            """,
-            str(call_id),
-            event_type,
-            event_source,
-            json.dumps(event_payload, default=str),
-            str(event_log or "")[:8000],
-            event_status,
-            event_error or "",
-        )
+        try:
+            await conn.execute(
+                """
+                INSERT INTO call_events (call_id, event_type, event_source, event_payload, event_log, event_status, event_error)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+                ON CONFLICT (call_id, event_type) DO UPDATE
+                SET event_payload = EXCLUDED.event_payload,
+                    event_log     = EXCLUDED.event_log,
+                    event_status  = EXCLUDED.event_status,
+                    event_error   = EXCLUDED.event_error;
+                """,
+                str(call_id),
+                event_type,
+                event_source,
+                json.dumps(event_payload, default=str),
+                str(event_log or "")[:8000],
+                event_status,
+                event_error or "",
+            )
+        except asyncpg.UniqueViolationError as uve:
+            if "call_events_pkey" in str(uve):
+                logger.info(f"Detected out-of-sync PostgreSQL sequence for call_events (key={uve}), repairing sequence...")
+                await conn.execute("SELECT setval(pg_get_serial_sequence('call_events', 'id'), COALESCE(MAX(id), 1)) FROM call_events;")
+                # Retry after sequence sync
+                await conn.execute(
+                    """
+                    INSERT INTO call_events (call_id, event_type, event_source, event_payload, event_log, event_status, event_error)
+                    VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+                    ON CONFLICT (call_id, event_type) DO UPDATE
+                    SET event_payload = EXCLUDED.event_payload,
+                        event_log     = EXCLUDED.event_log,
+                        event_status  = EXCLUDED.event_status,
+                        event_error   = EXCLUDED.event_error;
+                    """,
+                    str(call_id),
+                    event_type,
+                    event_source,
+                    json.dumps(event_payload, default=str),
+                    str(event_log or "")[:8000],
+                    event_status,
+                    event_error or "",
+                )
+            else:
+                raise
     except Exception as e:
         logger.warning(f"Failed to save call event {event_type}/{call_id}: {e}")
     finally:
