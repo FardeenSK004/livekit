@@ -37,7 +37,7 @@ async def _get_conn():
 
 
 ORPHAN_QUERY = """
-SELECT e.call_id, e.created_at AS entrypoint_at
+SELECT e.call_id, e.created_at AS entrypoint_at, e.ai_call_id
 FROM call_events e
 WHERE e.event_type = 'entrypoint_started'
   AND e.created_at < NOW() - ($1 || ' minutes')::interval
@@ -73,7 +73,7 @@ WHERE call_id = $1;
 """
 
 
-async def _reconstruct_payload(conn, call_id: str):
+async def _reconstruct_payload(conn, call_id: str, entrypoint_ai_call_id=""):
     """Best available payload for this call_id, in order of preference."""
     row = await conn.fetchrow(LATEST_FAILED_QUERY, call_id)
     if row and row["event_payload"]:
@@ -98,12 +98,13 @@ async def _reconstruct_payload(conn, call_id: str):
 
     # No trace of a built payload anywhere — minimal retry signal so the lead
     # isn't stuck with no record of the attempt at all.
+
     return {
         "event": "CALL_RETRY",
         "data": {
             "call_id": call_id,
             "call_status": "Failed",
-            "ai_call_id": None,
+            "ai_call_id": entrypoint_ai_call_id,
         },
     }
 
@@ -118,7 +119,7 @@ async def reconcile_once():
 
         for row in orphans:
             call_id = str(row["call_id"])
-            payload = await _reconstruct_payload(conn, call_id)
+            payload = await _reconstruct_payload(conn, call_id, row.get("ai_call_id", ""))
 
             logger.info(f"Reconciling call_id={call_id} — event={payload.get('event')}")
             try:

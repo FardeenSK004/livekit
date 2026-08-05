@@ -549,6 +549,7 @@ async def entrypoint(ctx: JobContext):
         event_source="agent",
         event_payload={"room": ctx.room.name, "job_id": ctx.job.id},
         event_log=f"room={ctx.room.name} job_id={ctx.job.id}",
+        ai_call_id=ctx.job.id if ctx.job else "",
     ))
 
     logger.info(f"--- Starting agent session ---")
@@ -1441,6 +1442,7 @@ Follow these specific instructions:
                         caller_number=caller_number,
                         called_number=called_number,
                         trunk_id=call_trunk_id,
+                        ai_call_id=ctx.job.id if ctx.job else "",
                     )
                 except Exception as db_err:
                     logger.error(f"[DIAG] finalize(): {event_type} — Error calling save_call_log_to_db: {db_err}")
@@ -1454,6 +1456,7 @@ Follow these specific instructions:
                         event_status="success" if delivered else "failed",
                         event_error=str(error)[:500] if error else "",
                         event_log=f"status={call_status} duration={duration}s {'delivered' if delivered else 'failed'}",
+                        ai_call_id=ctx.job.id if ctx.job else "",
                     )
                 except Exception:
                     pass
