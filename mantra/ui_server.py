@@ -293,7 +293,16 @@ async def lifespan(app: FastAPI):
             logger.error(f"Startup zombie room cleanup failed: {e}")
     # ────────────────────────────────────────────────────────────────
 
+    # Start background webhook worker
+    webhook_task = asyncio.create_task(process_pending_webhooks())
+
     yield
+    
+    webhook_task.cancel()
+    try:
+        await webhook_task
+    except asyncio.CancelledError:
+        pass
 
     for client in [lk_client, plivo_client, voicelink_client]:
         if client:
