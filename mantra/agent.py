@@ -1583,11 +1583,9 @@ Follow these specific instructions:
 
                 effective_process_id = _as_int(call_payload.get("process_id"))
 
-                # 5. Assemble + send the BASELINE webhook now, before any network
-                # calls that could eat the 15s budget. This is the delivery that
-                # must not be lost — everything after this point is enrichment.
-                logger.info("[DIAG] finalize(): Step 5 — Sending baseline webhook (pre-S3, pre-analysis)...")
-                webhook_payload, resolved_call_id = _assemble_webhook_payload(
+                # Checkpoint BEFORE any network calls (S3/LLM). This row (call_logs, upserted by call_id) is
+                # what the reconciliation job reconstructs from if delivery never completes at all.
+                checkpoint_payload, resolved_call_id = _assemble_webhook_payload(
                     call_status=call_status,
                     transcript_data=transcript_data,
                     summary_text=summary_text,
@@ -1601,41 +1599,14 @@ Follow these specific instructions:
                     effective_process_id=effective_process_id,
                     derived_process_id=derived_process_id,
                 )
-                # Checkpoint FIRST — durable even if the process is killed mid-POST
-                # a few lines down. This row (call_logs, upserted by call_id) is
-                # what the reconciliation job reconstructs from if delivery never
-                # completes at all.
                 await _persist_and_log(
-                    webhook_payload, resolved_call_id,
+                    checkpoint_payload, resolved_call_id,
                     event_type="finalize_checkpoint",
                     delivered=False,
                 )
-                try:
-                    # Single fast attempt — no multi-retry backoff here. A slow
-                    # or retried baseline send is exactly what starves the
-                    # enrichment phase of time and risks the SDK kill hitting
-                    # mid-POST anyway. If this attempt fails, the reconciliation
-                    # job retries it later with no time pressure.
-                    delivered = await send_to_backend(webhook_payload, max_retries=1, timeout_seconds=6.0)
-                    tos_sent = True
-                    logger.info(f"[DIAG] finalize(): Baseline webhook delivery result: {'success' if delivered else 'failed'}")
-                    await _telemetry(f"data_sent_to_backend_baseline — status={call_status}, delivered={'yes' if delivered else 'no'}")
-                except Exception as e:
-                    logger.error(f"[DIAG] finalize(): Baseline webhook delivery failed: {e}", exc_info=True)
-                    delivered = False
-                await _persist_and_log(
-                    webhook_payload, resolved_call_id,
-                    event_type="backend_sent" if delivered else "backend_failed",
-                    delivered=delivered,
-                )
 
-                # 6. Best-effort enrichment: S3 upload + AI analysis, each tightly
-                # bounded. If both/either finish before the SDK's 15s window
-                # closes, send a follow-up update with the recording URL and/or
-                # AI-derived summary/stage. If not, the baseline above already
-                # covers the call — nothing downstream is lost.
                 if mp3_bytes:
-                    logger.info(f"[DIAG] finalize(): Step 6 — Uploading {len(mp3_bytes)} bytes to S3...")
+                    logger.info(f"[DIAG] finalize(): Uploading {len(mp3_bytes)} bytes to S3...")
                     try:
                         call_id_for_key = (
                             call_payload.get("call_id")
@@ -1646,11 +1617,11 @@ Follow these specific instructions:
                         loop = asyncio.get_running_loop()
                         recording_url = await asyncio.wait_for(
                             loop.run_in_executor(None, upload_to_s3, mp3_bytes, s3_key),
-                            timeout=5.0
+                            timeout=10.0
                         )
                         logger.info(f"[DIAG] finalize(): S3 recording: {'uploaded' if recording_url else 'upload failed'}")
                     except asyncio.TimeoutError:
-                        logger.warning("[DIAG] finalize(): S3 upload timed out after 5s — enrichment will skip recording_url")
+                        logger.warning("[DIAG] finalize(): S3 upload timed out after 10s")
                     except Exception as e:
                         logger.error(f"[DIAG] finalize(): S3 upload failed: {e}", exc_info=True)
 
@@ -1686,7 +1657,7 @@ Follow these specific instructions:
                                     client_country_code=client_country_code,
                                     process_stage_data=kb_process_stage_data,
                                 ),
-                                timeout=6.0
+                                timeout=20.0
                             )
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]
@@ -1710,45 +1681,43 @@ Follow these specific instructions:
                         else:
                             logger.warning("Skipping analysis: LLM or history unavailable after session close")
                     except asyncio.TimeoutError:
-                        logger.warning("[DIAG] finalize(): analyze_call timed out after 6s — baseline summary stands")
+                        logger.warning("[DIAG] finalize(): analyze_call timed out after 20s — fallback summary stands")
                     except Exception as e:
                         logger.error(f"Analysis or summary generation failed: {e}", exc_info=True)
 
-                # 7. Enrichment webhook — only if we actually have something new
-                # to add (recording landed, or AI analysis improved on the
-                # fallback). Bypasses the delivery-claim dedupe since the
-                # baseline send already holds it for this call_id.
-                if recording_url or analysis_ran:
-                    logger.info("[DIAG] finalize(): Step 8 — Sending enrichment webhook...")
-                    enrich_payload, _ = _assemble_webhook_payload(
-                        call_status=call_status,
-                        transcript_data=transcript_data,
-                        summary_text=summary_text,
-                        recording_url=recording_url,
-                        duration=duration,
-                        next_call_on=next_call_on,
-                        new_stage_id=new_stage_id,
-                        current_stage_id=current_stage_id,
-                        client_custom_fields=client_custom_fields,
-                        call_payload=call_payload,
-                        effective_process_id=effective_process_id,
-                        derived_process_id=derived_process_id,
+                # Final webhook delivery with fully populated data
+                logger.info("[DIAG] finalize(): Sending final webhook...")
+                final_payload, _ = _assemble_webhook_payload(
+                    call_status=call_status,
+                    transcript_data=transcript_data,
+                    summary_text=summary_text,
+                    recording_url=recording_url,
+                    duration=duration,
+                    next_call_on=next_call_on,
+                    new_stage_id=new_stage_id,
+                    current_stage_id=current_stage_id,
+                    client_custom_fields=client_custom_fields,
+                    call_payload=call_payload,
+                    effective_process_id=effective_process_id,
+                    derived_process_id=derived_process_id,
+                )
+                final_delivered = False
+                try:
+                    final_delivered = await send_to_backend(
+                        final_payload, max_retries=3, timeout_seconds=30.0, skip_claim=False
                     )
-                    enrich_delivered = False
-                    try:
-                        enrich_delivered = await send_to_backend(
-                            enrich_payload, max_retries=1, timeout_seconds=5.0, skip_claim=True
-                        )
-                        await _telemetry(f"data_sent_to_backend_enriched — status={call_status}, delivered={'yes' if enrich_delivered else 'no'}")
-                    except Exception as e:
-                        logger.error(f"[DIAG] finalize(): Enrichment webhook delivery failed: {e}", exc_info=True)
-                    await _persist_and_log(
-                        enrich_payload, resolved_call_id,
-                        event_type="backend_enriched" if enrich_delivered else "backend_enrich_failed",
-                        delivered=enrich_delivered,
-                    )
-                    webhook_payload = enrich_payload
-                    delivered = enrich_delivered or delivered
+                    await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if final_delivered else 'no'}")
+                except Exception as e:
+                    logger.error(f"[DIAG] finalize(): Webhook delivery failed: {e}", exc_info=True)
+                
+                await _persist_and_log(
+                    final_payload, resolved_call_id,
+                    event_type="backend_sent" if final_delivered else "backend_failed",
+                    delivered=final_delivered,
+                )
+                webhook_payload = final_payload
+                delivered = final_delivered
+                tos_sent = True
 
             except Exception as e:
                 logger.error(f"[DIAG] finalize(): Pipeline error in finalize: {e}", exc_info=True)
