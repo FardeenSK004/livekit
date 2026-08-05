@@ -172,13 +172,17 @@ async def get_db_connection():
 async def process_pending_webhooks():
     """Background worker to reliably deliver webhooks offloaded by the agent."""
     import redis.asyncio as redis
+    from redis.exceptions import TimeoutError as RedisTimeoutError, ConnectionError as RedisConnectionError
+
     redis_url = os.getenv("REDIS_URL")
     if not redis_url:
         logger.warning("No REDIS_URL configured; webhook worker will not start.")
         return
 
     logger.info("Starting background webhook worker...")
-    client = redis.from_url(redis_url, decode_responses=True)
+    
+    # Configure connection with a socket timeout slightly larger than blpop timeout to prevent socket hanging
+    client = redis.from_url(redis_url, decode_responses=True, socket_timeout=10, health_check_interval=30)
     
     while True:
         try:
@@ -202,6 +206,12 @@ async def process_pending_webhooks():
         except asyncio.CancelledError:
             logger.info("Webhook worker cancelled. Shutting down.")
             break
+        except (RedisTimeoutError, TimeoutError):
+            # Normal timeout when there are no new messages and the socket gets dropped or hits timeout limit
+            continue
+        except RedisConnectionError as e:
+            logger.warning(f"Redis connection error in webhook worker: {e}. Reconnecting in 5s...")
+            await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"Redis error in webhook worker: {e}. Retrying in 5s...")
             await asyncio.sleep(5)
