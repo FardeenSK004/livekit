@@ -24,6 +24,7 @@ from fastapi import HTTPException, File, UploadFile, Form
 from prometheus_fastapi_instrumentator import Instrumentator
 from mantra.email_alerts import send_crash_email
 from mantra.utils import save_call_log_to_db, save_call_event, report_telemetry, send_to_backend
+from mantra.reconcile_orphaned_calls import run_forever
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from livekit import api
@@ -253,9 +254,17 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Startup zombie cleanup: deleted {zombie_count} empty rooms")
         except Exception as e:
             logger.error(f"Startup zombie room cleanup failed: {e}")
-    # ────────────────────────────────────────────────────────────────
+
+    reconciliation_task = asyncio.create_task(run_forever(interval_seconds=300))
+
 
     yield
+
+    reconciliation_task.cancel()
+    try:
+        await reconciliation_task
+    except asyncio.CancelledError:
+        pass
 
     for client in [lk_client, plivo_client, voicelink_client]:
         if client:

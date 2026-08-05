@@ -1335,6 +1335,128 @@ Follow these specific instructions:
             call_payload = {}
             webhook_payload = {}
             delivered = False
+            mp3_bytes = None
+
+            def _assemble_webhook_payload(
+                *,
+                call_status,
+                transcript_data,
+                summary_text,
+                recording_url,
+                duration,
+                next_call_on,
+                new_stage_id,
+                current_stage_id,
+                client_custom_fields,
+                call_payload,
+                effective_process_id,
+                derived_process_id,
+            ):
+                """Build the outbound webhook payload. Pulled out so both the
+                fast baseline send and the later enrichment send build the exact
+                same shape from whatever data is available at that point."""
+                resolved_call_id = (
+                    call_payload.get("call_id")
+                    or call_payload.get("voice_id")
+                    or (ctx.job.id if ctx.job else "")
+                )
+                direction = call_payload.get("direction")
+                effective_stage_id = _as_int(
+                    new_stage_id if new_stage_id is not None else current_stage_id
+                )
+
+                if direction == "inbound":
+                    payload = {
+                        "event": "CALL_DATA_INBOUND_UPDATE",
+                        "data": {
+                            "org_id": _as_int(call_payload.get("org_id")),
+                            "call_recording": recording_url or "",
+                            "process_id": effective_process_id,
+                            "stage_id": effective_stage_id,
+                            "new_stage_id": effective_stage_id,
+                            "client_name": call_payload.get("client_name") or "",
+                            "client_email": call_payload.get("client_email") or "",
+                            "client_phone_number": call_state.get("caller_phone_number") or "",
+                            "call_duration": duration,
+                            "call_transcript": transcript_data or "",
+                            "next_call_on": normalize_datetime(next_call_on) if next_call_on else "",
+                            "called_on": call_state.get("call_initiated_at") or "",
+                            "meta_data": {
+                                "document_id": str(resolved_call_id),
+                                "provider": (call_payload.get("metadata", {}) or {}).get("provider", ""),
+                            },
+                        },
+                    }
+                else:
+                    event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Failed"] else "CALL_DATA_UPDATE"
+                    if event_name == "CALL_RETRY":
+                        payload = {
+                            "event": event_name,
+                            "data": {
+                                "call_id": resolved_call_id,
+                                "called_on": call_state.get("call_initiated_at"),
+                                "call_status": call_status,
+                                "ai_call_id": ctx.job.id if ctx.job else "",
+                            },
+                        }
+                    else:
+                        payload = {
+                            "event": event_name,
+                            "data": {
+                                "client_id": call_payload.get("lead_id"),
+                                "call_id": resolved_call_id,
+                                "call_status": call_status,
+                                "call_transcript": transcript_data,
+                                "ai_summary": summary_text,
+                                "recording_url": recording_url,
+                                "call_duration_seconds": duration,
+                                "next_call_on": normalize_datetime(next_call_on) if next_call_on else None,
+                                "called_on": call_state.get("call_initiated_at") or None,
+                                "ai_call_id": ctx.job.id if ctx.job else "",
+                                "process_id": effective_process_id,
+                                "stage_id": effective_stage_id,
+                                "new_stage_id": effective_stage_id,
+                                "metadata": call_payload.get("metadata", {}),
+                                "client_custom_fields": client_custom_fields or {},
+                                "call_custom_fields": call_payload.get("call_custom_fields", {}),
+                            },
+                        }
+                return payload, resolved_call_id
+
+            async def _persist_and_log(webhook_payload, resolved_call_id, *, event_type, delivered, error=None):
+                """Upsert call_logs (idempotent by call_id) and write the
+                call_events audit row. Safe to call twice (baseline + enrichment)
+                — call_logs is ON CONFLICT DO UPDATE, call_events dedupes by
+                (call_id, event_type) so use distinct event_type per phase."""
+                try:
+                    c_id = webhook_payload.get("data", {}).get("call_id", (ctx.job.id if ctx.job else ""))
+                    caller_number = call_payload.get("call_from") or ""
+                    called_number = call_payload.get("client_phone") or ""
+                    call_trunk_id = call_payload.get("call_from_id") or call_payload.get("trunk_id") or ""
+                    await save_call_log_to_db(
+                        call_id=str(c_id),
+                        call_log=json.dumps(webhook_payload.get("data", {}), indent=2),
+                        status=call_status,
+                        recording_url=recording_url,
+                        caller_number=caller_number,
+                        called_number=called_number,
+                        trunk_id=call_trunk_id,
+                    )
+                except Exception as db_err:
+                    logger.error(f"[DIAG] finalize(): {event_type} — Error calling save_call_log_to_db: {db_err}")
+
+                try:
+                    await save_call_event(
+                        call_id=str(resolved_call_id or (ctx.job.id if ctx.job else "")),
+                        event_type=event_type,
+                        event_source="agent",
+                        event_payload={k: v for k, v in webhook_payload.items() if k != "prompt"},
+                        event_status="success" if delivered else "failed",
+                        event_error=str(error)[:500] if error else "",
+                        event_log=f"status={call_status} duration={duration}s {'delivered' if delivered else 'failed'}",
+                    )
+                except Exception:
+                    pass
 
             try:
                 logger.info("[DIAG] finalize(): Starting post-call processing...")
@@ -1400,33 +1522,22 @@ Follow these specific instructions:
                     call_status = "Completed"
                 logger.info(f"[DIAG] finalize(): call_status determined as '{call_status}'")
 
-                # 2. Flush recording tasks and upload to S3 (bounded by 10s timeout)
-                logger.info(f"[DIAG] finalize(): Step 2 — Stopping recording...")
+                # 2. Stop recording — fast, local, no network call. Get the mp3
+                # bytes and duration into memory now; the S3 upload (the slow,
+                # network-bound part) is deferred to the best-effort phase below,
+                # AFTER the baseline webhook has already gone out.
+                logger.info("[DIAG] finalize(): Step 2 — Stopping recording...")
                 try:
                     if recorder and hasattr(recorder, "stop_recording"):
                         await recorder.stop_recording()
                         logger.info(f"[DIAG] finalize(): Recording stopped. track_count={len(getattr(recorder, '_tracks', []))}")
                         mp3_bytes = recorder.get_combined_mp3_bytes()
-                        if mp3_bytes:
-                            logger.info(f"[DIAG] finalize(): Got {len(mp3_bytes)} bytes of MP3 audio, uploading to S3...")
-                            call_id_for_key = (
-                                call_payload.get("call_id")
-                                or call_payload.get("voice_id")
-                                or (ctx.job.id if ctx.job else "unknown")
-                            )
-                            s3_key = f"recordings/{call_id_for_key}.mp3"
-                            loop = asyncio.get_running_loop()
-                            recording_url = await asyncio.wait_for(
-                                loop.run_in_executor(None, upload_to_s3, mp3_bytes, s3_key),
-                                timeout=10.0
-                            )
-                            logger.info(f"[DIAG] finalize(): S3 recording: {'uploaded' if recording_url else 'upload failed'}")
-                        else:
+                        if not mp3_bytes:
                             logger.info("[DIAG] finalize(): No audio data captured for recording")
-                except asyncio.TimeoutError:
-                    logger.warning("[DIAG] finalize(): S3 recording upload timed out after 10s — proceeding without recording_url")
+                    if recorder and hasattr(recorder, "recording_duration_seconds"):
+                        duration = int(recorder.recording_duration_seconds)
                 except Exception as e:
-                    logger.error(f"[DIAG] finalize(): Recording/S3 step failed: {e}", exc_info=True)
+                    logger.error(f"[DIAG] finalize(): Recording stop step failed: {e}", exc_info=True)
 
                 # 3. Build transcript from captured history snapshot
                 logger.info(f"[DIAG] finalize(): Step 3 — Building transcript from {len(history_snapshot)} messages...")
@@ -1438,37 +1549,18 @@ Follow these specific instructions:
                 except Exception as e:
                     logger.error(f"[DIAG] finalize(): Transcript step failed: {e}", exc_info=True)
 
-                # 4. Calculate duration
-                if recorder and hasattr(recorder, "recording_duration_seconds"):
-                    duration = int(recorder.recording_duration_seconds)
-
-                # 5. Run unified analysis (bounded by 15s timeout)
+                # 4. Fast, rule-based fallback summary/stage — no LLM call.
+                # This is what ships in the baseline webhook. analyze_call() may
+                # improve on it later (Step 7, best-effort); if it doesn't get to
+                # run, this is what the backend keeps.
                 current_stage_id = call_payload.get("stage_id")
                 stage_details = call_payload.get("stageDetails", [])
-                kb_process_stage_data = (
-                    fnc_ctx.used_process_stage_data 
-                    if (fnc_ctx and hasattr(fnc_ctx, 'used_process_stage_data') and fnc_ctx.used_process_stage_data) 
-                    else None
-                )
-                if not kb_process_stage_data and fnc_ctx and hasattr(fnc_ctx, 'kb_ids') and fnc_ctx.kb_ids:
-                    try:
-                        kb = get_global_kb()
-                        kb_process_stage_data = await kb.get_process_stage_data_for_kb_ids(fnc_ctx.kb_ids)
-                        if kb_process_stage_data:
-                            logger.info(f"Loaded {len(kb_process_stage_data)} process_stage_data entries from DB for KB ids: {fnc_ctx.kb_ids}")
-                    except Exception as e:
-                        logger.error(f"Failed to fetch fallback KB process_stage_data from DB: {e}")
-
-                summary_text = None
                 new_stage_id = current_stage_id
                 client_custom_fields = call_payload.get("client_custom_fields", {})
                 if not isinstance(client_custom_fields, dict):
                     client_custom_fields = {}
 
                 if call_status in ["Busy", "Incomplete", "No Answer"]:
-                    logger.info(
-                        f"[DIAG] finalize(): Call status is {call_status}. Skipping LLM analysis."
-                    )
                     summary_text = f"Call failed with status: {call_status}. The user did not speak or answer."
                     duration = 0
                     not_answering_id = current_stage_id
@@ -1484,11 +1576,103 @@ Follow these specific instructions:
                             break
                     new_stage_id = not_answering_id
                 else:
+                    summary_text = "Call completed. Detailed AI summary pending."
+
+                effective_process_id = _as_int(call_payload.get("process_id"))
+
+                # 5. Assemble + send the BASELINE webhook now, before any network
+                # calls that could eat the 15s budget. This is the delivery that
+                # must not be lost — everything after this point is enrichment.
+                logger.info("[DIAG] finalize(): Step 5 — Sending baseline webhook (pre-S3, pre-analysis)...")
+                webhook_payload, resolved_call_id = _assemble_webhook_payload(
+                    call_status=call_status,
+                    transcript_data=transcript_data,
+                    summary_text=summary_text,
+                    recording_url=None,
+                    duration=duration,
+                    next_call_on=next_call_on,
+                    new_stage_id=new_stage_id,
+                    current_stage_id=current_stage_id,
+                    client_custom_fields=client_custom_fields,
+                    call_payload=call_payload,
+                    effective_process_id=effective_process_id,
+                    derived_process_id=derived_process_id,
+                )
+                # Checkpoint FIRST — durable even if the process is killed mid-POST
+                # a few lines down. This row (call_logs, upserted by call_id) is
+                # what the reconciliation job reconstructs from if delivery never
+                # completes at all.
+                await _persist_and_log(
+                    webhook_payload, resolved_call_id,
+                    event_type="finalize_checkpoint",
+                    delivered=False,
+                )
+                try:
+                    # Single fast attempt — no multi-retry backoff here. A slow
+                    # or retried baseline send is exactly what starves the
+                    # enrichment phase of time and risks the SDK kill hitting
+                    # mid-POST anyway. If this attempt fails, the reconciliation
+                    # job retries it later with no time pressure.
+                    delivered = await send_to_backend(webhook_payload, max_retries=1, timeout_seconds=6.0)
+                    tos_sent = True
+                    logger.info(f"[DIAG] finalize(): Baseline webhook delivery result: {'success' if delivered else 'failed'}")
+                    await _telemetry(f"data_sent_to_backend_baseline — status={call_status}, delivered={'yes' if delivered else 'no'}")
+                except Exception as e:
+                    logger.error(f"[DIAG] finalize(): Baseline webhook delivery failed: {e}", exc_info=True)
+                    delivered = False
+                await _persist_and_log(
+                    webhook_payload, resolved_call_id,
+                    event_type="backend_sent" if delivered else "backend_failed",
+                    delivered=delivered,
+                )
+
+                # 6. Best-effort enrichment: S3 upload + AI analysis, each tightly
+                # bounded. If both/either finish before the SDK's 15s window
+                # closes, send a follow-up update with the recording URL and/or
+                # AI-derived summary/stage. If not, the baseline above already
+                # covers the call — nothing downstream is lost.
+                if mp3_bytes:
+                    logger.info(f"[DIAG] finalize(): Step 6 — Uploading {len(mp3_bytes)} bytes to S3...")
+                    try:
+                        call_id_for_key = (
+                            call_payload.get("call_id")
+                            or call_payload.get("voice_id")
+                            or (ctx.job.id if ctx.job else "unknown")
+                        )
+                        s3_key = f"recordings/{call_id_for_key}.mp3"
+                        loop = asyncio.get_running_loop()
+                        recording_url = await asyncio.wait_for(
+                            loop.run_in_executor(None, upload_to_s3, mp3_bytes, s3_key),
+                            timeout=5.0
+                        )
+                        logger.info(f"[DIAG] finalize(): S3 recording: {'uploaded' if recording_url else 'upload failed'}")
+                    except asyncio.TimeoutError:
+                        logger.warning("[DIAG] finalize(): S3 upload timed out after 5s — enrichment will skip recording_url")
+                    except Exception as e:
+                        logger.error(f"[DIAG] finalize(): S3 upload failed: {e}", exc_info=True)
+
+                kb_process_stage_data = (
+                    fnc_ctx.used_process_stage_data
+                    if (fnc_ctx and hasattr(fnc_ctx, 'used_process_stage_data') and fnc_ctx.used_process_stage_data)
+                    else None
+                )
+                if not kb_process_stage_data and fnc_ctx and hasattr(fnc_ctx, 'kb_ids') and fnc_ctx.kb_ids:
+                    try:
+                        kb = get_global_kb()
+                        kb_ids_str = [str(k) for k in fnc_ctx.kb_ids]
+                        kb_process_stage_data = await kb.get_process_stage_data_for_kb_ids(kb_ids_str)
+                        if kb_process_stage_data:
+                            logger.info(f"Loaded {len(kb_process_stage_data)} process_stage_data entries from DB for KB ids: {kb_ids_str}")
+                    except Exception as e:
+                        logger.error(f"Failed to fetch fallback KB process_stage_data from DB: {e}")
+
+                analysis_ran = False
+                if call_status not in ["Busy", "Incomplete", "No Answer"]:
                     try:
                         if llm_engine and history_snapshot:
-                            logger.info(f"[DIAG] finalize(): Step 5 — Running analyze_call with {len(list(history_snapshot))} messages...")
+                            logger.info(f"[DIAG] finalize(): Step 7 — Running analyze_call with {len(list(history_snapshot))} messages...")
                             client_country_code = call_payload.get("client_country_code") or call_payload.get("country_code", "")
-                            
+
                             analysis = await asyncio.wait_for(
                                 SessionRecorder.analyze_call(
                                     llm_engine=llm_engine,
@@ -1499,13 +1683,14 @@ Follow these specific instructions:
                                     client_country_code=client_country_code,
                                     process_stage_data=kb_process_stage_data,
                                 ),
-                                timeout=15.0
+                                timeout=6.0
                             )
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]
                             derived_process_id = analysis.get("process_id")
                             if derived_process_id and not call_payload.get("process_id"):
                                 call_payload["process_id"] = derived_process_id
+                                effective_process_id = _as_int(derived_process_id)
                             next_call_on = analysis["next_call_on"]
 
                             if analysis.get("appointment_date_time"):
@@ -1515,142 +1700,55 @@ Follow these specific instructions:
                             if analysis.get("hospital_location"):
                                 client_custom_fields["hospital_location"] = analysis["hospital_location"]
 
+                            analysis_ran = True
                             logger.info(
                                 f"Analysis completed. Process: {derived_process_id}, New Stage ID: {new_stage_id}, Next Call On: {next_call_on}"
                             )
                         else:
-                            logger.warning(
-                                "Skipping analysis: LLM or history unavailable after session close"
-                            )
+                            logger.warning("Skipping analysis: LLM or history unavailable after session close")
                     except asyncio.TimeoutError:
-                        logger.warning("[DIAG] finalize(): analyze_call timed out after 15s — using fallback summary")
-                        summary_text = "Call completed. Summary timed out during processing."
+                        logger.warning("[DIAG] finalize(): analyze_call timed out after 6s — baseline summary stands")
                     except Exception as e:
-                        logger.error(
-                            f"Analysis or summary generation failed: {e}", exc_info=True
+                        logger.error(f"Analysis or summary generation failed: {e}", exc_info=True)
+
+                # 7. Enrichment webhook — only if we actually have something new
+                # to add (recording landed, or AI analysis improved on the
+                # fallback). Bypasses the delivery-claim dedupe since the
+                # baseline send already holds it for this call_id.
+                if recording_url or analysis_ran:
+                    logger.info("[DIAG] finalize(): Step 8 — Sending enrichment webhook...")
+                    enrich_payload, _ = _assemble_webhook_payload(
+                        call_status=call_status,
+                        transcript_data=transcript_data,
+                        summary_text=summary_text,
+                        recording_url=recording_url,
+                        duration=duration,
+                        next_call_on=next_call_on,
+                        new_stage_id=new_stage_id,
+                        current_stage_id=current_stage_id,
+                        client_custom_fields=client_custom_fields,
+                        call_payload=call_payload,
+                        effective_process_id=effective_process_id,
+                        derived_process_id=derived_process_id,
+                    )
+                    enrich_delivered = False
+                    try:
+                        enrich_delivered = await send_to_backend(
+                            enrich_payload, max_retries=1, timeout_seconds=5.0, skip_claim=True
                         )
+                        await _telemetry(f"data_sent_to_backend_enriched — status={call_status}, delivered={'yes' if enrich_delivered else 'no'}")
+                    except Exception as e:
+                        logger.error(f"[DIAG] finalize(): Enrichment webhook delivery failed: {e}", exc_info=True)
+                    await _persist_and_log(
+                        enrich_payload, resolved_call_id,
+                        event_type="backend_enriched" if enrich_delivered else "backend_enrich_failed",
+                        delivered=enrich_delivered,
+                    )
+                    webhook_payload = enrich_payload
+                    delivered = enrich_delivered or delivered
 
             except Exception as e:
                 logger.error(f"[DIAG] finalize(): Pipeline error in finalize: {e}", exc_info=True)
-
-            # 6. Build webhook payload — separate structures for inbound vs outbound
-            resolved_call_id = call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")
-            direction = call_payload.get("direction")
-
-            effective_process_id = _as_int(call_payload.get("process_id") or derived_process_id)
-            effective_stage_id = _as_int(new_stage_id if new_stage_id is not None else current_stage_id)
-
-            if direction == "inbound":
-                webhook_payload = {
-                    "event": "CALL_DATA_INBOUND_UPDATE",
-                    "data": {
-                        "org_id": _as_int(call_payload.get("org_id")),
-                        "call_recording": recording_url or "",
-                        "process_id": effective_process_id,
-                        "stage_id": effective_stage_id,
-                        "new_stage_id": effective_stage_id,
-                        "client_name": call_payload.get("client_name") or "",
-                        "client_email": call_payload.get("client_email") or "",
-                        "client_phone_number": call_state.get("caller_phone_number") or "",
-                        "call_duration": duration,
-                        "call_transcript": transcript_data or "",
-                        "next_call_on": normalize_datetime(next_call_on) if next_call_on else "",
-                        "called_on": call_state.get("call_initiated_at") or "",
-                        "meta_data": {
-                            "document_id": str(call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")),
-                            "provider": (call_payload.get("metadata", {}) or {}).get("provider", ""),
-                        },
-                    }
-                }
-            else:
-                event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Failed"] else "CALL_DATA_UPDATE"
-                if event_name == "CALL_RETRY":
-                    webhook_payload = {
-                        "event": event_name,
-                        "data": {
-                            "call_id": resolved_call_id,
-                            "called_on": call_state.get("call_initiated_at"),
-                            "call_status": call_status,
-                            "ai_call_id": ctx.job.id if ctx.job else "",
-                        },
-                    }
-                else:
-                    webhook_payload = {
-                        "event": event_name,
-                        "data": {
-                            "client_id": call_payload.get("lead_id"),
-                            "call_id": resolved_call_id,
-                            "call_status": call_status,
-                            "call_transcript": transcript_data,
-                            "ai_summary": summary_text,
-                            "recording_url": recording_url,
-                            "call_duration_seconds": duration,
-                            "next_call_on": normalize_datetime(next_call_on) if next_call_on else None,
-                            "called_on": call_state.get("call_initiated_at") or None,
-                            "ai_call_id": ctx.job.id if ctx.job else "",
-                            "process_id": effective_process_id,
-                            "stage_id": effective_stage_id,
-                            "new_stage_id": effective_stage_id,
-                            "metadata": call_payload.get("metadata", {}),
-                            "client_custom_fields": client_custom_fields or {},
-                            "call_custom_fields": call_payload.get("call_custom_fields", {}),
-                        },
-                    }
-
-            # 8. Send to MantraAssist backend and save to local DB
-            logger.info(f"[DIAG] finalize(): Step 8 — Saving to DB and delivering webhook...")
-            try:
-                # Save to local Postgres DB
-                try:
-                    c_id = webhook_payload.get("data", {}).get("call_id", (ctx.job.id if ctx.job else ""))
-                    caller_number = call_payload.get("call_from") or ""
-                    called_number = call_payload.get("client_phone") or ""
-                    call_trunk_id = call_payload.get("call_from_id") or call_payload.get("trunk_id") or ""
-                    await save_call_log_to_db(
-                        call_id=str(c_id),
-                        call_log=json.dumps(webhook_payload.get("data", {}), indent=2),
-                        status=call_status,
-                        recording_url=recording_url,
-                        caller_number=caller_number,
-                        called_number=called_number,
-                        trunk_id=call_trunk_id,
-                    )
-                    logger.info(f"[DIAG] finalize(): Call log saved to DB for call_id={c_id}")
-                except Exception as db_err:
-                    logger.error(f"[DIAG] finalize(): Error calling save_call_log_to_db: {db_err}")
-
-                logger.info("[DIAG] finalize(): Delivering post-call webhook to backend...")
-                logger.info(f"[DIAG] finalize(): Webhook Payload keys: {list(webhook_payload.keys())}")
-                delivered = await send_to_backend(webhook_payload)
-                tos_sent = True
-                logger.info(f"[DIAG] finalize(): Webhook delivery result: {'success' if delivered else 'failed'}")
-                await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if delivered else 'no'}")
-
-                # Log backend delivery event to audit trail
-                backend_cid = resolved_call_id or (ctx.job.id if ctx.job else "")
-                await save_call_event(
-                    call_id=str(backend_cid),
-                    event_type="backend_sent" if delivered else "backend_failed",
-                    event_source="agent",
-                    event_payload={k: v for k, v in webhook_payload.items() if k != "prompt"},
-                    event_status="success" if delivered else "failed",
-                    event_log=f"status={call_status} duration={duration}s {'delivered' if delivered else 'failed'}",
-                )
-            except Exception as e:
-                logger.error(f"[DIAG] finalize(): Webhook delivery failed: {e}", exc_info=True)
-                delivered = False
-                try:
-                    await save_call_event(
-                        call_id=str(resolved_call_id or (ctx.job.id if ctx.job else "")),
-                        event_type="backend_failed",
-                        event_source="agent",
-                        event_payload={"event": webhook_payload.get("event", "unknown")},
-                        event_status="failed",
-                        event_error=str(e)[:500],
-                        event_log=f"status={call_status} error={str(e)[:200]}",
-                    )
-                except Exception:
-                    pass
 
             await _telemetry(f"call_complete — status={call_status}, duration={duration}s")
 

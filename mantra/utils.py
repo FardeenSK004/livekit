@@ -201,10 +201,27 @@ async def _release_backend_delivery(call_id: str) -> None:
         logger.warning(f"backend delivery release failed for call_id={call_id}: {e}")
 
 
-async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
+async def send_to_backend(
+    payload: dict,
+    max_retries: int = 3,
+    timeout_seconds: float = 30.0,
+    skip_claim: bool = False,
+) -> bool:
     """POST the post-call payload to the MantraAssist backend with HMAC signing.
 
     Dedupes by call_id via Redis SET NX so only one of ui_server/agent delivers.
+
+    timeout_seconds / max_retries: callers on a hard wall-clock budget (agent.py's
+    finalize(), which must complete inside LiveKit's fixed 15s job-shutdown window)
+    should pass a short timeout and max_retries=1 — a slow/retried attempt here is
+    exactly what causes finalize() to get force-cancelled before delivery. Callers
+    with no such deadline (ui_server webhook handler, reconciliation job) can keep
+    the resilient defaults.
+
+    skip_claim: set True for a follow-up "enrichment" send for a call_id whose
+    baseline delivery already claimed and holds the Redis dedupe key — a second
+    claim attempt for the same call_id would otherwise short-circuit and skip
+    the send entirely.
     """
     base_url = os.getenv("MANTRAASSIST_BACKEND_URL", "").rstrip("/")
     webhook_secret = os.getenv("MANTRAASSIST_WEBHOOK_SECRET", "")
@@ -221,7 +238,7 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
     except Exception:
         call_id = ""
 
-    if not await _claim_backend_delivery(call_id):
+    if not skip_claim and not await _claim_backend_delivery(call_id):
         return True  # already delivered (or in-flight) by the other path
 
     url = f"{base_url}/api/v1/webhooks/n8n"
@@ -258,7 +275,7 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
 
     for attempt in range(1, max_retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
                 resp = await client.post(url, content=payload_str, headers=headers)
                 resp.raise_for_status()
                 logger.info(
@@ -269,9 +286,10 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
             logger.error(f"Backend webhook attempt {attempt}/{max_retries} failed: {e}")
 
         if attempt < max_retries:
-            await asyncio.sleep(2 ** (attempt - 1))
+            await asyncio.sleep(min(2 ** (attempt - 1), timeout_seconds))
 
-    await _release_backend_delivery(call_id)
+    if not skip_claim:
+        await _release_backend_delivery(call_id)
     return False
 
 
@@ -548,7 +566,7 @@ The call conversation relates to one of these processes. Analyze the transcript 
 You are an expert analyst for a care support and CRM system. Analyze the phone call transcript and metadata below.
 
 --- CALL METADATA ---
-Current Date and Time (Server Local Time): {current_time_str}
+Current Date and Time (Server Time - IST): {current_time_str}
 Call Duration: {duration} seconds
 Current Stage ID: {current_stage_id}
 Client Country Code: {client_country_code}
@@ -571,9 +589,9 @@ Client Country Code: {client_country_code}
    - If the patient is not interested or declined, select the stage for "not interested" or the specific declining reason stage.
    - If none of the stages match or the call did not change the state, default to the current stage ID: {current_stage_id}.
 3. Extract additional metadata:
-   - CRITICAL TIMEZONE INSTRUCTION: If the client discusses times (e.g., 'tomorrow at 3 PM'), interpret them in the client's local timezone based on their Client Country Code '{client_country_code}'. HOWEVER, you MUST convert the final output times for `next_call_on` and `appointment_date_time` into the server's local time in 'YYYY-MM-DD HH:MM:SS' format (matching {current_time_str}, which is the server's current local time).
-   - `next_call_on`: If a follow-up or callback is scheduled/needed, calculate the exact date and time in the server's local timezone (e.g., "2026-06-02 15:00:00"). If the stage description specifies adding 24 hours to the current time, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
-   - `appointment_date_time`: If the patient booked/confirmed an appointment, extract the date/time and convert to the server's local timezone (e.g., "2026-06-05 11:30:00"). Otherwise, use null.
+   - CRITICAL TIMEZONE INSTRUCTION: If the client discusses times (e.g., 'tomorrow at 3 PM'), interpret them in the client's local timezone based on their Client Country Code '{client_country_code}'. HOWEVER, you MUST convert the final output times for `next_call_on` and `appointment_date_time` into Indian Standard Time (IST, UTC+5:30) in 'YYYY-MM-DD HH:MM:SS' format.
+   - `next_call_on`: If a follow-up or callback is scheduled/needed, calculate the exact date and time in IST (e.g., "2026-06-02 15:00:00"). If the stage description specifies adding 24 hours to the current time, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
+   - `appointment_date_time`: If the patient booked/confirmed an appointment, extract the date/time and convert to IST (e.g., "2026-06-05 11:30:00"). Otherwise, use null.
    - `doctor`: Extract any mentioned doctor's name. Otherwise, use null.
    - `hospital_location`: Extract the preferred hospital location/center name. Otherwise, use null.
    - `sentiment_score`: Rate the user's sentiment from 0.0 (very negative/angry) to 1.0 (very positive/happy), with 0.5 as neutral.
@@ -781,7 +799,7 @@ async def report_telemetry(
 
 
 def normalize_datetime(dt_str: Optional[str]) -> Optional[str]:
-    """Normalize 'YYYY-MM-DD HH:MM:SS' to a standard local time string 'YYYY-MM-DD HH:MM:SSZ'.
+    """Normalize 'YYYY-MM-DD HH:MM:SS' to a standard server-local time string 'YYYY-MM-DD HH:MM:SSZ'.
 
     Returns None if input is None/empty. Passes through unparseable strings unchanged.
     """
