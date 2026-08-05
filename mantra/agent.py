@@ -1620,12 +1620,25 @@ Follow these specific instructions:
                 except Exception as db_err:
                     logger.error(f"[DIAG] finalize(): Error calling save_call_log_to_db: {db_err}")
 
-                logger.info("[DIAG] finalize(): Delivering post-call webhook to backend...")
-                logger.info(f"[DIAG] finalize(): Webhook Payload keys: {list(webhook_payload.keys())}")
-                delivered = await send_to_backend(webhook_payload)
+                logger.info("[DIAG] finalize(): Queueing webhook to UI Server via Redis...")
+                try:
+                    import redis.asyncio as redis
+                    redis_url = os.getenv("REDIS_URL")
+                    if redis_url:
+                        client = redis.from_url(redis_url, decode_responses=True)
+                        await client.rpush("mantra:pending_webhooks", json.dumps(webhook_payload))
+                        await client.aclose()
+                        delivered = True
+                        logger.info(f"[DIAG] finalize(): Webhook queued to UI Server successfully (call_id={c_id})")
+                    else:
+                        logger.warning("[DIAG] finalize(): REDIS_URL not set. Falling back to synchronous HTTP delivery.")
+                        delivered = await send_to_backend(webhook_payload)
+                except Exception as e:
+                    logger.error(f"[DIAG] finalize(): Redis queueing failed, falling back to HTTP: {e}")
+                    delivered = await send_to_backend(webhook_payload)
+
                 tos_sent = True
-                logger.info(f"[DIAG] finalize(): Webhook delivery result: {'success' if delivered else 'failed'}")
-                await _telemetry(f"data_sent_to_backend — status={call_status}, delivered={'yes' if delivered else 'no'}")
+                await _telemetry(f"data_sent_to_backend — status={call_status}, queued_to_redis={'yes' if delivered else 'no'}")
 
                 # Log backend delivery event to audit trail
                 backend_cid = resolved_call_id or (ctx.job.id if ctx.job else "")

@@ -169,6 +169,44 @@ async def get_db_connection():
         )
 
 
+async def process_pending_webhooks():
+    """Background worker to reliably deliver webhooks offloaded by the agent."""
+    import redis.asyncio as redis
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        logger.warning("No REDIS_URL configured; webhook worker will not start.")
+        return
+
+    logger.info("Starting background webhook worker...")
+    client = redis.from_url(redis_url, decode_responses=True)
+    
+    while True:
+        try:
+            # blpop blocks for up to 5 seconds waiting for a payload
+            result = await client.blpop("mantra:pending_webhooks", timeout=5)
+            if result:
+                _, payload_bytes = result
+                try:
+                    payload = json.loads(payload_bytes)
+                    call_id = payload.get("data", {}).get("call_id", "unknown")
+                    logger.info(f"Dequeued webhook for call {call_id}. Delivering to backend...")
+                    delivered = await send_to_backend(payload)
+                    if delivered:
+                        logger.info(f"Successfully delivered offloaded webhook for call {call_id}.")
+                    else:
+                        logger.warning(f"Webhook delivery for call {call_id} failed, but claim was processed.")
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode webhook payload from Redis queue.")
+                except Exception as ex:
+                    logger.error(f"Error processing queued webhook: {ex}", exc_info=True)
+        except asyncio.CancelledError:
+            logger.info("Webhook worker cancelled. Shutting down.")
+            break
+        except Exception as e:
+            logger.error(f"Redis error in webhook worker: {e}. Retrying in 5s...")
+            await asyncio.sleep(5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global lk_client, plivo_client, plivo_session, voicelink_client, voicelink_session, redis_client, http_client
