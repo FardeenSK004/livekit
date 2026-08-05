@@ -81,7 +81,7 @@ load_dotenv(
 AGENT_NAME = os.getenv("AGENT_NAME", "mantra-agent")
 logger.info(f"Agent name configured as: {AGENT_NAME}")
 
-server = AgentServer(num_idle_processes=20)
+server = AgentServer(num_idle_processes=20, shutdown_process_timeout=120.0)
 
 # --- Transfer/Handoff Configuration ---
 TRANSFER_NUMBERS = {}
@@ -1274,6 +1274,7 @@ Follow these specific instructions:
 
     except asyncio.CancelledError:
         logger.info("[DIAG] Call entrypoint coroutine cancelled.")
+        raise
     except Exception as e:
         logger.error(f"[DIAG] Error in entrypoint execution: {e}", exc_info=True)
         context_data = {
@@ -1499,7 +1500,7 @@ Follow these specific instructions:
                                     client_country_code=client_country_code,
                                     process_stage_data=kb_process_stage_data,
                                 ),
-                                timeout=15.0
+                                timeout=30.0
                             )
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]
@@ -1523,7 +1524,7 @@ Follow these specific instructions:
                                 "Skipping analysis: LLM or history unavailable after session close"
                             )
                     except asyncio.TimeoutError:
-                        logger.warning("[DIAG] finalize(): analyze_call timed out after 15s — using fallback summary")
+                        logger.warning("[DIAG] finalize(): analyze_call timed out after 30s — using fallback summary")
                         summary_text = "Call completed. Summary timed out during processing."
                     except Exception as e:
                         logger.error(
