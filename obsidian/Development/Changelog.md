@@ -2,6 +2,13 @@
 
 ## 2026-08-06
 
+### Call Retry Redis Deduplication Lock & DB Persistence
+- **fix:** Resolved duplicate suppression bug where retrying a call within 5-10 minutes of a previous attempt logged `"delivered"` but skipped sending HTTP POST requests to the n8n backend.
+- **fix:** Enhanced `_claim_backend_delivery` and `send_to_backend` in `mantra/utils.py` to deduplicate by `call_id + ai_call_id` (`f"backend_sent:{call_id}_{ai_call_id}"`). This guarantees zero double-webhooks for the same LiveKit agent run, while allowing every retry attempt (which has a fresh `ai_call_id`) to deliver naturally to n8n.
+- **fix:** Updated `handle_outbound_call_webhook` in `mantra/ui_server.py` to automatically clear `backend_sent` and `lock:call:{call_id}` locks when a retry dispatch arrives.
+- **feat:** Added automatic PostgreSQL persistence inside `send_to_backend()` in `mantra/utils.py` so every delivered webhook payload (including retries) is saved/upserted into `call_logs` and audited in `call_events`.
+- Files: `mantra/utils.py`, `mantra/ui_server.py`
+
 ### Operations Dashboard DB Sync & Search
 - **feat:** Updated `/api/v1/dashboard/calls` endpoint in `mantra/ui_server.py` to support `search` filtering (across call ID, caller/called phone numbers, and call log JSON text) and `status` filtering (`Completed`, `Busy`, `No Answer`, `Error`, `Incomplete`).
 - **feat:** Updated `static/dashboard.html` and `static/dashboard.js` with search bar, status selector dropdown, manual "Sync DB" button, and auto-sync triggers on SSE call-end events and periodic 15s intervals.

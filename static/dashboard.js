@@ -252,6 +252,9 @@ function openCallModalByIndex(index) {
     document.getElementById('modal-trunk-id').textContent = call.trunk_id || 'N/A';
     document.getElementById('modal-created-at').textContent = call.created_at ? new Date(call.created_at).toLocaleString() : 'N/A';
 
+    const aiCallId = call.call_log_raw?.ai_call_id || call.call_log_raw?.job_id || 'N/A';
+    document.getElementById('modal-ai-call-id').textContent = aiCallId;
+
     const audioContainer = document.getElementById('modal-recording-container');
     const audioPlayer = document.getElementById('modal-audio-player');
     if (audioPlayer) {

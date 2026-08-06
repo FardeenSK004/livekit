@@ -2468,6 +2468,24 @@ async def handle_outbound_call_webhook(request: Request):
     _telemetry("webhook_received")
 
     if redis_client:
+        # Clear stale backend delivery lock for new/retry attempts
+        try:
+            await redis_client.delete(f"backend_sent:{call_id}")
+        except Exception:
+            pass
+
+        is_retry = bool(
+            payload.get("is_retry")
+            or payload.get("retry")
+            or (payload.get("event") in ("CALL_RETRY", "call_retry"))
+            or request.query_params.get("retry")
+        )
+        if is_retry:
+            try:
+                await redis_client.delete(f"lock:call:{call_id}")
+            except Exception:
+                pass
+
         lock_acquired = await redis_client.set(f"lock:call:{call_id}", "1", nx=True, ex=600)
         if not lock_acquired:
             logger.warning(f"Duplicate telephony webhook hit ignored for call_id: {call_id}")

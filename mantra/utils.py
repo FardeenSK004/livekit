@@ -157,9 +157,9 @@ async def save_call_event(
             await conn.close()
 
 
-async def _claim_backend_delivery(call_id: str) -> bool:
-    """First writer wins per call_id. Prevents ui_server + agent double-webhooks."""
-    if not call_id:
+async def _claim_backend_delivery(dedupe_key: str, force: bool = False) -> bool:
+    """First writer wins per dedupe_key (call_id + ai_call_id). Prevents ui_server + agent double-webhooks."""
+    if not dedupe_key:
         return True
     redis_url = os.getenv("REDIS_URL")
     if not redis_url:
@@ -169,22 +169,24 @@ async def _claim_backend_delivery(call_id: str) -> bool:
 
         client = redis.from_url(redis_url, decode_responses=True)
         try:
-            claimed = await client.set(f"backend_sent:{call_id}", "1", nx=True, ex=300)
-            if not claimed:
+            if force:
+                await client.delete(f"backend_sent:{dedupe_key}")
+            claimed = await client.set(f"backend_sent:{dedupe_key}", "1", nx=True, ex=300)
+            if not claimed and not force:
                 logger.info(
-                    f"Backend webhook already claimed for call_id={call_id} — skipping duplicate"
+                    f"Backend webhook already claimed for dedupe_key={dedupe_key} — skipping duplicate"
                 )
-            return bool(claimed)
+            return bool(claimed) or force
         finally:
             await client.aclose()
     except Exception as e:
-        logger.warning(f"backend delivery claim failed for call_id={call_id}, allowing send: {e}")
+        logger.warning(f"backend delivery claim failed for dedupe_key={dedupe_key}, allowing send: {e}")
         return True
 
 
-async def _release_backend_delivery(call_id: str) -> None:
+async def _release_backend_delivery(dedupe_key: str) -> None:
     """Allow a retry if the claimed delivery never succeeded."""
-    if not call_id:
+    if not dedupe_key:
         return
     redis_url = os.getenv("REDIS_URL")
     if not redis_url:
@@ -194,17 +196,17 @@ async def _release_backend_delivery(call_id: str) -> None:
 
         client = redis.from_url(redis_url, decode_responses=True)
         try:
-            await client.delete(f"backend_sent:{call_id}")
+            await client.delete(f"backend_sent:{dedupe_key}")
         finally:
             await client.aclose()
     except Exception as e:
-        logger.warning(f"backend delivery release failed for call_id={call_id}: {e}")
+        logger.warning(f"backend delivery release failed for dedupe_key={dedupe_key}: {e}")
 
 
-async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
+async def send_to_backend(payload: dict, max_retries: int = 3, force: bool = False) -> bool:
     """POST the post-call payload to the MantraAssist backend with HMAC signing.
 
-    Dedupes by call_id via Redis SET NX so only one of ui_server/agent delivers.
+    Dedupes by call_id + ai_call_id via Redis SET NX so only one of ui_server/agent delivers per attempt.
     """
     base_url = os.getenv("MANTRAASSIST_BACKEND_URL", "").rstrip("/")
     webhook_secret = os.getenv("MANTRAASSIST_WEBHOOK_SECRET", "")
@@ -214,14 +216,22 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
         return False
 
     call_id = ""
+    ai_call_id = ""
+    event_type = ""
     try:
-        data = payload.get("data") if isinstance(payload, dict) else None
-        if isinstance(data, dict):
-            call_id = str(data.get("call_id") or "")
+        if isinstance(payload, dict):
+            event_type = payload.get("event", "")
+            data = payload.get("data")
+            if isinstance(data, dict):
+                call_id = str(data.get("call_id") or "")
+                ai_call_id = str(data.get("ai_call_id") or "")
     except Exception:
         call_id = ""
 
-    if not await _claim_backend_delivery(call_id):
+    dedupe_key = f"{call_id}_{ai_call_id}" if (call_id and ai_call_id) else call_id
+    is_retry_payload = force or (event_type in ("CALL_RETRY", "call_retry"))
+
+    if not await _claim_backend_delivery(dedupe_key, force=is_retry_payload):
         return True  # already delivered (or in-flight) by the other path
 
     url = f"{base_url}/api/v1/webhooks/n8n"
@@ -264,6 +274,29 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
                 logger.info(
                     f"Backend webhook delivered successfully (HTTP {resp.status_code}) call_id={call_id or 'unknown'}"
                 )
+                
+                # Persist delivered payload to PostgreSQL call_logs table
+                try:
+                    data_obj = payload.get("data") if isinstance(payload, dict) else {}
+                    if isinstance(data_obj, dict) and call_id:
+                        status_val = str(data_obj.get("call_status") or data_obj.get("status") or "Completed")
+                        recording_val = str(data_obj.get("recording_url") or data_obj.get("s3_recording") or "")
+                        caller_num = str(data_obj.get("caller_number") or data_obj.get("client_phone") or "")
+                        called_num = str(data_obj.get("called_number") or "")
+                        trunk_val = str(data_obj.get("trunk_id") or data_obj.get("sip_trunk_id") or "")
+                        
+                        await save_call_log_to_db(
+                            call_id=call_id,
+                            call_log=json.dumps(data_obj),
+                            status=status_val,
+                            recording_url=recording_val,
+                            caller_number=caller_num,
+                            called_number=called_num,
+                            trunk_id=trunk_val
+                        )
+                except Exception as db_err:
+                    logger.warning(f"Failed to persist delivered webhook payload to DB for call_id={call_id}: {db_err}")
+
                 return True
         except Exception as e:
             logger.error(f"Backend webhook attempt {attempt}/{max_retries} failed: {e}")
@@ -271,7 +304,7 @@ async def send_to_backend(payload: dict, max_retries: int = 3) -> bool:
         if attempt < max_retries:
             await asyncio.sleep(2 ** (attempt - 1))
 
-    await _release_backend_delivery(call_id)
+    await _release_backend_delivery(dedupe_key)
     return False
 
 
