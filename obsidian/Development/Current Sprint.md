@@ -6,6 +6,8 @@
 
 ## Recently Completed
 
+- [x] **Redis Webhook Worker Failover & Read-Only Replica Reconnection (2026-08-06):** Resolved repeating `Timeout reading from...`, `UNBLOCKED force unblock...`, and `You can't write against a read only replica..` errors in `process_pending_webhooks()` worker in `mantra/ui_server.py`. Added dynamic client recreation on `ReadOnlyError`, `ResponseError`, and `RedisConnectionError` with `aclose()` pool disconnection. Configured `socket_timeout=15`, `socket_connect_timeout=5`, `health_check_interval=15`, and `retry_on_timeout=True`.
+
 - [x] **Standard-String Timestamps for `next_call_on` (2026-08-05):** Renamed `normalize_to_iso8601` → `normalize_datetime` in `mantra/utils.py`; `next_call_on` is now delivered to webhooks as a standard server-local time string with `Z` suffix (`YYYY-MM-DD HH:MM:SSZ`) instead of ISO-8601 (`YYYY-MM-DDTHH:MM:SS`). `analyze_call` LLM prompt updated to emit `next_call_on` / `appointment_date_time` in server-local time instead of hardcoded IST.
 
 - [x] **Post-Call Webhook Delivery & Finalize Refactoring (2026-08-04):** Refactored `finalize()` in `mantra/agent.py` with `_finalized` single-execution guard to prevent double webhooks. Guarded `fnc_ctx` and `recorder` accesses against null/unbound errors. Bounded `SessionRecorder.analyze_call` to 15s timeout and `upload_to_s3` to 10s timeout in `agent.py`, plus 12s timeout on `stream.collect()` in `mantra/utils.py`. Reduced Redis claim lock TTL to 300s (5 mins). Created `scripts/reprocess_unsent_calls.py` to identify and re-deliver unsent connected calls to the backend without altering payload schemas.

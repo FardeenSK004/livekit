@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-06
+
+### Redis Webhook Worker Failover & Read-Only Replica Reconnection Fix
+- **fix:** Updated `process_pending_webhooks()` worker in `mantra/ui_server.py` to handle Redis failovers (Master → Replica transitions) and socket read timeouts.
+- **fix:** Added exception handlers for `ReadOnlyError` ("You can't write against a read only replica") and `ResponseError` ("UNBLOCKED force unblock..."). When failover occurs, the worker logs a warning, closes/disconnects the stale Redis connection pool (`await client.aclose()`), resets `client = None`, and reconnects cleanly on the next iteration.
+- **fix:** Configured `socket_timeout=15`, `socket_connect_timeout=5`, `health_check_interval=15`, and `retry_on_timeout=True` on `redis.from_url` to prevent socket hanging and ensure swift reconnects.
+- Files: `mantra/ui_server.py`
+
 ## 2026-08-05
 
 ### Standard-String Timestamps for `next_call_on`
