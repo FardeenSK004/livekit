@@ -240,9 +240,9 @@ async def send_to_backend(payload: dict, max_retries: int = 3, force: bool = Fal
         call_id = ""
 
     dedupe_key = f"{call_id}_{ai_call_id}" if (call_id and ai_call_id) else call_id
-    is_retry_payload = force or (event_type in ("CALL_RETRY", "call_retry"))
+    # is_retry_payload = force or (event_type in ("CALL_RETRY", "call_retry"))
 
-    if not await _claim_backend_delivery(dedupe_key, force=is_retry_payload):
+    if not await _claim_backend_delivery(dedupe_key, force=force):
         return True  # already delivered (or in-flight) by the other path
 
     url = f"{base_url}/api/v1/webhooks/n8n"

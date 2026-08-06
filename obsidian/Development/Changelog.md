@@ -2,9 +2,15 @@
 
 ## 2026-08-06
 
+### Grafana Memory & CPU Arc Gauges
+- **feat:** Added authentic Grafana Arc Gauge widgets for **Memory** and **CPU Utilization** to `static/network.html`.
+- **feat:** Rendered 180° semi-circular arc gauge canvas with outer thin threshold ring (Green <70%, Orange 70-90%, Red >90%), inner progress arc fill, and centered dynamic value text (`114 MB`, `14.2%`).
+- Files: `static/network.html`
+
 ### Call Retry Redis Deduplication Lock & DB Persistence
 - **fix:** Resolved duplicate suppression bug where retrying a call within 5-10 minutes of a previous attempt logged `"delivered"` but skipped sending HTTP POST requests to the n8n backend.
-- **fix:** Enhanced `_claim_backend_delivery` and `send_to_backend` in `mantra/utils.py` to deduplicate by `call_id + ai_call_id` (`f"backend_sent:{call_id}_{ai_call_id}"`). This guarantees zero double-webhooks for the same LiveKit agent run, while allowing every retry attempt (which has a fresh `ai_call_id`) to deliver naturally to n8n.
+- **fix:** Enhanced `_claim_backend_delivery` and `send_to_backend` in `mantra/utils.py` to deduplicate by `call_id + ai_call_id` (`f"backend_sent:{call_id}_{ai_call_id}"`).
+- **fix:** Removed automatic `force=True` on `CALL_RETRY` inside `send_to_backend()`, eliminating double HTTP POST deliveries caused by the background Redis queue worker (`mantra:pending_webhooks`).
 - **fix:** Updated `handle_outbound_call_webhook` in `mantra/ui_server.py` to automatically clear `backend_sent` and `lock:call:{call_id}` locks when a retry dispatch arrives.
 - **feat:** Added automatic PostgreSQL persistence inside `send_to_backend()` in `mantra/utils.py` so every delivered webhook payload (including retries) is saved/upserted into `call_logs` and audited in `call_events`.
 - Files: `mantra/utils.py`, `mantra/ui_server.py`

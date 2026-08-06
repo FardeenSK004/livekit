@@ -257,6 +257,40 @@
         .stat-panel.red .stat-value { color: var(--g-red); }
         .stat-panel.purple .stat-value { color: var(--g-purple); }
 
+        /* Grafana Arc Gauge Panel */
+        .gauge-panel {
+            background: var(--grafana-panel-bg);
+            border: 1px solid var(--grafana-border);
+            border-radius: 4px;
+            padding: 12px 14px 4px 14px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: flex-start;
+            position: relative;
+            overflow: hidden;
+            transition: border-color 0.2s ease;
+        }
+
+        .gauge-panel:hover {
+            border-color: var(--grafana-border-hover);
+        }
+
+        .gauge-header {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--grafana-text-main);
+            margin-bottom: 0px;
+        }
+
+        .gauge-canvas-wrapper {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: -6px;
+        }
+
         /* Chart Grid */
         .chart-grid {
             display: grid;
@@ -435,16 +469,20 @@
                 <div class="stat-sub" id="sub-error-counts">0 client / 0 server errors</div>
             </div>
 
-            <div class="stat-panel purple">
-                <div class="stat-header">Resident Memory (RAM)</div>
-                <div class="stat-value" id="val-ram">-- MB</div>
-                <div class="stat-sub">Python Async Process</div>
+            <!-- Grafana Memory Arc Gauge Panel -->
+            <div class="gauge-panel">
+                <div class="gauge-header">Memory</div>
+                <div class="gauge-canvas-wrapper">
+                    <canvas id="memoryGauge" style="width:100%; height:95px;"></canvas>
+                </div>
             </div>
 
-            <div class="stat-panel">
-                <div class="stat-header">CPU Time</div>
-                <div class="stat-value" id="val-cpu">-- s</div>
-                <div class="stat-sub">Cumulative CPU Usage</div>
+            <!-- Grafana CPU Utilization Arc Gauge Panel -->
+            <div class="gauge-panel">
+                <div class="gauge-header">CPU Utilization</div>
+                <div class="gauge-canvas-wrapper">
+                    <canvas id="cpuGauge" style="width:100%; height:95px;"></canvas>
+                </div>
             </div>
         </div>
 
@@ -552,6 +590,7 @@
 
         let prevRequests = 0;
         let prevTimestamp = Date.now();
+        let prevCpu = 0;
         let refreshTimer = null;
 
         let rpsChartInstance = null;
@@ -566,6 +605,92 @@
             const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        function renderGrafanaGauge(canvasId, displayVal, currentVal, maxVal = 100, thresholds = { warn: 70, alert: 90 }) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            const width = rect.width || 220;
+            const height = rect.height || 95;
+
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            ctx.scale(dpr, dpr);
+            ctx.clearRect(0, 0, width, height);
+
+            const centerX = width / 2;
+            const centerY = height * 0.78;
+            const radius = Math.min(width * 0.38, height * 0.55);
+
+            const startAngle = Math.PI * 0.88;  // ~158°
+            const endAngle = Math.PI * 2.12;    // ~382° (224° total arc)
+            const totalSweep = endAngle - startAngle;
+
+            const pct = Math.min(Math.max(currentVal / (maxVal || 1), 0), 1);
+            const fillAngle = startAngle + (totalSweep * pct);
+
+            const green = '#73BF69';
+            const orange = '#F9690E';
+            const red = '#F2495C';
+
+            let activeColor = green;
+            if (pct * 100 >= thresholds.alert) activeColor = red;
+            else if (pct * 100 >= thresholds.warn) activeColor = orange;
+
+            // 1. Draw Outer Thin Threshold Arc Ring
+            const thinWidth = 2.5;
+            const outerRadius = radius + 9;
+
+            // Green segment (0 -> 70%)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, outerRadius, startAngle, startAngle + totalSweep * 0.7, false);
+            ctx.strokeStyle = green;
+            ctx.lineWidth = thinWidth;
+            ctx.stroke();
+
+            // Orange segment (70% -> 90%)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, outerRadius, startAngle + totalSweep * 0.7, startAngle + totalSweep * 0.9, false);
+            ctx.strokeStyle = orange;
+            ctx.lineWidth = thinWidth;
+            ctx.stroke();
+
+            // Red segment (90% -> 100%)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, outerRadius, startAngle + totalSweep * 0.9, endAngle, false);
+            ctx.strokeStyle = red;
+            ctx.lineWidth = thinWidth;
+            ctx.stroke();
+
+            // 2. Draw Main Track Background (Dark Gray Arc)
+            const barWidth = 14;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle, false);
+            ctx.strokeStyle = '#23272e';
+            ctx.lineWidth = barWidth;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // 3. Draw Active Fill Arc
+            if (pct > 0.005) {
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, radius, startAngle, fillAngle, false);
+                ctx.strokeStyle = activeColor;
+                ctx.lineWidth = barWidth;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+            }
+
+            // 4. Draw Center Display Text
+            ctx.font = '600 18px "Inter", -apple-system, sans-serif';
+            ctx.fillStyle = activeColor;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(displayVal, centerX, centerY - 4);
         }
 
         async function fetchAndRenderMetrics() {
@@ -670,8 +795,22 @@
             document.getElementById('val-error-rate').textContent = `${errorRatePct.toFixed(1)} %`;
             document.getElementById('sub-error-counts').textContent = `${statusCounts['4xx']} client / ${statusCounts['5xx']} server errs`;
 
-            document.getElementById('val-ram').textContent = formatBytes(totalMemory);
-            document.getElementById('val-cpu').textContent = `${totalCpu.toFixed(2)} s`;
+            // Calculate CPU Usage Rate %
+            let currentCpuUsagePct = 0;
+            if (prevCpu > 0 && timeDeltaSec > 0) {
+                const cpuDelta = Math.max(0, totalCpu - prevCpu);
+                currentCpuUsagePct = Math.min(100, Math.max(0, (cpuDelta / timeDeltaSec) * 100));
+            }
+            prevCpu = totalCpu;
+
+            // Memory formatting & percentage estimation
+            const memFormatted = formatBytes(totalMemory);
+            const memMaxBytes = 1024 * 1024 * 1024; // 1 GB benchmark
+            const memPct = Math.min(100, (totalMemory / memMaxBytes) * 100);
+
+            // Render Grafana Arc Gauges
+            renderGrafanaGauge('memoryGauge', memFormatted, memPct, 100, { warn: 70, alert: 90 });
+            renderGrafanaGauge('cpuGauge', `${currentCpuUsagePct.toFixed(1)}%`, currentCpuUsagePct, 100, { warn: 70, alert: 90 });
 
             // Push to sliding buffers
             const maxPoints = parseInt(document.getElementById('time-range-select').value) || 30;
@@ -940,6 +1079,7 @@
         }
 
         document.getElementById('refresh-rate-select').addEventListener('change', setupRefreshTimer);
+        window.addEventListener('resize', fetchAndRenderMetrics);
 
         fetchAndRenderMetrics();
         setupRefreshTimer();
