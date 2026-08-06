@@ -2,11 +2,28 @@
 
 ## 2026-08-06
 
+### Operations Dashboard DB Sync & Search
+- **feat:** Updated `/api/v1/dashboard/calls` endpoint in `mantra/ui_server.py` to support `search` filtering (across call ID, caller/called phone numbers, and call log JSON text) and `status` filtering (`Completed`, `Busy`, `No Answer`, `Error`, `Incomplete`).
+- **feat:** Updated `static/dashboard.html` and `static/dashboard.js` with search bar, status selector dropdown, manual "Sync DB" button, and auto-sync triggers on SSE call-end events and periodic 15s intervals.
+- **feat:** Enhanced Call Details Inspect Modal in `static/dashboard.html` and `static/dashboard.js` to parse and render full AI summaries and turn-by-turn conversation transcripts (with styled 🤖 AI Agent and 👤 Caller speech bubbles, unicode Hindi/English support, and raw JSON fallback).
+
+### Redis Operations & Queue Monitor
+- **feat:** Created `/redis` route in `mantra/ui_server.py` serving `static/redis.html`.
+- **feat:** Added Redis API endpoints: `/api/v1/redis/info` (server info, memory, clients, queue count, active count), `/api/v1/redis/queue` (inspect `queue:pending` sorted set items & payloads), `/api/v1/redis/active-details` (inspect `calls:active` hash, status, lock TTLs), `/api/v1/redis/keys` (scan and list keys by pattern with type and TTL), `/api/v1/redis/key-detail` (full value inspector), `/api/v1/redis/key` (delete key).
+- **feat:** Created `static/redis.html` UI with summary metric cards, queue inspector table, active calls hash viewer, live key explorer, and JSON value inspector modal.
+
+### Grafana-Style Network Telemetry Dashboard
+- **feat:** Redesigned `static/network.html` with an authentic Grafana Dark Theme aesthetic (`#111217` canvas, `#181b1f` panels, Grafana orange/blue/green/red color palette).
+- **feat:** Added top control toolbar with time range selector (`Last 5m`, `15m`, `30m`), refresh interval selector (`2s`, `5s`, `10s`, `Off`), and manual refresh.
+- **feat:** Added single stat cards for Request Rate (RPS), Avg Response Latency (ms) + estimated p95, Error Rate %, RAM Memory usage, and CPU seconds.
+- **feat:** Added time-series line charts for Throughput (RPS), Latency Distribution (Avg/p95), HTTP Status Code Breakdown over time (`2xx`, `3xx`, `4xx`, `5xx`), and Top API Endpoints volume bar chart.
+- **feat:** Added high-density Grafana endpoint metrics grid table with status code class filtering (`2xx`, `3xx`, `4xx`, `5xx`), live search filtering, and human-readable API endpoint labels (mapping raw technical paths like `/api/v1/stream` → **Real-Time SSE Stream** and `/api/v1/redis/active-details` → **Redis Active Calls Inspector**).
+
 ### Redis Webhook Worker Failover & Read-Only Replica Reconnection Fix
 - **fix:** Updated `process_pending_webhooks()` worker in `mantra/ui_server.py` to handle Redis failovers (Master → Replica transitions) and socket read timeouts.
 - **fix:** Added exception handlers for `ReadOnlyError` ("You can't write against a read only replica") and `ResponseError` ("UNBLOCKED force unblock..."). When failover occurs, the worker logs a warning, closes/disconnects the stale Redis connection pool (`await client.aclose()`), resets `client = None`, and reconnects cleanly on the next iteration.
 - **fix:** Configured `socket_timeout=15`, `socket_connect_timeout=5`, `health_check_interval=15`, and `retry_on_timeout=True` on `redis.from_url` to prevent socket hanging and ensure swift reconnects.
-- Files: `mantra/ui_server.py`
+- Files: `mantra/ui_server.py`, `static/dashboard.html`, `static/dashboard.js`, `static/redis.html`, `static/network.html`, `static/index.html`, `static/kb_chat.html`
 
 ## 2026-08-05
 

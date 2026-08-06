@@ -691,6 +691,12 @@ async def network_page():
     return FileResponse(os.path.join(STATIC_DIR, "network.html"))
 
 
+@app.get("/redis")
+async def redis_page():
+    """Serve the Redis Monitoring & Inspector page."""
+    return FileResponse(os.path.join(STATIC_DIR, "redis.html"))
+
+
 @app.get("/kb-chat")
 async def kb_chat_page():
     """Serve the Knowledge Base text chat tester."""
@@ -3453,48 +3459,82 @@ async def dashboard_metrics(request: Request):
 
 
 @app.get("/api/v1/dashboard/calls")
-async def dashboard_calls(request: Request, limit: int = 20, offset: int = 0):
-    """Paginated call history from PostgreSQL."""
-    # require_auth(request)
-
+async def dashboard_calls(request: Request, limit: int = 20, offset: int = 0, search: str = None, status: str = None):
+    """Paginated call history from PostgreSQL with search & status filtering."""
     try:
         conn = await get_db_connection()
         try:
-            rows = await conn.fetch(
-                """
-                SELECT call_id, status, recording_url, created_at,
+            conditions = []
+            params = []
+            param_idx = 1
+
+            if search and search.strip():
+                conditions.append(f"(CAST(call_id AS TEXT) ILIKE ${param_idx} OR caller_number ILIKE ${param_idx} OR called_number ILIKE ${param_idx} OR call_log::text ILIKE ${param_idx})")
+                params.append(f"%{search.strip()}%")
+                param_idx += 1
+
+            if status and status.strip() and status.lower() != "all":
+                st_clean = status.strip().replace(" ", "").replace("_", "").lower()
+                conditions.append(f"REPLACE(REPLACE(LOWER(status), '_', ''), ' ', '') LIKE ${param_idx}")
+                params.append(f"%{st_clean}%")
+                param_idx += 1
+
+            where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+            query = f"""
+                SELECT call_id, status, recording_url, created_at, caller_number, called_number, trunk_id,
                        call_log::json AS call_log
                 FROM call_logs
+                {where_clause}
                 ORDER BY created_at DESC
-                LIMIT $1 OFFSET $2
-                """,
-                limit,
-                offset,
-            )
+                LIMIT ${param_idx} OFFSET ${param_idx + 1}
+            """
+            params_with_limit = params + [limit, offset]
+            rows = await conn.fetch(query, *params_with_limit)
 
-            count_row = await conn.fetchrow(
-                "SELECT COUNT(*)::int AS total FROM call_logs"
-            )
+            count_query = f"SELECT COUNT(*)::int AS total FROM call_logs {where_clause}"
+            count_row = await conn.fetchrow(count_query, *params)
             total = count_row["total"] if count_row else 0
         finally:
             await conn.close()
 
         calls = []
         for row in rows:
-            cl = row["call_log"] if isinstance(row["call_log"], dict) else {}
+            cl_raw = row["call_log"]
+            if isinstance(cl_raw, str):
+                try:
+                    cl = json.loads(cl_raw)
+                except Exception:
+                    cl = {}
+            elif isinstance(cl_raw, dict):
+                cl = cl_raw
+            else:
+                cl = {}
+            trunk_val = (
+                row["trunk_id"]
+                or cl.get("trunk_id")
+                or cl.get("sip_trunk_id")
+                or cl.get("call_from_id")
+                or cl.get("_resolved_trunk_id")
+                or cl.get("provider")
+                or ""
+            )
             calls.append(
                 {
-                    "call_id": row["call_id"],
+                    "call_id": str(row["call_id"]),
                     "status": row["status"],
                     "recording_url": row["recording_url"] or "",
-                    "created_at": row["created_at"].isoformat()
-                    if row["created_at"]
-                    else None,
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                    "caller_number": row["caller_number"] or cl.get("caller_number") or cl.get("client_phone") or "",
+                    "called_number": row["called_number"] or cl.get("called_number") or "",
+                    "trunk_id": trunk_val,
                     "client_name": cl.get("client_name") or cl.get("client_id") or "",
-                    "client_phone": cl.get("client_phone") or "",
+                    "client_phone": cl.get("client_phone") or row["caller_number"] or "",
                     "duration": cl.get("call_duration_seconds"),
-                    "summary": cl.get("ai_summary") or "",
+                    "summary": cl.get("ai_summary") or cl.get("summary") or "",
+                    "transcript": cl.get("call_transcript") or cl.get("transcript") or cl.get("conversation") or None,
                     "purpose": (cl.get("prompt") or "")[:120],
+                    "call_log_raw": cl,
                 }
             )
 
@@ -3507,8 +3547,6 @@ async def dashboard_calls(request: Request, limit: int = 20, offset: int = 0):
 @app.get("/api/v1/dashboard/active-calls")
 async def dashboard_active_calls(request: Request):
     """Current active calls from Redis."""
-    # require_auth(request)
-
     if not redis_client:
         return {"active_calls": [], "error": "Redis not connected"}
 
@@ -3528,6 +3566,189 @@ async def dashboard_active_calls(request: Request):
     except Exception as e:
         logger.error(f"Active calls error: {e}")
         return {"active_calls": [], "error": str(e)}
+
+
+
+@app.get("/api/v1/redis/info")
+async def redis_info(request: Request):
+    """Get Redis server telemetry & summary statistics."""
+    if not redis_client:
+        return {"error": "Redis client not connected", "status": "disconnected"}
+
+    try:
+        raw_info = await redis_client.info()
+        pending_count = await redis_client.zcard("queue:pending")
+        active_count = await redis_client.hlen("calls:active")
+        db_size = await redis_client.dbsize()
+
+        return {
+            "status": "online",
+            "redis_version": raw_info.get("redis_version", "N/A"),
+            "used_memory_human": raw_info.get("used_memory_human", "N/A"),
+            "used_memory_peak_human": raw_info.get("used_memory_peak_human", "N/A"),
+            "connected_clients": raw_info.get("connected_clients", 0),
+            "uptime_in_seconds": raw_info.get("uptime_in_seconds", 0),
+            "uptime_in_days": raw_info.get("uptime_in_days", 0),
+            "total_commands_processed": raw_info.get("total_commands_processed", 0),
+            "instantaneous_ops_per_sec": raw_info.get("instantaneous_ops_per_sec", 0),
+            "total_keys": db_size,
+            "queue_pending_count": pending_count,
+            "active_calls_count": active_count,
+        }
+    except Exception as e:
+        logger.error(f"Redis info error: {e}")
+        return {"error": str(e), "status": "error"}
+
+
+@app.get("/api/v1/redis/queue")
+async def redis_queue_items(request: Request):
+    """Fetch all pending jobs in the queue:pending sorted set."""
+    if not redis_client:
+        return {"error": "Redis client not connected", "items": []}
+
+    try:
+        raw_items = await redis_client.zrange("queue:pending", 0, -1, withscores=True)
+        items = []
+        for rank, (payload_str, score) in enumerate(raw_items):
+            parsed_payload = {}
+            call_id = "N/A"
+            client_name = "N/A"
+            phone = "N/A"
+            try:
+                parsed_payload = json.loads(payload_str)
+                call_id = str(parsed_payload.get("call_id", "N/A"))
+                client_name = parsed_payload.get("client_name", "N/A")
+                phone = parsed_payload.get("phone_number") or parsed_payload.get("client_phone") or "N/A"
+            except Exception:
+                pass
+
+            items.append({
+                "rank": rank + 1,
+                "score": score,
+                "call_id": call_id,
+                "client_name": client_name,
+                "phone": phone,
+                "raw_payload": payload_str,
+                "parsed_payload": parsed_payload
+            })
+
+        return {"count": len(items), "items": items}
+    except Exception as e:
+        logger.error(f"Redis queue error: {e}")
+        return {"error": str(e), "items": []}
+
+
+@app.get("/api/v1/redis/active-details")
+async def redis_active_details(request: Request):
+    """Fetch active calls hash and their detailed status in Redis."""
+    if not redis_client:
+        return {"error": "Redis client not connected", "calls": []}
+
+    try:
+        active_map = await redis_client.hgetall("calls:active")
+        calls = []
+        for call_id, room_name in active_map.items():
+            status = await redis_client.get(f"calls:status:{call_id}")
+            lock_ttl = await redis_client.ttl(f"lock:call:{call_id}")
+            sip_status = await redis_client.get(f"sip_error_status:{call_id}")
+
+            calls.append({
+                "call_id": str(call_id),
+                "room_name": room_name,
+                "status": status or "in_progress",
+                "lock_ttl": lock_ttl if lock_ttl > 0 else 0,
+                "sip_error_status": sip_status or None,
+            })
+        return {"count": len(calls), "calls": calls}
+    except Exception as e:
+        logger.error(f"Redis active calls error: {e}")
+        return {"error": str(e), "calls": []}
+
+
+@app.get("/api/v1/redis/keys")
+async def redis_keys_list(request: Request, pattern: str = "*", limit: int = 100):
+    """Scan and list keys matching pattern with type and TTL."""
+    if not redis_client:
+        return {"error": "Redis client not connected", "keys": []}
+
+    try:
+        matched_keys = []
+        cursor = "0"
+        count = 0
+        while True:
+            cursor, keys = await redis_client.scan(cursor=cursor, match=pattern, count=100)
+            for k in keys:
+                matched_keys.append(k)
+                count += 1
+                if count >= limit:
+                    break
+            if cursor == "0" or cursor == 0 or count >= limit:
+                break
+
+        key_details = []
+        for k in matched_keys[:limit]:
+            k_type = await redis_client.type(k)
+            k_ttl = await redis_client.ttl(k)
+            key_details.append({
+                "key": k,
+                "type": k_type.upper() if isinstance(k_type, str) else "UNKNOWN",
+                "ttl": k_ttl,
+            })
+
+        return {"pattern": pattern, "total_found": len(key_details), "keys": key_details}
+    except Exception as e:
+        logger.error(f"Redis keys error: {e}")
+        return {"error": str(e), "keys": []}
+
+
+@app.get("/api/v1/redis/key-detail")
+async def redis_key_detail(request: Request, key: str):
+    """Get full data of a specific Redis key regardless of type."""
+    if not redis_client or not key:
+        return {"error": "Key parameter is required"}
+
+    try:
+        k_type = await redis_client.type(key)
+        k_ttl = await redis_client.ttl(key)
+        k_type_str = k_type.upper() if isinstance(k_type, str) else "UNKNOWN"
+
+        val = None
+        if k_type_str == "STRING":
+            val = await redis_client.get(key)
+        elif k_type_str == "HASH":
+            val = await redis_client.hgetall(key)
+        elif k_type_str == "ZSET":
+            val = await redis_client.zrange(key, 0, -1, withscores=True)
+        elif k_type_str == "LIST":
+            val = await redis_client.lrange(key, 0, -1)
+        elif k_type_str == "SET":
+            val = list(await redis_client.smembers(key))
+        else:
+            val = str(await redis_client.get(key))
+
+        return {
+            "key": key,
+            "type": k_type_str,
+            "ttl": k_ttl,
+            "value": val,
+        }
+    except Exception as e:
+        logger.error(f"Redis key detail error: {e}")
+        return {"error": str(e)}
+
+
+@app.delete("/api/v1/redis/key")
+async def redis_delete_key(request: Request, key: str):
+    """Delete a specific key from Redis."""
+    if not redis_client or not key:
+        return {"error": "Key is required"}
+
+    try:
+        deleted = await redis_client.delete(key)
+        return {"status": "success", "key": key, "deleted": deleted}
+    except Exception as e:
+        logger.error(f"Redis delete key error: {e}")
+        return {"error": str(e)}
 
 
 # ── Knowledge Base Ingestion Endpoints ────────────────────────────────

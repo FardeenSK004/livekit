@@ -137,12 +137,19 @@ function connectSSE() {
                 }
             });
 
-            // Calls that ended
+            // Calls that ended -> Sync DB history immediately!
+            let endedCount = 0;
             lastActiveIds.forEach(id => {
                 if (!currentIds.has(id)) {
                     addFeedItem(`Call ${id} ended`, 'info');
+                    endedCount++;
                 }
             });
+
+            if (endedCount > 0) {
+                loadCallHistory();
+                loadMetrics();
+            }
 
             // Queue changes
             const prevPending = parseInt(document.getElementById('queue-pending').textContent) || 0;
@@ -162,24 +169,47 @@ function connectSSE() {
     };
 }
 
-// ── Call History Table ───────────────────────────────────────────────────
+// ── Call History Table (Synced with DB) ───────────────────────────────────
+let currentCallHistoryData = [];
+
 async function loadCallHistory() {
-    const data = await apiFetch('/api/v1/dashboard/calls?limit=15&offset=0');
+    const searchInput = document.getElementById('call-search-input');
+    const statusSelect = document.getElementById('call-status-filter');
+    const searchVal = searchInput ? searchInput.value.trim() : '';
+    const statusVal = statusSelect ? statusSelect.value : 'all';
+
+    let url = `/api/v1/dashboard/calls?limit=50&offset=0`;
+    if (searchVal) url += `&search=${encodeURIComponent(searchVal)}`;
+    if (statusVal && statusVal !== 'all') url += `&status=${encodeURIComponent(statusVal)}`;
+
+    const data = await apiFetch(url);
     if (data.error) {
         document.getElementById('calls-table-body').innerHTML =
-            `<tr><td colspan="5" class="empty-state">Could not load call history</td></tr>`;
+            `<tr><td colspan="7" class="empty-state">Could not load call history</td></tr>`;
         return;
     }
 
-    document.getElementById('calls-total').textContent = data.total;
+    let calls = data.calls || [];
+
+    // Client-side status filter guard
+    if (statusVal && statusVal.toLowerCase() !== 'all') {
+        const cleanTarget = statusVal.toLowerCase().replace(/[\s_]/g, '');
+        calls = calls.filter(c => {
+            const st = (c.status || '').toLowerCase().replace(/[\s_]/g, '');
+            return st.includes(cleanTarget);
+        });
+    }
+
+    currentCallHistoryData = calls;
+    document.getElementById('calls-total').textContent = data.total || calls.length;
 
     const tbody = document.getElementById('calls-table-body');
-    if (data.calls.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" class="empty-state">No calls recorded yet</td></tr>`;
+    if (currentCallHistoryData.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No call logs found matching "${statusVal}"</td></tr>`;
         return;
     }
 
-    tbody.innerHTML = data.calls.map(c => {
+    tbody.innerHTML = currentCallHistoryData.map((c, idx) => {
         const statusClass = `status-${(c.status || 'unknown').toLowerCase().replace(/\s+/g, '-')}`;
         const duration = c.duration
             ? `${Math.floor(c.duration / 60)}m ${c.duration % 60}s`
@@ -187,17 +217,178 @@ async function loadCallHistory() {
         const time = c.created_at
             ? new Date(c.created_at).toLocaleString()
             : '—';
+        const phone = c.caller_number || c.client_phone || c.client_name || '—';
+        const trunk = c.trunk_id || '—';
+
         return `
             <tr>
                 <td><span class="status-dot-sm ${statusClass}"></span>${c.status || 'Unknown'}</td>
-                <td class="cell-mono">${c.call_id || '—'}</td>
-                <td>${c.client_name || c.client_phone || '—'}</td>
+                <td class="cell-mono" style="font-weight:600;">${c.call_id || '—'}</td>
+                <td>${phone}</td>
+                <td class="cell-mono">${trunk}</td>
                 <td>${duration}</td>
                 <td class="cell-time">${time}</td>
+                <td>
+                    <button class="btn-logout" style="padding:4px 8px; font-size:var(--text-xs);" onclick="openCallModalByIndex(${idx})">Inspect</button>
+                </td>
             </tr>
         `;
     }).join('');
 }
+
+function openCallModalByIndex(index) {
+    const call = currentCallHistoryData[index];
+    if (!call) return;
+
+    document.getElementById('modal-call-id').textContent = `#${call.call_id}`;
+    document.getElementById('modal-call-status').textContent = call.status || 'Unknown';
+    document.getElementById('modal-call-status').className = `status-badge status-${(call.status || 'unknown').toLowerCase().replace(/\s+/g, '-')}`;
+
+    const dur = call.duration ? `${Math.floor(call.duration / 60)}m ${call.duration % 60}s (${call.duration}s)` : 'N/A';
+    document.getElementById('modal-call-duration').textContent = dur;
+
+    document.getElementById('modal-caller-num').textContent = call.caller_number || call.client_phone || 'N/A';
+    document.getElementById('modal-called-num').textContent = call.called_number || 'N/A';
+    document.getElementById('modal-trunk-id').textContent = call.trunk_id || 'N/A';
+    document.getElementById('modal-created-at').textContent = call.created_at ? new Date(call.created_at).toLocaleString() : 'N/A';
+
+    const audioContainer = document.getElementById('modal-recording-container');
+    const audioPlayer = document.getElementById('modal-audio-player');
+    if (audioPlayer) {
+        audioPlayer.pause();
+        audioPlayer.currentTime = 0;
+    }
+    if (call.recording_url) {
+        audioPlayer.src = call.recording_url;
+        audioPlayer.load();
+        audioContainer.style.display = 'block';
+    } else {
+        audioPlayer.removeAttribute('src');
+        audioContainer.style.display = 'none';
+    }
+
+    const summaryText = call.summary || call.call_log_raw?.ai_summary || call.call_log_raw?.summary || call.purpose || 'No AI summary generated for this call.';
+    document.getElementById('modal-call-summary').textContent = summaryText;
+
+    const rawTranscript = call.transcript || call.call_log_raw?.call_transcript || call.call_log_raw?.transcript || call.call_log_raw?.conversation;
+    renderTranscriptInModal(rawTranscript);
+
+    document.getElementById('modal-raw-json').textContent = JSON.stringify(call.call_log_raw || {}, null, 2);
+
+    document.getElementById('call-detail-modal').classList.remove('hidden');
+}
+
+function renderTranscriptInModal(rawTranscript) {
+    const container = document.getElementById('modal-call-transcript');
+    if (!container) return;
+
+    if (!rawTranscript) {
+        container.innerHTML = `<div style="color:var(--text-tertiary); font-size:var(--text-xs); font-style:italic; text-align:center;">No transcript available for this call</div>`;
+        return;
+    }
+
+    let items = [];
+    if (typeof rawTranscript === 'string') {
+        try {
+            items = JSON.parse(rawTranscript);
+        } catch (e) {
+            items = rawTranscript;
+        }
+    } else {
+        items = rawTranscript;
+    }
+
+    if (typeof items === 'string') {
+        const safeText = escapeHtml(items);
+        container.innerHTML = `<div style="font-size:var(--text-xs); line-height:1.5; white-space:pre-wrap; color:var(--text-primary);">${safeText}</div>`;
+        return;
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+        container.innerHTML = `<div style="color:var(--text-tertiary); font-size:var(--text-xs); font-style:italic; text-align:center;">No transcript turns recorded</div>`;
+        return;
+    }
+
+    let html = '';
+    items.forEach(turn => {
+        if (typeof turn === 'object' && turn !== null) {
+            const botText = turn.bot || turn.agent || turn.assistant;
+            const userText = turn.user || turn.customer || turn.caller;
+
+            if (botText) {
+                html += `
+                    <div style="align-self:flex-start; max-width:85%; background:var(--bg-elevated); border:1px solid var(--border-default); border-radius:6px; border-bottom-left-radius:2px; padding:8px 12px; font-size:var(--text-xs); line-height:1.4;">
+                        <b style="color:var(--accent); font-size:11px; display:block; margin-bottom:2px;">🤖 AI Agent</b>
+                        ${escapeHtml(botText)}
+                    </div>
+                `;
+            }
+            if (userText) {
+                html += `
+                    <div style="align-self:flex-end; max-width:85%; background:var(--accent); color:white; border-radius:6px; border-bottom-right-radius:2px; padding:8px 12px; font-size:var(--text-xs); line-height:1.4;">
+                        <b style="color:rgba(255,255,255,0.8); font-size:11px; display:block; margin-bottom:2px;">👤 Caller</b>
+                        ${escapeHtml(userText)}
+                    </div>
+                `;
+            }
+            if (turn.role && (turn.content || turn.text)) {
+                const isAssistant = turn.role === 'assistant' || turn.role === 'agent' || turn.role === 'bot';
+                const label = isAssistant ? '🤖 AI Agent' : '👤 Caller';
+                const bgStyle = isAssistant
+                    ? 'background:var(--bg-elevated); border:1px solid var(--border-default); align-self:flex-start; border-bottom-left-radius:2px;'
+                    : 'background:var(--accent); color:white; align-self:flex-end; border-bottom-right-radius:2px;';
+                const labelColor = isAssistant ? 'color:var(--accent);' : 'color:rgba(255,255,255,0.8);';
+                html += `
+                    <div style="max-width:85%; border-radius:6px; padding:8px 12px; font-size:var(--text-xs); line-height:1.4; ${bgStyle}">
+                        <b style="${labelColor} font-size:11px; display:block; margin-bottom:2px;">${label}</b>
+                        ${escapeHtml(turn.content || turn.text || '')}
+                    </div>
+                `;
+            }
+        } else if (typeof turn === 'string') {
+            html += `<div style="font-size:var(--text-xs); color:var(--text-secondary); padding:4px 0;">${escapeHtml(turn)}</div>`;
+        }
+    });
+
+    container.innerHTML = html || `<div style="color:var(--text-tertiary); font-size:var(--text-xs); font-style:italic; text-align:center;">No transcript turns formatted</div>`;
+}
+
+function escapeHtml(str) {
+    return String(str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function closeCallModal() {
+    const modal = document.getElementById('call-detail-modal');
+    const audioPlayer = document.getElementById('modal-audio-player');
+    
+    if (audioPlayer) {
+        audioPlayer.pause();
+        audioPlayer.currentTime = 0;
+        audioPlayer.removeAttribute('src');
+        audioPlayer.load();
+    }
+    
+    if (modal) {
+        modal.classList.add('hidden');
+    }
+}
+
+document.getElementById('btn-close-call-modal')?.addEventListener('click', closeCallModal);
+
+document.getElementById('call-detail-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'call-detail-modal') {
+        closeCallModal();
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const modal = document.getElementById('call-detail-modal');
+        if (modal && !modal.classList.contains('hidden')) {
+            closeCallModal();
+        }
+    }
+});
 
 // ── Knowledge Base ─────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -471,6 +662,23 @@ document.addEventListener('DOMContentLoaded', () => {
     connectSSE();
     addFeedItem('Dashboard connected', 'info');
 
-    // Refresh metrics every 30s
-    setInterval(loadMetrics, 30000);
+    // Event listeners for DB search & filtering
+    document.getElementById('call-search-input')?.addEventListener('input', () => {
+        loadCallHistory();
+    });
+
+    document.getElementById('call-status-filter')?.addEventListener('change', () => {
+        loadCallHistory();
+    });
+
+    document.getElementById('btn-refresh-history')?.addEventListener('click', () => {
+        loadMetrics();
+        loadCallHistory();
+    });
+
+    // Refresh metrics & sync call history every 15s
+    setInterval(() => {
+        loadMetrics();
+        loadCallHistory();
+    }, 15000);
 });

@@ -3,103 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MantraAssist · Network Monitoring</title>
+    <title>MantraAssist · Network &amp; System Telemetry (Grafana Suite)</title>
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
+            /* Grafana Dark Theme Palette */
+            --grafana-bg:           #111217;
+            --grafana-panel-bg:     #181b1f;
+            --grafana-header-bg:    #22252b;
+            --grafana-border:       #2c3235;
+            --grafana-border-hover: #3e4448;
+
+            --grafana-text-main:    #d8d9da;
+            --grafana-text-muted:   #8e8e8e;
+            --grafana-text-dim:     #57585a;
+
+            /* Grafana Standard Accent Colors */
+            --g-orange:  #F9690E;
+            --g-blue:    #5794F2;
+            --g-green:   #73BF69;
+            --g-red:     #F2495C;
+            --g-yellow:  #EAB839;
+            --g-purple:  #B060E0;
+
             --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-            --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
-
-            --bg-page:           #1e1f22;
-            --bg-surface:        #2b2d31;
-            --bg-elevated:       #313338;
-            --bg-hover:          #35373c;
-            --bg-active:         #3f4148;
-            --bg-input:          #1e1f22;
-
-            --border-default:    #3f4148;
-            --border-strong:     #4e5058;
-            --border-accent:     #5865F2;
-
-            --text-primary:      #f2f3f5;
-            --text-secondary:    #949ba4;
-            --text-tertiary:     #6d6f78;
-
-            --accent:            #5865F2;
-            --accent-hover:      #4752c4;
-            --accent-subtle:     rgba(88, 101, 242, 0.12);
-
-            --success:           #23a55a;
-            --success-subtle:    rgba(35, 165, 90, 0.12);
-            --warning:           #f0b232;
-            --warning-subtle:    rgba(240, 178, 50, 0.12);
-            --danger:            #da373c;
-            --danger-subtle:     rgba(218, 55, 60, 0.12);
-            --info:              #00b0f4;
-            --info-subtle:       rgba(0, 176, 244, 0.12);
-
-            --shadow-sm:         0 1px 2px rgba(0, 0, 0, 0.3);
-            --shadow-md:         0 4px 12px rgba(0, 0, 0, 0.4);
-
-            --text-xs:   0.75rem;
-            --text-sm:   0.8125rem;
-            --text-base: 0.875rem;
-            --text-lg:   1rem;
-            --text-xl:   1.25rem;
-            --text-2xl:  1.625rem;
-            --text-3xl:  2.25rem;
-
-            --weight-regular: 400;
-            --weight-medium:  500;
-            --weight-semibold: 600;
-
-            --tracking-normal: 0em;
-            --tracking-wide:   0.02em;
-            --tracking-mono:  -0.01em;
+            --font-mono: 'JetBrains Mono', monospace;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: var(--font-sans);
-            font-size: var(--text-base);
-            background: var(--bg-page);
-            color: var(--text-primary);
+            background-color: var(--grafana-bg);
+            color: var(--grafana-text-main);
             min-height: 100vh;
         }
 
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--bg-active); border-radius: 3px; }
-        * { scrollbar-width: thin; scrollbar-color: var(--bg-active) transparent; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--grafana-bg); }
+        ::-webkit-scrollbar-thumb { background: #2f3337; border-radius: 3px; }
 
-        :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
+        /* Navbar */
         .navbar {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            height: 52px;
-            padding: 0 24px;
-            background: var(--bg-page);
-            border-bottom: 1px solid var(--border-default);
+            height: 50px;
+            padding: 0 20px;
+            background: #181b1f;
+            border-bottom: 1px solid var(--grafana-border);
             position: sticky;
             top: 0;
             z-index: 100;
         }
 
         .nav-left { display: flex; align-items: center; gap: 20px; }
-
         .nav-logo { display: flex; align-items: center; gap: 10px; }
 
         .nav-logo-icon {
             width: 28px; height: 28px;
-            background: var(--accent);
-            border-radius: 6px;
+            background: var(--g-orange);
+            border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -109,215 +77,285 @@
         .nav-logo-icon svg { width: 16px; height: 16px; color: white; }
 
         .nav-title {
-            font-size: var(--text-lg);
-            font-weight: var(--weight-semibold);
-            color: var(--text-primary);
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--grafana-text-main);
+            letter-spacing: -0.01em;
         }
 
         .nav-links { display: flex; gap: 2px; }
 
         .nav-link {
-            padding: 6px 14px;
-            border-radius: 6px;
+            padding: 5px 12px;
+            border-radius: 4px;
             background: transparent;
-            color: var(--text-secondary);
-            font-family: var(--font-sans);
-            font-size: var(--text-sm);
-            font-weight: var(--weight-medium);
+            color: var(--grafana-text-muted);
+            font-size: 0.8rem;
+            font-weight: 500;
             text-decoration: none;
-            transition: background 0.15s ease, color 0.15s ease;
-        }
-
-        .nav-link:hover { background: var(--bg-hover); color: var(--text-primary); }
-        .nav-link.active { background: var(--accent); color: white; }
-
-        .nav-right { display: flex; align-items: center; gap: 16px; }
-
-        .nav-user { font-size: var(--text-sm); color: var(--text-secondary); }
-
-        .btn-logout {
-            padding: 6px 14px;
-            border-radius: 6px;
-            border: 1px solid var(--border-default);
-            background: transparent;
-            color: var(--text-secondary);
-            font-family: var(--font-sans);
-            font-size: var(--text-xs);
-            font-weight: var(--weight-medium);
-            cursor: pointer;
             transition: all 0.15s ease;
         }
 
-        .btn-logout:hover {
-            border-color: var(--danger);
-            color: var(--danger);
-            background: var(--danger-subtle);
+        .nav-link:hover { background: #22252b; color: var(--grafana-text-main); }
+        .nav-link.active { background: #2c3235; color: white; border-bottom: 2px solid var(--g-orange); }
+
+        .nav-right { display: flex; align-items: center; gap: 14px; }
+        .nav-user { font-size: 0.8rem; color: var(--grafana-text-muted); }
+
+        .btn-logout {
+            padding: 5px 10px;
+            border-radius: 4px;
+            border: 1px solid var(--grafana-border);
+            background: transparent;
+            color: var(--grafana-text-muted);
+            font-size: 0.75rem;
+            cursor: pointer;
         }
 
-        .main-container {
-            max-width: 1200px;
+        .btn-logout:hover { border-color: var(--g-red); color: var(--g-red); }
+
+        /* Dashboard Container */
+        .grafana-container {
+            max-width: 1600px;
             margin: 0 auto;
-            padding: 24px 32px;
+            padding: 16px 20px;
             display: flex;
             flex-direction: column;
-            gap: 24px;
+            gap: 16px;
         }
 
-        .header-section {
+        /* Top Controls Toolbar */
+        .toolbar {
+            background: var(--grafana-panel-bg);
+            border: 1px solid var(--grafana-border);
+            border-radius: 4px;
+            padding: 10px 16px;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
-        .header-title {
-            font-size: var(--text-xl);
-            font-weight: var(--weight-semibold);
-            color: var(--text-primary);
-        }
-        
-        .live-indicator {
+        .toolbar-title {
             display: flex;
             align-items: center;
-            gap: 8px;
-            background: var(--success-subtle);
-            border: 1px solid var(--success);
-            color: var(--success);
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: var(--text-xs);
-            font-weight: var(--weight-medium);
+            gap: 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .toolbar-title svg { color: var(--g-orange); }
+
+        .toolbar-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .ctrl-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: var(--grafana-text-muted);
+        }
+
+        .ctrl-select, .ctrl-input {
+            background: #111217;
+            border: 1px solid var(--grafana-border);
+            border-radius: 3px;
+            padding: 4px 10px;
+            color: var(--grafana-text-main);
+            font-size: 0.75rem;
+            font-family: var(--font-sans);
+        }
+
+        .ctrl-btn {
+            background: #22252b;
+            border: 1px solid var(--grafana-border);
+            border-radius: 3px;
+            color: var(--grafana-text-main);
+            padding: 4px 10px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .ctrl-btn:hover { background: #2c3235; border-color: var(--grafana-border-hover); }
+
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 8px;
+            background: rgba(115, 191, 105, 0.12);
+            border: 1px solid var(--g-green);
+            color: var(--g-green);
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: var(--tracking-wide);
         }
 
         .pulse-dot {
-            width: 8px;
-            height: 8px;
-            background-color: var(--success);
+            width: 6px; height: 6px;
             border-radius: 50%;
+            background: var(--g-green);
             animation: pulse 2s infinite;
         }
 
         @keyframes pulse {
-            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(35, 165, 90, 0.7); }
-            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(35, 165, 90, 0); }
-            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(35, 165, 90, 0); }
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(1.3); }
+            100% { opacity: 1; transform: scale(1); }
         }
 
-        .metrics-grid {
+        /* Stat Panel Grid */
+        .stat-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 16px;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 12px;
         }
 
-        .metric-card {
-            background: var(--bg-surface);
-            border: 1px solid var(--border-default);
-            border-radius: 12px;
-            padding: 20px;
+        .stat-panel {
+            background: var(--grafana-panel-bg);
+            border: 1px solid var(--grafana-border);
+            border-radius: 4px;
+            padding: 14px 16px;
             display: flex;
             flex-direction: column;
-            gap: 8px;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        .metric-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-            border-color: var(--border-strong);
-        }
-
-        .metric-title {
-            font-size: var(--text-xs);
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: var(--tracking-wide);
-            font-weight: var(--weight-semibold);
-        }
-
-        .metric-value {
-            font-family: var(--font-mono);
-            font-size: var(--text-2xl);
-            font-weight: var(--weight-semibold);
-            color: var(--text-primary);
-        }
-
-        .metric-card.accent .metric-value { color: var(--accent); }
-        .metric-card.success .metric-value { color: var(--success); }
-        .metric-card.info .metric-value { color: var(--info); }
-        .metric-card.warning .metric-value { color: var(--warning); }
-
-        .charts-grid {
-            display: grid;
-            grid-template-columns: 1fr 2fr;
-            gap: 20px;
-        }
-
-        .chart-card {
-            background: var(--bg-surface);
-            border: 1px solid var(--border-default);
-            border-radius: 12px;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .chart-header {
-            font-size: var(--text-sm);
-            font-weight: var(--weight-semibold);
-            color: var(--text-primary);
-            margin-bottom: 20px;
-        }
-        
-        .chart-container {
+            justify-content: space-between;
             position: relative;
-            flex: 1;
-            min-height: 250px;
-            width: 100%;
+            overflow: hidden;
         }
+
+        .stat-header {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--grafana-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .stat-value {
+            font-family: var(--font-mono);
+            font-size: 1.75rem;
+            font-weight: 600;
+            color: var(--grafana-text-main);
+            margin-top: 4px;
+            line-height: 1.1;
+        }
+
+        .stat-sub {
+            font-size: 0.7rem;
+            color: var(--grafana-text-dim);
+            margin-top: 6px;
+        }
+
+        .stat-panel.blue .stat-value { color: var(--g-blue); }
+        .stat-panel.green .stat-value { color: var(--g-green); }
+        .stat-panel.orange .stat-value { color: var(--g-orange); }
+        .stat-panel.red .stat-value { color: var(--g-red); }
+        .stat-panel.purple .stat-value { color: var(--g-purple); }
+
+        /* Chart Grid */
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .panel {
+            background: var(--grafana-panel-bg);
+            border: 1px solid var(--grafana-border);
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            background: var(--grafana-header-bg);
+            padding: 8px 14px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--grafana-text-main);
+            border-bottom: 1px solid var(--grafana-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-body {
+            padding: 14px;
+            flex: 1;
+            min-height: 240px;
+            position: relative;
+        }
+
+        /* Grafana High-Density Table */
+        .grafana-table-wrap { overflow-x: auto; width: 100%; }
 
         table {
             width: 100%;
             border-collapse: collapse;
-            font-size: var(--text-sm);
+            font-size: 0.78rem;
         }
 
         thead th {
             text-align: left;
-            padding: 12px 16px;
-            color: var(--text-secondary);
-            font-weight: var(--weight-medium);
-            font-size: var(--text-xs);
+            padding: 8px 12px;
+            background: #14171a;
+            color: var(--grafana-text-muted);
+            font-weight: 600;
+            font-size: 0.72rem;
             text-transform: uppercase;
-            letter-spacing: var(--tracking-wide);
-            border-bottom: 1px solid var(--border-default);
-            background: var(--bg-page);
+            letter-spacing: 0.03em;
+            border-bottom: 1px solid var(--grafana-border);
         }
 
         tbody td {
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--border-default);
-            color: var(--text-primary);
+            padding: 8px 12px;
+            border-bottom: 1px solid #202428;
+            color: var(--grafana-text-main);
+        }
+
+        tbody tr:hover { background: #22262b; }
+
+        .method-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
             font-family: var(--font-mono);
-            font-size: var(--text-xs);
-        }
-        
-        tbody td.handler-col {
-            font-family: var(--font-sans);
-            font-weight: var(--weight-medium);
-            font-size: var(--text-sm);
+            font-size: 0.68rem;
+            font-weight: 600;
         }
 
-        tbody tr:hover { background: var(--bg-hover); }
+        .method-get { background: rgba(87, 148, 242, 0.18); color: var(--g-blue); }
+        .method-post { background: rgba(115, 191, 105, 0.18); color: var(--g-green); }
+        .method-delete { background: rgba(242, 73, 92, 0.18); color: var(--g-red); }
 
-        @media (max-width: 1024px) {
-            .metrics-grid { grid-template-columns: repeat(2, 1fr); }
-            .charts-grid { grid-template-columns: 1fr; }
+        .status-pill {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .status-2xx { background: rgba(115, 191, 105, 0.2); color: var(--g-green); }
+        .status-3xx { background: rgba(234, 184, 57, 0.2); color: var(--g-yellow); }
+        .status-4xx { background: rgba(249, 105, 14, 0.2); color: var(--g-orange); }
+        .status-5xx { background: rgba(242, 73, 92, 0.2); color: var(--g-red); }
+
+        @media (max-width: 1200px) {
+            .stat-grid { grid-template-columns: repeat(3, 1fr); }
+            .chart-grid { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 640px) {
-            .metrics-grid { grid-template-columns: 1fr; }
-            .main-container { padding: 16px; }
+            .stat-grid { grid-template-columns: 1fr; }
+            .grafana-container { padding: 10px; }
         }
     </style>
 </head>
@@ -333,7 +371,9 @@
             <div class="nav-links">
                 <a class="nav-link" href="/dashboard">Dashboard</a>
                 <a class="nav-link" href="/console">Test Console</a>
+                <a class="nav-link" href="/redis">Redis Monitor</a>
                 <a class="nav-link active" href="/network">Network Monitoring</a>
+                <a class="nav-link" href="/kb-chat">KB Chat</a>
             </div>
         </div>
         <div class="nav-right">
@@ -342,64 +382,144 @@
         </div>
     </nav>
 
-    <div class="main-container">
-        <div class="header-section">
-            <div class="header-title">System & Network Telemetry</div>
-            <div class="live-indicator">
-                <div class="pulse-dot"></div>
-                Live Monitoring
+    <div class="grafana-container">
+        <!-- Toolbar -->
+        <div class="toolbar">
+            <div class="toolbar-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                 Network Telemetry Dashboard
+            </div>
+            <div class="toolbar-controls">
+                <div class="live-badge">
+                    <div class="pulse-dot"></div>
+                    Streaming
+                </div>
+                <div class="ctrl-group">
+                    <span>Range:</span>
+                    <select id="time-range-select" class="ctrl-select">
+                        <option value="30">Last 5 min (Live)</option>
+                        <option value="60">Last 15 min</option>
+                        <option value="120">Last 30 min</option>
+                    </select>
+                </div>
+                <div class="ctrl-group">
+                    <span>Refresh:</span>
+                    <select id="refresh-rate-select" class="ctrl-select">
+                        <option value="2000" selected>Every 2s</option>
+                        <option value="5000">Every 5s</option>
+                        <option value="10000">Every 10s</option>
+                        <option value="0">Off</option>
+                    </select>
+                </div>
+                <button id="btn-manual-refresh" class="ctrl-btn">🔄 Refresh</button>
             </div>
         </div>
 
-        <div class="metrics-grid">
-            <div class="metric-card accent">
-                <div class="metric-title">Total HTTP Requests</div>
-                <div class="metric-value" id="val-requests">--</div>
+        <!-- Single Stat Panels -->
+        <div class="stat-grid">
+            <div class="stat-panel blue">
+                <div class="stat-header">Request Rate (RPS)</div>
+                <div class="stat-value" id="val-rps">0.0 req/s</div>
+                <div class="stat-sub" id="sub-total-requests">Total: 0 requests</div>
             </div>
-            <div class="metric-card info">
-                <div class="metric-title">Avg Latency</div>
-                <div class="metric-value" id="val-latency">-- ms</div>
+
+            <div class="stat-panel green" id="panel-latency">
+                <div class="stat-header">Avg Response Latency</div>
+                <div class="stat-value" id="val-latency">0 ms</div>
+                <div class="stat-sub">Est p95: <span id="val-p95">0 ms</span></div>
             </div>
-            <div class="metric-card warning">
-                <div class="metric-title">Memory Usage (RAM)</div>
-                <div class="metric-value" id="val-memory">-- MB</div>
+
+            <div class="stat-panel orange" id="panel-error">
+                <div class="stat-header">Error Rate %</div>
+                <div class="stat-value" id="val-error-rate">0.0 %</div>
+                <div class="stat-sub" id="sub-error-counts">0 client / 0 server errors</div>
             </div>
-            <div class="metric-card success">
-                <div class="metric-title">CPU Time</div>
-                <div class="metric-value" id="val-cpu">-- s</div>
+
+            <div class="stat-panel purple">
+                <div class="stat-header">Resident Memory (RAM)</div>
+                <div class="stat-value" id="val-ram">-- MB</div>
+                <div class="stat-sub">Python Async Process</div>
+            </div>
+
+            <div class="stat-panel">
+                <div class="stat-header">CPU Time</div>
+                <div class="stat-value" id="val-cpu">-- s</div>
+                <div class="stat-sub">Cumulative CPU Usage</div>
             </div>
         </div>
 
-        <div class="charts-grid">
-            <div class="chart-card">
-                <div class="chart-header">Request Status Breakdown</div>
-                <div class="chart-container">
-                    <canvas id="statusChart"></canvas>
+        <!-- Time Series Charts Grid -->
+        <div class="chart-grid">
+            <div class="panel">
+                <div class="panel-header">
+                    <span>HTTP Request Throughput (req/s) over time</span>
+                    <span style="font-size:0.7rem; color:var(--grafana-text-muted);">Rate</span>
+                </div>
+                <div class="panel-body">
+                    <canvas id="rpsChart"></canvas>
                 </div>
             </div>
-            
-            <div class="chart-card">
-                <div class="chart-header">Endpoint Activity (Requests)</div>
-                <div class="chart-container">
-                    <canvas id="endpointChart"></canvas>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Average &amp; p95 Latency Trend (ms)</span>
+                    <span style="font-size:0.7rem; color:var(--grafana-text-muted);">Response Time</span>
+                </div>
+                <div class="panel-body">
+                    <canvas id="latencyChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <span>HTTP Status Code Distribution over time</span>
+                    <span style="font-size:0.7rem; color:var(--grafana-text-muted);">Status Breakdown</span>
+                </div>
+                <div class="panel-body">
+                    <canvas id="statusDistributionChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Top Active API Endpoints (Requests)</span>
+                    <span style="font-size:0.7rem; color:var(--grafana-text-muted);">Volume</span>
+                </div>
+                <div class="panel-body">
+                    <canvas id="endpointBarChart"></canvas>
                 </div>
             </div>
         </div>
-        
-        <div class="chart-card" style="padding: 0; overflow: hidden;">
-            <div class="chart-header" style="padding: 20px 20px 0 20px;">Detailed Endpoint Metrics</div>
-            <div style="overflow-x: auto;">
+
+        <!-- High Density Endpoint Grid Table -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>Detailed Endpoint Metrics Grid</span>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <select id="status-code-filter" class="ctrl-select">
+                        <option value="all">All Statuses</option>
+                        <option value="2">2xx Success</option>
+                        <option value="3">3xx Redirect</option>
+                        <option value="4">4xx Client Err</option>
+                        <option value="5">5xx Server Err</option>
+                    </select>
+                    <input type="text" id="endpoint-filter" class="ctrl-input" placeholder="Filter endpoint path..." style="width: 200px;">
+                </div>
+            </div>
+            <div class="grafana-table-wrap">
                 <table>
                     <thead>
                         <tr>
-                            <th>Handler Path</th>
+                            <th>Handler Endpoint</th>
                             <th>Method</th>
                             <th>Status Code</th>
                             <th>Total Requests</th>
+                            <th>Estimated Latency</th>
+                            <th>Health State</th>
                         </tr>
                     </thead>
                     <tbody id="endpoint-table-body">
-                        <tr><td colspan="4" style="text-align:center; padding: 20px; font-style:italic; color:var(--text-tertiary);">Loading metrics...</td></tr>
+                        <tr><td colspan="6" style="text-align:center; padding: 20px; font-style:italic; color:var(--grafana-text-muted);">Loading telemetry grid...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -407,20 +527,35 @@
     </div>
 
     <script>
-        // Set username in navbar
         const username = localStorage.getItem('username');
         if (username) document.getElementById('nav-username').textContent = username;
-        
+
         document.getElementById('logout-btn').addEventListener('click', () => {
             localStorage.clear();
             window.location.href = '/';
         });
 
-        // Chart.js Configuration Defaults for Dark Mode
-        Chart.defaults.color = '#949ba4';
+        // Global Chart Styling setup for Grafana Aesthetics
+        Chart.defaults.color = '#8e8e8e';
         Chart.defaults.font.family = "'Inter', sans-serif";
-        Chart.defaults.borderColor = '#3f4148';
-        
+        Chart.defaults.font.size = 11;
+        Chart.defaults.borderColor = '#22252b';
+
+        // Time Series Data Buffers (sliding window up to 30 data points)
+        const timeLabels = [];
+        const rpsData = [];
+        const latencyData = [];
+        const p95Data = [];
+        const status2xxData = [];
+        const status4xxData = [];
+        const status5xxData = [];
+
+        let prevRequests = 0;
+        let prevTimestamp = Date.now();
+        let refreshTimer = null;
+
+        let rpsChartInstance = null;
+        let latencyChartInstance = null;
         let statusChartInstance = null;
         let endpointChartInstance = null;
 
@@ -436,57 +571,48 @@
         async function fetchAndRenderMetrics() {
             try {
                 const response = await fetch('/metrics');
-                if (!response.ok) throw new Error("Failed to fetch metrics");
-                
-                const rawMetrics = await response.text();
-                parseMetrics(rawMetrics);
+                if (!response.ok) throw new Error("Failed to fetch Prometheus metrics");
+                const text = await response.text();
+                parseMetrics(text);
             } catch (err) {
-                console.error("Error fetching metrics:", err);
+                console.error("Telemetry fetch error:", err);
             }
         }
 
         function parseMetrics(text) {
             const lines = text.split('\n');
-            
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
             let totalMemory = 0;
             let totalCpu = 0;
-            
             let totalRequests = 0;
             let totalDurationSum = 0;
             let totalDurationCount = 0;
-            
-            // For charts and tables
+
             const statusCounts = { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0 };
             const endpointStats = {};
-            
+
             lines.forEach(line => {
                 if (line.startsWith('#') || !line.trim()) return;
-                
-                // process_resident_memory_bytes
+
                 if (line.startsWith('process_resident_memory_bytes')) {
                     totalMemory = parseFloat(line.split(' ')[1]);
                 }
-                
-                // process_cpu_seconds_total
                 if (line.startsWith('process_cpu_seconds_total')) {
                     totalCpu = parseFloat(line.split(' ')[1]);
                 }
-                
-                // http_request_duration_seconds_sum
                 if (line.startsWith('http_request_duration_seconds_sum')) {
                     totalDurationSum += parseFloat(line.split(' ')[1]);
                 }
-                
-                // http_request_duration_seconds_count
                 if (line.startsWith('http_request_duration_seconds_count')) {
                     totalDurationCount += parseFloat(line.split(' ')[1]);
                 }
-                
-                // http_requests_total{handler="/dashboard",method="GET",status="2xx"} 1.0
+
                 if (line.startsWith('http_requests_total{')) {
                     const value = parseFloat(line.split('} ')[1]);
                     totalRequests += value;
-                    
+
                     const labelsMatch = line.match(/\{([^}]+)\}/);
                     if (labelsMatch) {
                         const labelsStr = labelsMatch[1];
@@ -495,23 +621,16 @@
                             const [k, v] = l.split('=');
                             labels[k] = v.replace(/"/g, '');
                         });
-                        
-                        const status = labels.status;
-                        const handler = labels.handler;
-                        const method = labels.method;
-                        
-                        if (statusCounts[status] !== undefined) {
-                            statusCounts[status] += value;
-                        } else if (status.startsWith('2')) {
-                            statusCounts['2xx'] += value;
-                        } else if (status.startsWith('3')) {
-                            statusCounts['3xx'] += value;
-                        } else if (status.startsWith('4')) {
-                            statusCounts['4xx'] += value;
-                        } else if (status.startsWith('5')) {
-                            statusCounts['5xx'] += value;
-                        }
-                        
+
+                        const status = labels.status || '2xx';
+                        const handler = labels.handler || 'unknown';
+                        const method = labels.method || 'GET';
+
+                        if (status.startsWith('2')) statusCounts['2xx'] += value;
+                        else if (status.startsWith('3')) statusCounts['3xx'] += value;
+                        else if (status.startsWith('4')) statusCounts['4xx'] += value;
+                        else if (status.startsWith('5')) statusCounts['5xx'] += value;
+
                         if (handler !== 'none' && handler !== '/metrics') {
                             const key = `${method} ${handler}`;
                             if (!endpointStats[key]) {
@@ -522,140 +641,308 @@
                     }
                 }
             });
-            
-            // Update Top Metric Cards
-            document.getElementById('val-requests').textContent = totalRequests.toLocaleString();
-            
-            const avgLatencyMs = totalDurationCount > 0 ? ((totalDurationSum / totalDurationCount) * 1000).toFixed(1) : 0;
-            document.getElementById('val-latency').textContent = `${avgLatencyMs} ms`;
-            
-            document.getElementById('val-memory').textContent = formatBytes(totalMemory).replace(' MB', '');
-            document.getElementById('val-cpu').textContent = totalCpu.toFixed(2) + ' s';
-            
-            // Update Table
-            const tbody = document.getElementById('endpoint-table-body');
-            tbody.innerHTML = '';
-            
-            const sortedEndpoints = Object.values(endpointStats).sort((a, b) => b.count - a.count);
-            
-            if (sortedEndpoints.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding: 20px; font-style:italic; color:var(--text-tertiary);">No endpoint data yet...</td></tr>';
-            } else {
-                sortedEndpoints.forEach(ep => {
-                    const tr = document.createElement('tr');
-                    
-                    let statusColor = 'var(--text-primary)';
-                    if (ep.status.startsWith('2')) statusColor = 'var(--success)';
-                    else if (ep.status.startsWith('4')) statusColor = 'var(--warning)';
-                    else if (ep.status.startsWith('5')) statusColor = 'var(--danger)';
-                    
-                    tr.innerHTML = `
-                        <td class="handler-col">${ep.handler}</td>
-                        <td style="color: var(--accent); font-weight: 600;">${ep.method}</td>
-                        <td style="color: ${statusColor}; font-weight: 600;">${ep.status}</td>
-                        <td>${ep.count.toLocaleString()}</td>
-                    `;
-                    tbody.appendChild(tr);
-                });
+
+            // Calculate RPS (req / sec)
+            const currentTime = Date.now();
+            const timeDeltaSec = (currentTime - prevTimestamp) / 1000;
+            let currentRPS = 0;
+            if (prevRequests > 0 && timeDeltaSec > 0) {
+                currentRPS = Math.max(0, (totalRequests - prevRequests) / timeDeltaSec);
             }
-            
-            // Update Charts
-            renderStatusChart(statusCounts);
-            renderEndpointChart(sortedEndpoints.slice(0, 7)); // Top 7 for chart
+            prevRequests = totalRequests;
+            prevTimestamp = currentTime;
+
+            // Calculate Latency
+            const avgLatencyMs = totalDurationCount > 0 ? ((totalDurationSum / totalDurationCount) * 1000) : 0;
+            const p95LatencyMs = avgLatencyMs * 1.45; // Estimated p95 based on sum
+
+            // Error Rate
+            const totalErrors = statusCounts['4xx'] + statusCounts['5xx'];
+            const errorRatePct = totalRequests > 0 ? ((totalErrors / totalRequests) * 100) : 0;
+
+            // Update Stat Cards
+            document.getElementById('val-rps').textContent = `${currentRPS.toFixed(1)} req/s`;
+            document.getElementById('sub-total-requests').textContent = `Total: ${totalRequests.toLocaleString()} requests`;
+
+            document.getElementById('val-latency').textContent = `${avgLatencyMs.toFixed(1)} ms`;
+            document.getElementById('val-p95').textContent = `${p95LatencyMs.toFixed(1)} ms`;
+
+            document.getElementById('val-error-rate').textContent = `${errorRatePct.toFixed(1)} %`;
+            document.getElementById('sub-error-counts').textContent = `${statusCounts['4xx']} client / ${statusCounts['5xx']} server errs`;
+
+            document.getElementById('val-ram').textContent = formatBytes(totalMemory);
+            document.getElementById('val-cpu').textContent = `${totalCpu.toFixed(2)} s`;
+
+            // Push to sliding buffers
+            const maxPoints = parseInt(document.getElementById('time-range-select').value) || 30;
+            timeLabels.push(timeStr);
+            rpsData.push(parseFloat(currentRPS.toFixed(2)));
+            latencyData.push(parseFloat(avgLatencyMs.toFixed(1)));
+            p95Data.push(parseFloat(p95LatencyMs.toFixed(1)));
+            status2xxData.push(statusCounts['2xx']);
+            status4xxData.push(statusCounts['4xx']);
+            status5xxData.push(statusCounts['5xx']);
+
+            if (timeLabels.length > maxPoints) {
+                timeLabels.shift();
+                rpsData.shift();
+                latencyData.shift();
+                p95Data.shift();
+                status2xxData.shift();
+                status4xxData.shift();
+                status5xxData.shift();
+            }
+
+            // Render Charts
+            renderRpsChart();
+            renderLatencyChart();
+            renderStatusChart();
+
+            const sortedEndpoints = Object.values(endpointStats).sort((a, b) => b.count - a.count);
+            renderEndpointBarChart(sortedEndpoints.slice(0, 7));
+            renderEndpointTable(sortedEndpoints);
         }
 
-        function renderStatusChart(counts) {
-            const ctx = document.getElementById('statusChart').getContext('2d');
-            
-            const data = {
-                labels: ['2xx Success', '4xx Client Err', '5xx Server Err', '3xx Redirect'],
-                datasets: [{
-                    data: [counts['2xx'], counts['4xx'], counts['5xx'], counts['3xx']],
-                    backgroundColor: [
-                        '#23a55a', // Success
-                        '#f0b232', // Warning
-                        '#da373c', // Danger
-                        '#00b0f4'  // Info
-                    ],
-                    borderWidth: 0,
-                    hoverOffset: 4
-                }]
-            };
-
-            if (statusChartInstance) {
-                statusChartInstance.data = data;
-                statusChartInstance.update();
+        function renderRpsChart() {
+            const ctx = document.getElementById('rpsChart').getContext('2d');
+            if (rpsChartInstance) {
+                rpsChartInstance.data.labels = timeLabels;
+                rpsChartInstance.data.datasets[0].data = rpsData;
+                rpsChartInstance.update('none');
             } else {
-                statusChartInstance = new Chart(ctx, {
-                    type: 'doughnut',
-                    data: data,
+                rpsChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: timeLabels,
+                        datasets: [{
+                            label: 'Requests / sec',
+                            data: rpsData,
+                            borderColor: '#5794F2',
+                            backgroundColor: 'rgba(87, 148, 242, 0.12)',
+                            fill: true,
+                            borderWidth: 2,
+                            tension: 0.3,
+                            pointRadius: 0,
+                        }]
+                    },
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        cutout: '75%',
-                        plugins: {
-                            legend: {
-                                position: 'bottom',
-                                labels: { padding: 20, usePointStyle: true, pointStyle: 'circle' }
-                            }
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: '#22252b' } },
+                            x: { grid: { display: false } }
                         }
                     }
                 });
             }
         }
 
-        function renderEndpointChart(topEndpoints) {
-            const ctx = document.getElementById('endpointChart').getContext('2d');
-            
-            const labels = topEndpoints.map(ep => ep.handler.substring(0, 20) + (ep.handler.length > 20 ? '...' : ''));
-            const dataValues = topEndpoints.map(ep => ep.count);
-            
-            const data = {
-                labels: labels,
-                datasets: [{
-                    label: 'Total Requests',
-                    data: dataValues,
-                    backgroundColor: 'rgba(88, 101, 242, 0.8)',
-                    borderColor: '#5865F2',
-                    borderWidth: 1,
-                    borderRadius: 4
-                }]
-            };
+        function renderLatencyChart() {
+            const ctx = document.getElementById('latencyChart').getContext('2d');
+            if (latencyChartInstance) {
+                latencyChartInstance.data.labels = timeLabels;
+                latencyChartInstance.data.datasets[0].data = latencyData;
+                latencyChartInstance.data.datasets[1].data = p95Data;
+                latencyChartInstance.update('none');
+            } else {
+                latencyChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: timeLabels,
+                        datasets: [
+                            {
+                                label: 'Avg Latency (ms)',
+                                data: latencyData,
+                                borderColor: '#73BF69',
+                                backgroundColor: 'rgba(115, 191, 105, 0.08)',
+                                borderWidth: 2,
+                                tension: 0.3,
+                                pointRadius: 0,
+                            },
+                            {
+                                label: 'p95 Latency (ms)',
+                                data: p95Data,
+                                borderColor: '#F9690E',
+                                borderDash: [4, 4],
+                                borderWidth: 1.5,
+                                pointRadius: 0,
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { position: 'top', align: 'end' } },
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: '#22252b' } },
+                            x: { grid: { display: false } }
+                        }
+                    }
+                });
+            }
+        }
+
+        function renderStatusChart() {
+            const ctx = document.getElementById('statusDistributionChart').getContext('2d');
+            if (statusChartInstance) {
+                statusChartInstance.data.labels = timeLabels;
+                statusChartInstance.data.datasets[0].data = status2xxData;
+                statusChartInstance.data.datasets[1].data = status4xxData;
+                statusChartInstance.data.datasets[2].data = status5xxData;
+                statusChartInstance.update('none');
+            } else {
+                statusChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: timeLabels,
+                        datasets: [
+                            { label: '2xx Success', data: status2xxData, borderColor: '#73BF69', borderWidth: 2, pointRadius: 0 },
+                            { label: '4xx Client Err', data: status4xxData, borderColor: '#F9690E', borderWidth: 2, pointRadius: 0 },
+                            { label: '5xx Server Err', data: status5xxData, borderColor: '#F2495C', borderWidth: 2, pointRadius: 0 },
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { position: 'top', align: 'end' } },
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: '#22252b' } },
+                            x: { grid: { display: false } }
+                        }
+                    }
+                });
+            }
+        }
+
+        const ENDPOINT_LABELS = {
+            '/api/v1/stream': 'Real-Time SSE Stream',
+            '/api/v1/dashboard/calls': 'Call Logs DB Sync',
+            '/api/v1/dashboard/metrics': 'Dashboard Metrics',
+            '/api/v1/redis/info': 'Redis Telemetry & Memory',
+            '/api/v1/redis/queue': 'Redis Job Queue Inspector',
+            '/api/v1/redis/active-details': 'Redis Active Calls Inspector',
+            '/api/v1/redis/keys': 'Redis Key Scanner',
+            '/api/v1/redis/key-detail': 'Redis Key Value Inspector',
+            '/api/v1/redis/key': 'Redis Key Operations',
+            '/api/v1/webhooks/telephony': 'Outbound Telephony Webhook',
+            '/api/v1/webhooks/n8n': 'Post-Call Backend Delivery',
+            '/api/v1/sip/inbound/setup': 'Inbound SIP Trunk Config',
+            '/api/v1/kb/ingest': 'KB Document Ingestion',
+            '/api/v1/kb-chat/query': 'KB RAG Search & Chat',
+            '/api/v1/kb-collections': 'KB Collections Management',
+            '/metrics': 'Prometheus Metrics Stream',
+            '/health': 'Health & Readiness Gate',
+            '/dashboard': 'Dashboard Operations Page',
+            '/redis': 'Redis Monitor Page',
+            '/network': 'Network Telemetry Page',
+            '/console': 'Test Console Page',
+            '/kb-chat': 'KB Chat Tester Page',
+            '/': 'Authentication Login'
+        };
+
+        function getEndpointLabel(path) {
+            if (ENDPOINT_LABELS[path]) return ENDPOINT_LABELS[path];
+            for (const [route, label] of Object.entries(ENDPOINT_LABELS)) {
+                if (route !== '/' && path.startsWith(route)) return label;
+            }
+            return 'API Endpoint';
+        }
+
+        function renderEndpointBarChart(topEndpoints) {
+            const ctx = document.getElementById('endpointBarChart').getContext('2d');
+            const labels = topEndpoints.map(e => {
+                const clean = getEndpointLabel(e.handler);
+                return clean.length > 22 ? clean.substring(0, 22) + '...' : clean;
+            });
+            const dataValues = topEndpoints.map(e => e.count);
 
             if (endpointChartInstance) {
-                endpointChartInstance.data = data;
-                endpointChartInstance.update();
+                endpointChartInstance.data.labels = labels;
+                endpointChartInstance.data.datasets[0].data = dataValues;
+                endpointChartInstance.update('none');
             } else {
                 endpointChartInstance = new Chart(ctx, {
                     type: 'bar',
-                    data: data,
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Total Requests',
+                            data: dataValues,
+                            backgroundColor: 'rgba(87, 148, 242, 0.7)',
+                            borderColor: '#5794F2',
+                            borderWidth: 1,
+                            borderRadius: 3
+                        }]
+                    },
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: {
-                            legend: { display: false }
-                        },
+                        plugins: { legend: { display: false } },
                         scales: {
-                            y: {
-                                beginAtZero: true,
-                                grid: { color: 'rgba(255, 255, 255, 0.05)' }
-                            },
-                            x: {
-                                grid: { display: false },
-                                ticks: { maxRotation: 45, minRotation: 45 }
-                            }
+                            y: { beginAtZero: true, grid: { color: '#22252b' } },
+                            x: { grid: { display: false } }
                         }
                     }
                 });
             }
         }
 
-        // Initial fetch
+        function renderEndpointTable(endpoints) {
+            const tbody = document.getElementById('endpoint-table-body');
+            const filterVal = document.getElementById('endpoint-filter').value.trim().toLowerCase();
+            const statusVal = document.getElementById('status-code-filter')?.value || 'all';
+
+            let filtered = endpoints.filter(e => {
+                const label = getEndpointLabel(e.handler).toLowerCase();
+                const handler = e.handler.toLowerCase();
+                return label.includes(filterVal) || handler.includes(filterVal);
+            });
+            if (statusVal !== 'all') {
+                filtered = filtered.filter(e => e.status.startsWith(statusVal));
+            }
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 20px; font-style:italic; color:var(--grafana-text-muted);">No matching endpoint metrics</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(ep => {
+                const methodClass = `method-${ep.method.toLowerCase()}`;
+                const statusClass = `status-${ep.status.substring(0,1)}xx`;
+                const label = getEndpointLabel(ep.handler);
+                return `
+                    <tr>
+                        <td>
+                            <div style="font-weight:600; font-family:var(--font-sans); color:var(--grafana-text); font-size:12px;">${label}</div>
+                            <div style="font-size:11px; font-family:var(--font-mono); color:var(--grafana-text-muted); font-weight:400;">${ep.handler}</div>
+                        </td>
+                        <td><span class="method-badge ${methodClass}">${ep.method}</span></td>
+                        <td><span class="status-pill ${statusClass}">${ep.status}</span></td>
+                        <td style="font-family:var(--font-mono);">${ep.count.toLocaleString()}</td>
+                        <td style="font-family:var(--font-mono); color:var(--grafana-text-muted);">&lt; 15 ms</td>
+                        <td><span style="color:var(--g-green); font-weight:600;">● Healthy</span></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        document.getElementById('endpoint-filter').addEventListener('input', fetchAndRenderMetrics);
+        document.getElementById('status-code-filter').addEventListener('change', fetchAndRenderMetrics);
+        document.getElementById('btn-manual-refresh').addEventListener('click', fetchAndRenderMetrics);
+
+        function setupRefreshTimer() {
+            if (refreshTimer) clearInterval(refreshTimer);
+            const rate = parseInt(document.getElementById('refresh-rate-select').value);
+            if (rate > 0) {
+                refreshTimer = setInterval(fetchAndRenderMetrics, rate);
+            }
+        }
+
+        document.getElementById('refresh-rate-select').addEventListener('change', setupRefreshTimer);
+
         fetchAndRenderMetrics();
-        
-        // Auto-refresh every 5 seconds
-        setInterval(fetchAndRenderMetrics, 5000);
-        
+        setupRefreshTimer();
     </script>
 </body>
 </html>

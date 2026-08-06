@@ -4,7 +4,10 @@
 > **Last Updated:** 2026-08-05  
 > **Status:** Active maintenance, trunk-based per-trunk call capacity gating, zombie room cleanup, DB enrichment
 
-## Recently Completed
+- [x] **Dashboard DB Sync, Redis State Monitor & Grafana Network UI (2026-08-06):**
+  1. **Dashboard DB Sync:** Updated `/api/v1/dashboard/calls` with search filtering (`call_id`, `caller_number`, `called_number`, `call_log`) and status filtering (`Completed`, `Busy`, `No Answer`, `Error`, `Incomplete`). Updated `dashboard.html` / `dashboard.js` with search bar, status selector, manual sync button, auto-sync on SSE call-end events and periodic 15s intervals. Added Call Log Details Modal with audio player, AI summary, and raw PostgreSQL JSON viewer.
+  2. **Redis Operations & Queue Monitor:** Added `/redis` route and API endpoints (`/api/v1/redis/info`, `/api/v1/redis/queue`, `/api/v1/redis/active-details`, `/api/v1/redis/keys`, `/api/v1/redis/key-detail`, `/api/v1/redis/key`). Created `static/redis.html` UI featuring summary cards, `queue:pending` job inspector, `calls:active` hash viewer, live key search/filtering, and key value inspector modal.
+  3. **Grafana-Style Network Telemetry:** Redesigned `static/network.html` with Grafana dark theme styling (`#111217` canvas, `#181b1f` panels, Grafana orange/blue/green/red color palette). Added toolbar with time range & refresh interval selectors, single stat cards (RPS, Latency ms + p95, Error rate %, RAM, CPU), live time-series charts (Throughput RPS, Latency trend, HTTP status codes `2xx`/`4xx`/`5xx`), and high-density endpoint metrics grid with search filter.
 
 - [x] **Redis Webhook Worker Failover & Read-Only Replica Reconnection (2026-08-06):** Resolved repeating `Timeout reading from...`, `UNBLOCKED force unblock...`, and `You can't write against a read only replica..` errors in `process_pending_webhooks()` worker in `mantra/ui_server.py`. Added dynamic client recreation on `ReadOnlyError`, `ResponseError`, and `RedisConnectionError` with `aclose()` pool disconnection. Configured `socket_timeout=15`, `socket_connect_timeout=5`, `health_check_interval=15`, and `retry_on_timeout=True`.
 

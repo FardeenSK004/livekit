@@ -562,6 +562,18 @@
             font-style: italic;
         }
 
+        .hidden { display: none !important; }
+        .modal-backdrop {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.75);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(3px);
+        }
+
         @media (max-width: 1024px) {
             .main-grid { grid-template-columns: 1fr; padding: 16px; }
             .metrics-row { grid-template-columns: repeat(2, 1fr); }
@@ -626,7 +638,9 @@
             <div class="nav-links">
                 <a class="nav-link active" href="/dashboard">Dashboard</a>
                 <a class="nav-link" href="/console">Test Console</a>
+                <a class="nav-link" href="/redis">Redis Monitor</a>
                 <a class="nav-link" href="/network">Network Monitoring</a>
+                <a class="nav-link" href="/kb-chat">KB Chat</a>
             </div>
         </div>
         <div class="nav-right">
@@ -657,9 +671,23 @@
             </div>
 
             <div class="card">
-                <div class="card-header">
-                    <h3>Call History</h3>
-                    <span class="badge-count" id="calls-total">0</span>
+                <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <h3>Call History</h3>
+                        <span class="badge-count" id="calls-total">0</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="text" id="call-search-input" placeholder="Search Call ID or Phone..." style="background:var(--bg-input); border:1px solid var(--border-default); border-radius:6px; padding:6px 10px; color:var(--text-primary); font-size:var(--text-xs); width:180px;">
+                        <select id="call-status-filter" style="background:var(--bg-input); border:1px solid var(--border-default); border-radius:6px; padding:6px 10px; color:var(--text-primary); font-size:var(--text-xs);">
+                            <option value="all">All Statuses</option>
+                            <option value="Completed">Completed</option>
+                            <option value="Busy">Busy</option>
+                            <option value="No Answer">No Answer</option>
+                            <option value="Error">Error</option>
+                            <option value="Incomplete">Incomplete</option>
+                        </select>
+                        <button id="btn-refresh-history" class="btn-logout" style="padding:6px 10px;">🔄 Sync DB</button>
+                    </div>
                 </div>
                 <div class="table-wrap">
                     <table>
@@ -667,13 +695,15 @@
                             <tr>
                                 <th>Status</th>
                                 <th>Call ID</th>
-                                <th>Client</th>
+                                <th>Client / Phone</th>
+                                <th>Trunk</th>
                                 <th>Duration</th>
                                 <th>Time</th>
+                                <th>Inspect</th>
                             </tr>
                         </thead>
                         <tbody id="calls-table-body">
-                            <tr><td colspan="5" class="empty-state">Loading...</td></tr>
+                            <tr><td colspan="7" class="empty-state">Loading...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -798,8 +828,48 @@
                 </div>
             </div>
         </div>
+    <!-- Call Detail Modal -->
+    <div id="call-detail-modal" class="modal-backdrop hidden">
+        <div style="background:var(--bg-surface); border:1px solid var(--border-default); border-radius:8px; width:90%; max-width:650px; max-height:85vh; display:flex; flex-direction:column; box-shadow:var(--shadow-md);">
+            <div style="padding:16px 20px; border-bottom:1px solid var(--border-default); display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="font-size:var(--text-base); font-weight:var(--weight-semibold);">Call Log Details — <span id="modal-call-id" style="font-family:var(--font-mono); color:var(--accent);">#--</span></h3>
+                <button id="btn-close-call-modal" class="btn-logout" style="padding:4px 10px;">✕ Close</button>
+            </div>
+            <div style="padding:20px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:16px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:var(--text-xs);">
+                    <div><b style="color:var(--text-secondary);">Status:</b> <span id="modal-call-status" class="status-badge">--</span></div>
+                    <div><b style="color:var(--text-secondary);">Duration:</b> <span id="modal-call-duration" style="font-family:var(--font-mono);">--</span></div>
+                    <div><b style="color:var(--text-secondary);">Caller Number:</b> <span id="modal-caller-num" style="font-family:var(--font-mono);">--</span></div>
+                    <div><b style="color:var(--text-secondary);">Called Number:</b> <span id="modal-called-num" style="font-family:var(--font-mono);">--</span></div>
+                    <div><b style="color:var(--text-secondary);">SIP Trunk ID:</b> <span id="modal-trunk-id" style="font-family:var(--font-mono);">--</span></div>
+                    <div><b style="color:var(--text-secondary);">Created At:</b> <span id="modal-created-at" style="font-family:var(--font-mono);">--</span></div>
+                </div>
+
+                <div id="modal-recording-container" style="display:none; background:var(--bg-elevated); padding:12px; border-radius:6px; border:1px solid var(--border-default);">
+                    <b style="font-size:var(--text-xs); color:var(--text-secondary); display:block; margin-bottom:6px;">Audio Recording:</b>
+                    <audio id="modal-audio-player" controls style="width:100%; height:36px;"></audio>
+                </div>
+
+                <div>
+                    <b style="font-size:var(--text-xs); color:var(--text-secondary); display:block; margin-bottom:6px;">AI Call Summary:</b>
+                    <div id="modal-call-summary" style="background:var(--bg-page); border:1px solid var(--border-default); border-radius:6px; padding:12px; font-size:var(--text-xs); line-height:1.5; color:var(--text-primary);">No summary available</div>
+                </div>
+
+                <div>
+                    <b style="font-size:var(--text-xs); color:var(--text-secondary); display:block; margin-bottom:6px;">Conversation Transcript:</b>
+                    <div id="modal-call-transcript" style="background:var(--bg-page); border:1px solid var(--border-default); border-radius:6px; padding:12px; max-height:260px; overflow-y:auto; display:flex; flex-direction:column; gap:8px;">
+                        <div style="color:var(--text-tertiary); font-size:var(--text-xs); font-style:italic; text-align:center;">No transcript available for this call</div>
+                    </div>
+                </div>
+
+                <div>
+                    <b style="font-size:var(--text-xs); color:var(--text-secondary); display:block; margin-bottom:6px;">Raw PostgreSQL JSON Log:</b>
+                    <pre id="modal-raw-json" style="background:var(--bg-page); border:1px solid var(--border-default); border-radius:6px; padding:12px; font-family:var(--font-mono); font-size:11px; color:#4ade80; white-space:pre-wrap; word-break:break-all; max-height:160px; overflow-y:auto;"></pre>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <script src="/static/dashboard.js?v=5"></script>
+    <script src="/static/dashboard.js?v=12"></script>
 </body>
 </html>
