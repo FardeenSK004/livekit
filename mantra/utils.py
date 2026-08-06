@@ -78,6 +78,7 @@ async def save_call_event(
     event_status: str = "success",
     event_error: str = "",
     event_log: str = "",
+    ai_call_id: str = "",
 ):
     """Save a single call-lifecycle event to the call_events audit table.
 
@@ -96,6 +97,14 @@ async def save_call_event(
     if not all([db_user, db_password, db_name, db_host, db_port]):
         return
 
+    extracted_ai_call_id = (
+        ai_call_id
+        or (event_payload.get("ai_call_id") if isinstance(event_payload, dict) else "")
+        or (event_payload.get("job_id") if isinstance(event_payload, dict) else "")
+        or (event_payload.get("data", {}).get("ai_call_id") if isinstance(event_payload, dict) and isinstance(event_payload.get("data"), dict) else "")
+        or ""
+    )
+
     conn = None
     try:
         conn = await asyncpg.connect(
@@ -109,13 +118,14 @@ async def save_call_event(
         try:
             await conn.execute(
                 """
-                INSERT INTO call_events (call_id, event_type, event_source, event_payload, event_log, event_status, event_error)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+                INSERT INTO call_events (call_id, event_type, event_source, event_payload, event_log, event_status, event_error, ai_call_id)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
                 ON CONFLICT (call_id, event_type) DO UPDATE
                 SET event_payload = EXCLUDED.event_payload,
                     event_log     = EXCLUDED.event_log,
                     event_status  = EXCLUDED.event_status,
-                    event_error   = EXCLUDED.event_error;
+                    event_error   = EXCLUDED.event_error,
+                    ai_call_id    = EXCLUDED.ai_call_id;
                 """,
                 str(call_id),
                 event_type,
@@ -124,6 +134,7 @@ async def save_call_event(
                 str(event_log or "")[:8000],
                 event_status,
                 event_error or "",
+                str(extracted_ai_call_id or ""),
             )
         except asyncpg.UniqueViolationError as uve:
             if "call_events_pkey" in str(uve):
