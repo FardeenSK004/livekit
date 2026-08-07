@@ -53,6 +53,7 @@ from livekit.agents import TurnHandlingOptions
 from livekit.plugins import openai, google, silero, deepgram
 
 from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_datetime, save_call_log_to_db, save_call_event, report_telemetry
+from mantra.amd import detect_voicemail
 
 # Import knowledge base
 from mantra.knowledge_base import PostgresKnowledgeBase
@@ -80,6 +81,8 @@ load_dotenv(
 
 AGENT_NAME = os.getenv("AGENT_NAME", "mantra-agent")
 logger.info(f"Agent name configured as: {AGENT_NAME}")
+
+AMD_ENABLED = os.getenv("AMD_ENABLED", "1") == "1"
 
 server = AgentServer(num_idle_processes=20, shutdown_process_timeout=120.0)
 
@@ -1244,6 +1247,33 @@ Follow these specific instructions:
             call_state["timeline"].append({"event": "Remote Participant Joined", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"})
             await _telemetry("Customer joined the call")
             await asyncio.sleep(0.5)
+
+        # ── Answering Machine Detection (outbound only) ──────────────────────
+        if AMD_ENABLED and not is_inbound and not ctx.room.name.startswith("test_"):
+            detection = await detect_voicemail(session, participant_identity=f"sip_{call_id}")
+            if detection.category:
+                call_state["amd_category"] = detection.category
+                call_state["amd_transcript"] = detection.transcript
+                call_state["timeline"].append({
+                    "event": f"AMD Result: {detection.category}",
+                    "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+                })
+            if detection.detected:
+                logger.info("AMD: voicemail detected — handing off to agent")
+                try:
+                    speech_handle = session.generate_reply(
+                        instructions=(
+                            "The call went to voicemail. Follow your instructions about "
+                            "voicemail. If you have no voicemail instructions, introduce "
+                            "yourself by name and ask them to call you back. Keep it brief."
+                        )
+                    )
+                    await speech_handle.wait_for_playout()
+                    await _telemetry("amd_voicemail_message_played")
+                except Exception as e:
+                    logger.error(f"AMD voicemail message failed: {e}")
+                ctx.shutdown("voicemail detected")
+                return
 
         logger.info(f"[DIAG] Generating greeting for {client_name}...")
         try:
