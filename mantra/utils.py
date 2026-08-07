@@ -615,8 +615,7 @@ Client Country Code: {client_country_code}
    - If the patient is not interested or declined, select the stage for "not interested" or the specific declining reason stage.
    - If none of the stages match or the call did not change the state, default to the current stage ID: {current_stage_id}.
 3. Extract additional metadata:
-   - CRITICAL TIMEZONE INSTRUCTION: If the client discusses times (e.g., 'tomorrow at 3 PM'), interpret them in the client's local timezone based on their Client Country Code '{client_country_code}'. HOWEVER, you MUST convert the final output times for `next_call_on` and `appointment_date_time` into the server's local time in 'YYYY-MM-DD HH:MM:SS' format (matching {current_time_str}, which is the server's current local time).
-   - `next_call_on`: If a follow-up or callback is scheduled/needed, calculate the exact date and time in the server's local timezone (e.g., "2026-06-02 15:00:00"). If the stage description specifies adding 24 hours to the current time, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
+   - `next_call_on`: If a follow-up or callback is requested or needed (e.g., 'call me in 2 minutes', 'call back in 10 minutes', 'call back tomorrow'), YOU MUST CALCULATE THE EXACT DATE AND TIME. For relative requests like "in 2 minutes" or "in 10 minutes", add that duration to {current_time_str} (e.g., if {current_time_str} is '2026-08-07 10:32:25' and user asks to call back in 2 minutes, `next_call_on` MUST BE '2026-08-07 10:34:25'). If no follow-up is requested or needed, use null.
    - `appointment_date_time`: If the patient booked/confirmed an appointment, extract the date/time and convert to the server's local timezone (e.g., "2026-06-05 11:30:00"). Otherwise, use null.
    - `doctor`: Extract any mentioned doctor's name. Otherwise, use null.
    - `hospital_location`: Extract the preferred hospital location/center name. Otherwise, use null.
@@ -732,6 +731,30 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             hospital_location = ""
             sentiment_score = 0.5
 
+        if not next_call_on and history:
+            try:
+                import re
+                full_text = " ".join([
+                    (msg.get("content") or msg.get("user") or "")
+                    if isinstance(msg, dict)
+                    else (getattr(msg, "content", "") or (msg.text if hasattr(msg, "text") else ""))
+                    for msg in history
+                ]).lower()
+                
+                mins_matches = re.findall(r'\bin\s+(\d+)\s*(?:min|minute)', full_text)
+                if mins_matches:
+                    mins = int(mins_matches[-1])
+                    next_dt = datetime.datetime.now() + datetime.timedelta(minutes=mins)
+                    next_call_on = next_dt.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    hrs_matches = re.findall(r'\bin\s+(\d+)\s*(?:hour|hr)', full_text)
+                    if hrs_matches:
+                        hrs = int(hrs_matches[-1])
+                        next_dt = datetime.datetime.now() + datetime.timedelta(hours=hrs)
+                        next_call_on = next_dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception as e:
+                logger.warning(f"Failed to parse relative callback duration from transcript: {e}")
+
         target_stage_ids = [sid for sid in [not_answering_id, follow_up_id] if sid is not None]
         if new_stage_id is not None and new_stage_id in target_stage_ids and not next_call_on:
             tomorrow = datetime.datetime.utcnow() + datetime.timedelta(hours=24)
@@ -825,14 +848,21 @@ async def report_telemetry(
 
 
 def normalize_datetime(dt_str: Optional[str]) -> Optional[str]:
-    """Normalize 'YYYY-MM-DD HH:MM:SS' to a standard local time string 'YYYY-MM-DD HH:MM:SSZ'.
-
-    Returns None if input is None/empty. Passes through unparseable strings unchanged.
-    """
+    """Normalize datetime strings to ISO-8601 UTC string 'YYYY-MM-DDTHH:MM:SSZ'."""
     if not dt_str:
         return None
-    try:
-        dt = datetime.datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        return dt.strftime("%Y-%m-%d %H:%M:%S") + "Z"
-    except (ValueError, TypeError):
-        return dt_str
+    cleaned = str(dt_str).strip()
+    if not cleaned or cleaned.lower() in ("null", "none", "n/a"):
+        return None
+    cleaned_no_z = cleaned.rstrip("Z")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%f"):
+        try:
+            dt = datetime.datetime.strptime(cleaned_no_z, fmt)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, TypeError):
+            continue
+    if "T" in cleaned and not cleaned.endswith("Z"):
+        return cleaned + "Z"
+    if not cleaned.endswith("Z"):
+        return cleaned.replace(" ", "T") + "Z"
+    return cleaned

@@ -1056,7 +1056,7 @@ Follow these specific instructions:
                     call_state["prompted_inactivity"] = True
                     try:
                         session.generate_reply(
-                            user_input="[System: The user has been silent. Briefly ask if they are still there (e.g. 'Are you still there?' or 'Hello?'). Keep it extremely short.]"
+                            user_input="[System: The user has been silent. Briefly ask if they are still there (e.g. ''Hello, are you still on the line?' or 'Hello?'). Keep it extremely short.]"
                         )
                     except RuntimeError as e:
                         logger.warning(

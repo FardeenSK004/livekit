@@ -5,8 +5,9 @@
 ### KB Process & Stage Persistence for Inbound Webhooks
 - **feat:** Migration `005_kb_process_stage.py` — added `process_id`, `stage_id`, `stage_ids`, `process_assignments`, `process_description`, and `stage_description` columns to `kb_collections`, and `stage_id` to `org_configs`.
 - **feat:** Updated `/api/v1/kb/ingest` in `mantra/ui_server.py` to parse Zod-schema aligned `process_assignments` (`[{"process_id": int, "stage_ids": [int]}]`) as well as explicit `process_id` and `stage_id` parameters, storing them directly on `kb_collections` and `kb_pages.page_meta`.
-- **fix:** Updated `finalize()` in `mantra/agent.py` so that inbound calls send integer `process_id`, `stage_id`, and `new_stage_id` ONLY when a KB document was searched/referred during the call. If no KB search occurred during the conversation, `process_id`, `stage_id`, and `new_stage_id` are sent as `null` in `CALL_DATA_INBOUND_UPDATE`.
-- Files: `mantra/migrations/005_kb_process_stage.py`, `mantra/knowledge_base.py`, `mantra/ui_server.py`, `mantra/agent.py`
+- **fix:** Updated `normalize_datetime()` in `mantra/utils.py` to output ISO-8601 UTC timestamp format (`YYYY-MM-DDTHH:MM:SSZ`, with `T` separator and trailing `Z`).
+- **fix:** Added relative callback duration parser to `SessionRecorder.analyze_call()` in `mantra/utils.py`. If a user requests a callback (e.g., "Call me in 2 minutes", "Call in 10 mins", "in 1 hour"), Python automatically parses the latest requested duration and calculates `next_call_on` even if the LLM returns `null`.
+- Files: `mantra/utils.py`, `mantra/agent.py`
 
 ### AMD Exception Handling & Unevaluated LLM Compatibility
 - **fix:** Updated `detect_voicemail()` in `mantra/amd.py` to handle early audio stream closures (`RuntimeError("amd closed before a result was available")`) as clean `info` logs rather than logging noisy multiline Python stack traces.
