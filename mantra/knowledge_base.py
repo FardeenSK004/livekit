@@ -91,7 +91,18 @@ class KnowledgeBase(ABC):
         pass
 
     @abstractmethod
-    async def get_or_create_collection(self, org_id: str, document_id: str, name: str = "", process_description: str = "", stage_description: str = "") -> dict:
+    async def get_or_create_collection(
+        self,
+        org_id: str,
+        document_id: str,
+        name: str = "",
+        process_description: str = "",
+        stage_description: str = "",
+        process_id: Optional[int] = None,
+        stage_id: Optional[int] = None,
+        stage_ids: Optional[list[int]] = None,
+        process_assignments: Optional[list | dict] = None,
+    ) -> dict:
         """Find or create a KB collection for (org_id, document_id). Returns collection dict."""
         pass
 
@@ -252,31 +263,78 @@ class PostgresKnowledgeBase(KnowledgeBase):
             )
             return deleted_pages
 
-    async def get_or_create_collection(self, org_id: str, document_id: str, name: str = "", process_description: str = "", stage_description: str = "") -> dict:
+    async def get_or_create_collection(
+        self,
+        org_id: str,
+        document_id: str,
+        name: str = "",
+        process_description: str = "",
+        stage_description: str = "",
+        process_id: Optional[int] = None,
+        stage_id: Optional[int] = None,
+        stage_ids: Optional[list[int]] = None,
+        process_assignments: Optional[list | dict] = None,
+    ) -> dict:
         pool = await self._get_pool()
+        pa_json = json.dumps(process_assignments) if process_assignments is not None else None
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO kb_collections (org_id, document_id, name, process_description, stage_description)
-                VALUES ($1, $2, COALESCE(NULLIF($3, ''), $2), NULLIF($4, ''), NULLIF($5, ''))
+                INSERT INTO kb_collections (
+                    org_id, document_id, name, process_description, stage_description,
+                    process_id, stage_id, stage_ids, process_assignments
+                )
+                VALUES ($1, $2, COALESCE(NULLIF($3, ''), $2), NULLIF($4, ''), NULLIF($5, ''), $6, $7, $8, $9::jsonb)
                 ON CONFLICT (org_id, document_id) DO UPDATE SET
                     name = EXCLUDED.name,
                     process_description = EXCLUDED.process_description,
-                    stage_description = EXCLUDED.stage_description
-                RETURNING id, org_id, document_id, name, description, created_at, process_description, stage_description
+                    stage_description = EXCLUDED.stage_description,
+                    process_id = COALESCE(EXCLUDED.process_id, kb_collections.process_id),
+                    stage_id = COALESCE(EXCLUDED.stage_id, kb_collections.stage_id),
+                    stage_ids = COALESCE(EXCLUDED.stage_ids, kb_collections.stage_ids),
+                    process_assignments = COALESCE(EXCLUDED.process_assignments, kb_collections.process_assignments)
+                RETURNING id, org_id, document_id, name, description, created_at, process_description, stage_description, process_id, stage_id, stage_ids, process_assignments
                 """,
-                org_id, document_id, name, process_description, stage_description,
+                org_id, document_id, name, process_description, stage_description, process_id, stage_id, stage_ids, pa_json,
             )
-            return dict(row)
+            res = dict(row)
+            if res.get("process_assignments") and isinstance(res["process_assignments"], str):
+                try:
+                    res["process_assignments"] = json.loads(res["process_assignments"])
+                except Exception:
+                    pass
+            return res
 
     async def list_collections(self, org_id: str) -> list[dict]:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id, org_id, document_id, name, description, process_description, stage_description, created_at FROM kb_collections WHERE org_id = $1 ORDER BY created_at",
+                """
+                SELECT id, org_id, document_id, name, description, process_description, stage_description,
+                       process_id, stage_id, stage_ids, process_assignments, created_at
+                FROM kb_collections
+                WHERE org_id = $1
+                ORDER BY created_at DESC
+                """,
                 org_id,
             )
-            return [dict(r) for r in rows]
+            res = []
+            for r in rows:
+                d = dict(r)
+                if d.get("process_assignments") and isinstance(d["process_assignments"], str):
+                    try:
+                        d["process_assignments"] = json.loads(d["process_assignments"])
+                    except Exception:
+                        pass
+                res.append(d)
+            return res
+
+    async def get_collection_details_for_org(self, org_id: str) -> dict | None:
+        """Fetch the most recent collection details (including process_id and stage_id) for an org."""
+        cols = await self.list_collections(org_id)
+        if cols:
+            return cols[0]
+        return None
 
     async def delete_collection(self, collection_id: str) -> bool:
         pool = await self._get_pool()
@@ -330,7 +388,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
                     if isinstance(psd, list):
                         for entry in psd:
                             if isinstance(entry, dict):
-                                pid = entry.get("id")
+                                pid = entry.get("id") or entry.get("process_id")
                                 if pid is not None and pid not in seen_ids:
                                     seen_ids.add(pid)
                                     result.append(entry)
@@ -338,19 +396,27 @@ class PostgresKnowledgeBase(KnowledgeBase):
             if not result:
                 try:
                     cols = await conn.fetch(
-                        "SELECT id, org_id, document_id, name FROM kb_collections WHERE org_id = ANY($1::text[])",
+                        """
+                        SELECT id, org_id, document_id, name, process_description, stage_description,
+                               process_id, stage_id, stage_ids, process_assignments
+                        FROM kb_collections WHERE org_id = ANY($1::text[]) OR id::text = ANY($1::text[])
+                        ORDER BY created_at DESC
+                        """,
                         str_kb_ids,
                     )
                     for c in cols:
                         proc_desc = c.get("process_description", "") if hasattr(c, "get") else ""
                         stage_desc = c.get("stage_description", "") if hasattr(c, "get") else ""
+                        pid = c.get("process_id") or c["document_id"]
+                        sid = c.get("stage_id") or c["document_id"]
                         result.append({
-                            "id": c["document_id"],
+                            "id": pid,
+                            "process_id": pid,
                             "name": c["name"] or "Process",
                             "description": proc_desc or "",
                             "stages": [
                                 {
-                                    "stage_id": c["document_id"],
+                                    "stage_id": sid,
                                     "name": c["name"] or "Stage",
                                     "description": stage_desc or "",
                                 }

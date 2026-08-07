@@ -163,6 +163,16 @@ async def _resolve_from_db(phone_number: str) -> dict | None:
                 logger.error(f"Failed to fetch kb_ids for org {result.get('org_id')}: {e}")
                 kb_ids = [result.get("org_id")]
 
+            process_id = None
+            stage_id = None
+            try:
+                col_details = await kb.get_collection_details_for_org(result["org_id"])
+                if col_details:
+                    process_id = col_details.get("process_id")
+                    stage_id = col_details.get("stage_id")
+            except Exception as e:
+                logger.error(f"Failed to fetch collection details for org {result.get('org_id')}: {e}")
+
             return {
                 "org_id": result.get("org_id"),
                 "kb_id": result.get("org_id"),
@@ -171,7 +181,8 @@ async def _resolve_from_db(phone_number: str) -> dict | None:
                 "prompt": result.get("prompt"),
                 "voice": result.get("voice"),
                 "model": result.get("model"),
-                "process_id": result.get("process_id"),
+                "process_id": process_id,
+                "stage_id": stage_id,
                 "transfer_numbers": result.get("transfer_numbers", {}),
                 "client_name": result.get("client_name")
             }
@@ -297,21 +308,61 @@ class AssistantFunctions:
             raw = meta.get("process_id")
             if isinstance(raw, list):
                 for pid in raw:
-                    if pid and pid not in seen:
-                        seen.add(pid)
-                        result.append(pid)
-            elif raw and raw not in seen:
-                seen.add(raw)
-                result.append(raw)
+                    if pid is not None and str(pid) not in seen:
+                        seen.add(str(pid))
+                        result.append(str(pid))
+            elif raw is not None and str(raw) not in seen:
+                seen.add(str(raw))
+                result.append(str(raw))
+            pa = meta.get("process_assignments")
+            if isinstance(pa, list):
+                for entry in pa:
+                    if isinstance(entry, dict) and entry.get("process_id") is not None:
+                        pid_str = str(entry["process_id"])
+                        if pid_str not in seen:
+                            seen.add(pid_str)
+                            result.append(pid_str)
             psd = meta.get("process_stage_data")
             if isinstance(psd, list):
                 for entry in psd:
-                    pid = entry.get("id")
+                    pid = entry.get("id") or entry.get("process_id")
                     if pid is not None:
                         pid_str = str(pid)
                         if pid_str not in seen:
                             seen.add(pid_str)
                             result.append(pid_str)
+        return result
+
+    @property
+    def used_kb_stage_ids(self) -> list[str]:
+        if self._retriever is None:
+            return []
+        seen = set()
+        result = []
+        for meta in self._retriever.accessed_pages_meta:
+            raw = meta.get("stage_id")
+            if isinstance(raw, list):
+                for sid in raw:
+                    if sid is not None and str(sid) not in seen:
+                        seen.add(str(sid))
+                        result.append(str(sid))
+            elif raw is not None and str(raw) not in seen:
+                seen.add(str(raw))
+                result.append(str(raw))
+            s_ids = meta.get("stage_ids")
+            if isinstance(s_ids, list):
+                for sid in s_ids:
+                    if sid is not None and str(sid) not in seen:
+                        seen.add(str(sid))
+                        result.append(str(sid))
+            pa = meta.get("process_assignments")
+            if isinstance(pa, list):
+                for entry in pa:
+                    if isinstance(entry, dict) and isinstance(entry.get("stage_ids"), list):
+                        for sid in entry["stage_ids"]:
+                            if sid is not None and str(sid) not in seen:
+                                seen.add(str(sid))
+                                result.append(str(sid))
         return result
 
     @property
@@ -1387,7 +1438,7 @@ Follow these specific instructions:
                 except Exception as e:
                     logger.error(f"[DIAG] finalize(): Failed to parse call metadata: {e}")
 
-                # For inbound calls, get process_id from KB document used during call
+                # For inbound calls, get process_id and stage_id from KB document used during call
                 if call_payload.get("direction") == "inbound":
                     try:
                         if fnc_ctx and hasattr(fnc_ctx, "used_kb_process_ids"):
@@ -1395,6 +1446,11 @@ Follow these specific instructions:
                             if used_pids:
                                 call_payload["process_id"] = used_pids[0]
                                 logger.info(f"Using KB-tracked process_id for inbound: {used_pids[0]}")
+                        if fnc_ctx and hasattr(fnc_ctx, "used_kb_stage_ids"):
+                            used_sids = fnc_ctx.used_kb_stage_ids
+                            if used_sids:
+                                call_payload["stage_id"] = used_sids[0]
+                                logger.info(f"Using KB-tracked stage_id for inbound: {used_sids[0]}")
                     except Exception as e:
                         logger.error(f"Failed to extract KB usage metadata: {e}")
 
@@ -1568,8 +1624,37 @@ Follow these specific instructions:
             resolved_call_id = call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")
             direction = call_payload.get("direction")
 
-            effective_process_id = _as_int(call_payload.get("process_id") or derived_process_id)
-            effective_stage_id = _as_int(new_stage_id if new_stage_id is not None else current_stage_id)
+            kb_referred = False
+            if direction == "inbound":
+                try:
+                    if fnc_ctx and hasattr(fnc_ctx, "used_kb_process_ids"):
+                        used_pids = fnc_ctx.used_kb_process_ids
+                        if used_pids:
+                            call_payload["process_id"] = used_pids[0]
+                            kb_referred = True
+                            logger.info(f"Using KB-tracked process_id for inbound: {used_pids[0]}")
+                    if fnc_ctx and hasattr(fnc_ctx, "used_kb_stage_ids"):
+                        used_sids = fnc_ctx.used_kb_stage_ids
+                        if used_sids:
+                            call_payload["stage_id"] = used_sids[0]
+                            kb_referred = True
+                            logger.info(f"Using KB-tracked stage_id for inbound: {used_sids[0]}")
+                except Exception as e:
+                    logger.error(f"Failed to extract KB usage metadata: {e}")
+
+                if kb_referred:
+                    effective_process_id = _as_int(call_payload.get("process_id"))
+                    effective_stage_id = _as_int(new_stage_id if new_stage_id is not None else call_payload.get("stage_id"))
+                else:
+                    effective_process_id = None
+                    effective_stage_id = None
+            else:
+                effective_process_id = _as_int(call_payload.get("process_id") or derived_process_id)
+                effective_stage_id = _as_int(
+                    new_stage_id if new_stage_id is not None else (
+                        current_stage_id if current_stage_id is not None else call_payload.get("stage_id")
+                    )
+                )
 
             if direction == "inbound":
                 webhook_payload = {

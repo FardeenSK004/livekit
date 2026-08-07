@@ -954,6 +954,10 @@ async def ingest_kb_data(request: Request):
     tags_name = form.get("tags_name")
     document_id = form.get("document_id")
     process_stage_data = form.get("process_stage_data")
+    process_assignments_raw = form.get("process_assignments")
+    process_id_raw = form.get("process_id")
+    stage_id_raw = form.get("stage_id")
+    stage_ids_raw = form.get("stage_ids")
 
     if not org_id:
         return JSONResponse({"status_code": 400, "status": "error", "error": "org_id is required"}, status_code=400)
@@ -1006,10 +1010,111 @@ async def ingest_kb_data(request: Request):
         def parse_list(val):
             return [v.strip() for v in val.split(",")] if val else None
 
+        parsed_process_assignments = None
+        parsed_process_id = None
+        parsed_stage_id = None
+        parsed_stage_ids = []
+        proc_desc = ""
+        stage_desc = ""
+
+        if process_assignments_raw:
+            try:
+                pa = json.loads(process_assignments_raw) if isinstance(process_assignments_raw, str) else process_assignments_raw
+                if isinstance(pa, list) and len(pa) > 0:
+                    parsed_process_assignments = pa
+                    first_pa = pa[0]
+                    if isinstance(first_pa, dict):
+                        if first_pa.get("process_id"):
+                            parsed_process_id = int(first_pa["process_id"])
+                        s_ids = first_pa.get("stage_ids")
+                        if isinstance(s_ids, list) and len(s_ids) > 0:
+                            parsed_stage_ids = [int(s) for s in s_ids]
+                            parsed_stage_id = parsed_stage_ids[0]
+            except Exception as e:
+                logger.warning(f"Failed to parse process_assignments: {e}")
+
+        if process_stage_data:
+            try:
+                psd = json.loads(process_stage_data) if isinstance(process_stage_data, str) else process_stage_data
+                if isinstance(psd, list) and len(psd) > 0:
+                    first_p = psd[0]
+                    if isinstance(first_p, dict):
+                        if parsed_process_id is None:
+                            pid = first_p.get("id") or first_p.get("process_id")
+                            if pid is not None:
+                                try:
+                                    parsed_process_id = int(pid)
+                                except (TypeError, ValueError):
+                                    pass
+
+                        proc_desc = first_p.get("description") or first_p.get("name") or ""
+
+                        stages = first_p.get("stages") or first_p.get("stageDetails")
+                        if isinstance(stages, list) and len(stages) > 0:
+                            extracted_sids = []
+                            for stg in stages:
+                                if isinstance(stg, dict):
+                                    sid = stg.get("id") or stg.get("stage_id")
+                                    if sid is not None:
+                                        try:
+                                            extracted_sids.append(int(sid))
+                                        except (TypeError, ValueError):
+                                            pass
+                            if extracted_sids:
+                                if not parsed_stage_ids:
+                                    parsed_stage_ids = extracted_sids
+                                if parsed_stage_id is None:
+                                    parsed_stage_id = extracted_sids[0]
+
+                            first_stg = stages[0]
+                            if isinstance(first_stg, dict):
+                                stage_desc = (
+                                    first_stg.get("description")
+                                    or first_stg.get("desc")
+                                    or first_stg.get("name")
+                                    or ""
+                                )
+            except Exception as e:
+                logger.warning(f"Failed to parse process_stage_data: {e}")
+
+        if process_id_raw and parsed_process_id is None:
+            try:
+                parsed_process_id = int(process_id_raw)
+            except (TypeError, ValueError):
+                pass
+
+        if stage_id_raw and parsed_stage_id is None:
+            try:
+                parsed_stage_id = int(stage_id_raw)
+            except (TypeError, ValueError):
+                pass
+
+        if stage_ids_raw and not parsed_stage_ids:
+            try:
+                s_ids = json.loads(stage_ids_raw) if isinstance(stage_ids_raw, str) else stage_ids_raw
+                if isinstance(s_ids, list):
+                    parsed_stage_ids = [int(s) for s in s_ids]
+                    if parsed_stage_ids and parsed_stage_id is None:
+                        parsed_stage_id = parsed_stage_ids[0]
+            except Exception:
+                pass
+
+        if parsed_process_id and parsed_stage_ids and not parsed_process_assignments:
+            parsed_process_assignments = [
+                {
+                    "process_id": parsed_process_id,
+                    "stage_ids": parsed_stage_ids
+                }
+            ]
+
         page_meta = {
             "tags_name": parse_list(tags_name),
             "s3_url": s3_url,
             "document_id": document_id,
+            "process_id": parsed_process_id,
+            "stage_id": parsed_stage_id,
+            "stage_ids": parsed_stage_ids,
+            "process_assignments": parsed_process_assignments,
         }
         if process_stage_data:
             try:
@@ -1032,25 +1137,15 @@ async def ingest_kb_data(request: Request):
             except Exception as e:
                 logger.error(f"Failed to delete old chunks for document {document_id}: {e}")
 
-        # Extract process and stage descriptions from process_stage_data for kb_collections
-        proc_desc = ""
-        stage_desc = ""
-        if process_stage_data:
-            try:
-                psd = json.loads(process_stage_data) if isinstance(process_stage_data, str) else process_stage_data
-            except json.JSONDecodeError:
-                psd = process_stage_data
-            if isinstance(psd, list) and len(psd) > 0:
-                proc_desc = psd[0].get("description") or psd[0].get("name") or ""
-                stages = psd[0].get("stages")
-                if isinstance(stages, list) and len(stages) > 0:
-                    stage_desc = stages[0].get("description") or stages[0].get("name") or ""
-
         # Get or create a KB collection for this (org_id, document_id)
         collection = await kb.get_or_create_collection(
             org_id, doc_id, name=upload_file.filename if upload_file else doc_id,
             process_description=proc_desc,
             stage_description=stage_desc,
+            process_id=parsed_process_id,
+            stage_id=parsed_stage_id,
+            stage_ids=parsed_stage_ids if parsed_stage_ids else None,
+            process_assignments=parsed_process_assignments,
         )
         collection_id = str(collection["id"])
         logger.info(f"Using KB collection {collection_id} for org {org_id} document {doc_id}")

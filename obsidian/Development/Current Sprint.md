@@ -4,6 +4,8 @@
 > **Last Updated:** 2026-08-07  
 > **Status:** Active maintenance, trunk-based per-trunk call capacity gating, zombie room cleanup, DB enrichment
 
+- [x] **KB Process & Stage ID Persistence for Inbound Webhooks (2026-08-07):** Added database migration `mantra/migrations/005_kb_process_stage.py` adding `process_id`, `stage_id`, `stage_ids`, `process_assignments`, `process_description`, and `stage_description` columns to `kb_collections` (and `stage_id` to `org_configs`). Updated `/api/v1/kb/ingest` in `mantra/ui_server.py` to parse frontend Zod-schema `process_assignments` (`[{"process_id": int, "stage_ids": [int]}]`) as well as explicit form fields, persisting them to `kb_collections` and `kb_pages.page_meta`. Updated `finalize()` in `mantra/agent.py` to check if a KB search occurred during an inbound call: if a KB document was referred, the webhook delivers integer `process_id`, `stage_id`, and `new_stage_id`; if NO KB search occurred, `process_id`, `stage_id`, and `new_stage_id` are sent as `null`.
+
 - [x] **AMD Exception Handling & Unevaluated LLM Warning Suppression (2026-08-07):** Added `suppress_compatibility_warning=True` to `AMD(...)` in `mantra/amd.py` to suppress LiveKit's compatibility warning when using custom or unlisted LLM models like `deepseek-v4-flash`. Updated `detect_voicemail()` exception handler to log early audio stream closures (`RuntimeError`) cleanly as `info` messages instead of outputting verbose multiline tracebacks.
 
 

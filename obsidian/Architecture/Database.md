@@ -54,6 +54,10 @@ Groups KB pages into named collections per org. One collection = one document.
 | `description` | TEXT | Optional description |
 | `process_description` | TEXT | Main process description from `process_stage_data` |
 | `stage_description` | TEXT | First stage description from `process_stage_data` |
+| `process_id` | INT | Process identifier linked to this KB collection |
+| `stage_id` | INT | Initial / primary stage identifier |
+| `stage_ids` | INT[] | Array of associated stage identifiers |
+| `process_assignments` | JSONB | Raw process assignment array `[{"process_id": int, "stage_ids": [int]}]` |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | Creation timestamp |
 
 **Constraints:** `UNIQUE(org_id, document_id)` — one collection per document per org.
