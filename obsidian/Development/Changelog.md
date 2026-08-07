@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-07
+
+### AMD Exception Handling & Unevaluated LLM Compatibility
+- **fix:** Updated `detect_voicemail()` in `mantra/amd.py` to handle early audio stream closures (`RuntimeError("amd closed before a result was available")`) as clean `info` logs rather than logging noisy multiline Python stack traces.
+- **fix:** Added `suppress_compatibility_warning=True` to `AMD(...)` instantiation in `mantra/amd.py` for unevaluated LLMs like `deepseek-v4-flash`.
+- Files: `mantra/amd.py`
+
 ## 2026-08-06
 
 ### Grafana Memory & CPU Arc Gauges

@@ -1,8 +1,11 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-08-05  
+> **Last Updated:** 2026-08-07  
 > **Status:** Active maintenance, trunk-based per-trunk call capacity gating, zombie room cleanup, DB enrichment
+
+- [x] **AMD Exception Handling & Unevaluated LLM Warning Suppression (2026-08-07):** Added `suppress_compatibility_warning=True` to `AMD(...)` in `mantra/amd.py` to suppress LiveKit's compatibility warning when using custom or unlisted LLM models like `deepseek-v4-flash`. Updated `detect_voicemail()` exception handler to log early audio stream closures (`RuntimeError`) cleanly as `info` messages instead of outputting verbose multiline tracebacks.
+
 
 - [x] **Dashboard DB Sync, Redis State Monitor & Grafana Network UI (2026-08-06):**
   1. **Dashboard DB Sync:** Updated `/api/v1/dashboard/calls` with search filtering (`call_id`, `caller_number`, `called_number`, `call_log`) and status filtering (`Completed`, `Busy`, `No Answer`, `Error`, `Incomplete`). Updated `dashboard.html` / `dashboard.js` with search bar, status selector, manual sync button, auto-sync on SSE call-end events and periodic 15s intervals. Added Call Log Details Modal with audio player, AI summary, and raw PostgreSQL JSON viewer.

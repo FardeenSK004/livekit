@@ -7,6 +7,7 @@ the conversation proceeds normally.
 """
 
 from __future__ import annotations
+import asyncio 
 
 import logging
 from dataclasses import dataclass
@@ -61,6 +62,7 @@ async def detect_voicemail(
             participant_identity=participant_identity,
             ivr_detection=False,
             interrupt_on_machine=interrupt_on_machine,
+            suppress_compatibility_warning=True,
         ) as amd:
             prediction = await amd.execute()
         result = VoicemailDetection.from_prediction(prediction)
@@ -72,6 +74,9 @@ async def detect_voicemail(
             result.transcript[:120],
         )
         return result
+    except RuntimeError as e:
+        logger.info(f"AMD runtime error: {e}")
+        return VoicemailDetection(detected=False)
     except Exception:
         logger.exception("AMD failed — proceeding as human")
         return VoicemailDetection(detected=False)
