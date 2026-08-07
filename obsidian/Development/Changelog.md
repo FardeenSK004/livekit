@@ -5,8 +5,9 @@
 ### KB Process & Stage Persistence for Inbound Webhooks
 - **feat:** Migration `005_kb_process_stage.py` — added `process_id`, `stage_id`, `stage_ids`, `process_assignments`, `process_description`, and `stage_description` columns to `kb_collections`, and `stage_id` to `org_configs`.
 - **feat:** Updated `/api/v1/kb/ingest` in `mantra/ui_server.py` to parse Zod-schema aligned `process_assignments` (`[{"process_id": int, "stage_ids": [int]}]`) as well as explicit `process_id` and `stage_id` parameters, storing them directly on `kb_collections` and `kb_pages.page_meta`.
-- **fix:** Updated `normalize_datetime()` in `mantra/utils.py` to output ISO-8601 UTC timestamp format (`YYYY-MM-DDTHH:MM:SSZ`, with `T` separator and trailing `Z`).
-- **fix:** Added relative callback duration parser to `SessionRecorder.analyze_call()` in `mantra/utils.py`. If a user requests a callback (e.g., "Call me in 2 minutes", "Call in 10 mins", "in 1 hour"), Python automatically parses the latest requested duration and calculates `next_call_on` even if the LLM returns `null`.
+- **fix:** Updated `normalize_datetime()` in `mantra/utils.py` to output ISO-8601 UTC timestamp format (`YYYY-MM-DDTHH:MM:SSZ`, e.g. `"2026-08-04T10:59:36Z"`), returning `null` when no callback is scheduled for both inbound and outbound webhooks.
+- **fix:** Updated `SessionRecorder.analyze_call()` in `mantra/utils.py` to evaluate `next_call_on` using a 3-tier priority: (1) User spoken callback time during the call, (2) Default stage callback delay instruction from `process_stage_data`/`stageDetails` in the call payload, (3) `null` if neither is present.
+- **fix:** Updated 5-second silence prompt in `mantra/agent.py` to use natural Hindi phrasing (`"हेलो, क्या आप लाइन पर हैं?"`).
 - Files: `mantra/utils.py`, `mantra/agent.py`
 
 ### AMD Exception Handling & Unevaluated LLM Compatibility
