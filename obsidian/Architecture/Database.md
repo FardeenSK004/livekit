@@ -25,7 +25,7 @@ The application uses a single table `call_logs` in an isolated database.
 
 ### Table: `kb_pages`
 
-Full-Text Search table for Knowledge Base document chunks (uses PostgreSQL `tsvector`).
+Hybrid search table for Knowledge Base document chunks — PostgreSQL `tsvector` (english config) + pgvector embedding column.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -37,9 +37,12 @@ Full-Text Search table for Knowledge Base document chunks (uses PostgreSQL `tsve
 | `page_meta` | JSONB | Metadata: strategy, chunk_index, document_id, tags_name, process_id, stage_id, s3_url |
 | `content_in_text` | TEXT | Plain text content of the chunk (what the LLM sees) |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | Record creation timestamp |
-| `text_search` | tsvector (generated) | `to_tsvector('simple', title || ' ' || content_in_text)` — auto-populated |
+| `text_search` | tsvector (generated) | `to_tsvector('english', title || ' ' || content_in_text)` — auto-populated (english config since migration 006, 2026-08-09) |
+| `embedding` | vector(1536) | Gemini `gemini-embedding-2` embedding @ 1536 dims (pgvector HNSW cap = 2000), added in migration 006 |
 
-**Indexes:** B-tree on `(kb_id)`, GIN on `(text_search)` for FTS.
+**Indexes:** B-tree on `(kb_id)`, GIN on `(text_search)` for FTS, HNSW on `(embedding vector_cosine_ops)` for semantic search.
+
+**Search tiers (2026-08-09):** strict english FTS + vector cosine (RRF blend) → loose OR → tag-only → `list_available()` doc listing. Requires the `vector` extension. Existing rows get embeddings via `tools/backfill_embeddings.py` (idempotent).
 
 ### Table: `kb_collections`
 

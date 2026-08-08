@@ -1,8 +1,8 @@
 # Knowledge Base
 
-**Module:** `mantra/knowledge_base.py` + `mantra/retriever.py`
-**Status:** Implemented (see gaps below)
-**Storage:** PostgreSQL Full-Text Search (FTS) — `tsvector` + `websearch_to_tsquery`
+**Module:** `mantra/knowledge_base.py` + `mantra/retriever.py` + `mantra/gemini_embeddings.py`
+**Status:** Implemented — Hybrid FTS + pgvector semantic search (2026-08-09)
+**Storage:** PostgreSQL Full-Text Search (`english` tsvector) + pgvector (`embedding vector(1536)`, HNSW index) via Google Gemini `gemini-embedding-2`
 
 ---
 
@@ -10,7 +10,7 @@
 
 A knowledge base system for the LKT voice agent. Accepts content from **files, pasted text blocks, and URLs**, chunks it adaptively, and stores it in PostgreSQL.
 
-**RAG via Function Tool:** The KB is NOT injected upfront into the system prompt. Instead, the LLM has a `search_knowledge_base` function tool available during the call. When it needs factual information, it calls this tool, which runs a PostgreSQL Full-Text Search and returns results inline. This keeps the prompt small and avoids context window limits.
+**RAG via Function Tool:** The KB is NOT injected upfront into the system prompt. Instead, the LLM has a `search_knowledge_base` function tool available during the call. When it needs factual information, it calls this tool, which runs a tiered search (semantic + FTS) and returns results inline. This keeps the prompt small and avoids context window limits.
 
 **Multi-KB architecture:** Every page is tagged with a `kb_id`. The inbound call resolution provides the `kb_id` and optional `kb_tags` — the agent only searches those KBs. One table, column-level isolation, many clients.
 
@@ -18,9 +18,10 @@ A knowledge base system for the LKT voice agent. Accepts content from **files, p
 
 | File | Path | Role |
 |------|------|------|
-| `knowledge_base.py` | `mantra/knowledge_base.py` (561 lines) | Core: `PostgresKnowledgeBase` abstract interface + FTS implementation, adaptive chunker, ingestion helpers, collection management |
-| `retriever.py` | `mantra/retriever.py` (58 lines) | `KnowledgeRetriever` wrapping `kb.search()` with in-memory per-session cache + accessed page tracking |
-| `agent.py` | `mantra/agent.py` (1629 lines) | `search_knowledge_base` tool registration, KB scope resolution from inbound context |
+| `knowledge_base.py` | `mantra/knowledge_base.py` | Core: `PostgresKnowledgeBase` abstract interface + FTS/vector implementation, adaptive chunker, ingestion helpers, collection management, tiered query builders, RRF blending |
+| `retriever.py` | `mantra/retriever.py` | `KnowledgeRetriever` wrapping `kb.search()` with in-memory per-session cache, tiered fallback, available-docs listing on no-results |
+| `gemini_embeddings.py` | `mantra/gemini_embeddings.py` | Google Gemini embedding client (`gemini-embedding-2`, 1536 dims), batched + retrying |
+| `agent.py` | `mantra/agent.py` | `search_knowledge_base` tool registration, KB scope resolution from inbound context |
 
 ## Architecture
 
@@ -34,21 +35,39 @@ Upload / Paste / URL
   │  • Paragraph-based (if clear paragraphs) │
   │  • Sliding-window (fallback)            │
   └──────────────┬──────────────────────────┘
-                 │ chunks
+                 │ chunks (embedded at ingest)
                  ▼
   ┌─ PostgreSQL ────────────────────────────┐
-  │  kb_pages table (tsvector FTS index)    │
-  │  Full-Text Search via websearch_to_tsquery│
-  │  + ts_rank() relevance scoring           │
+  │  kb_pages table                         │
+  │  • text_search: tsvector, `english` FTS │
+  │  • embedding: vector(1536) + HNSW idx   │
+  │  Tiered search:                         │
+  │    A. strict FTS + vector (RRF blend)   │
+  │    B. loose OR query                    │
+  │    C. tag-only                          │
+  │    D. list_available() doc listing      │
   └──────────────┬──────────────────────────┘
                  │
                  ▼  (call starts)
   ┌─ Function Tool RAG ─────────────────────┐
   │  1. LLM calls search_knowledge_base()   │
-  │  2. retriever → kb.search() → FTS       │
-  │  3. Results formatted → returned to LLM │
+  │  2. retriever → kb.search() → tiers     │
+  │  3. Results (or doc listing) formatted  │
+  │     → returned to LLM                   │
   └─────────────────────────────────────────┘
 ```
+
+### Tiered Retrieval (fixes "no results despite data existing")
+
+The 2026-08-09 fix added fallback tiers so inflections and near-misses still resolve:
+
+1. **Tier A — strict semantic+FTS:** `websearch_to_tsquery('english', query)` AND-matched pages, blended with pgvector cosine similarity via Reciprocal Rank Fusion (`_blend_results`). `english` config stems inflections (`diagnostic codes` → matches `diagnostic code`).
+2. **Soft tag retry:** if a `tags` filter returns nothing, retry untagged before descending (in `retriever.py`).
+3. **Tier B — loose OR:** each token OR'd so partial matches still surface.
+4. **Tier C — tag-only:** match on tags alone.
+5. **Tier D — document listing:** if nothing matches, `list_available()` returns the titles + tags of documents in scope, so the LLM answers truthfully or asks a sharper question instead of claiming nothing exists.
+
+Embeddings are computed only if `GOOGLE_API_KEY` is set; otherwise the system degrades to FTS-only gracefully.
 
 ## Inbound Call KB Resolution
 
@@ -76,6 +95,8 @@ Previously the call was **rejected** if the backend was unreachable; now it fall
 | `POST /api/v1/kb/ingest` (URL) | `{kb_id, url}` | Required |
 | `DELETE /api/v1/kb/document` | `{kb_id, document_id}` | Required |
 
+Ingestion embeds each chunk up front (batched, via `gemini_embeddings.embed_texts`) and stores the vector; on any embedding failure it falls back to FTS-only so ingestion never blocks on the API.
+
 ## Schema
 
 ```sql
@@ -89,15 +110,17 @@ CREATE TABLE kb_pages (
     content_in_text TEXT NOT NULL,            -- text content for LLM consumption
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     text_search     tsvector GENERATED ALWAYS AS (
-                        to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content_in_text, ''))
-                    ) STORED
+                        to_tsvector('english', coalesce(title, '') || ' ' || coalesce(content_in_text, ''))
+                    ) STORED,
+    embedding       vector(1536)              -- Gemini gemini-embedding-2 @ 1536 dims (pgvector cap = 2000)
 );
 
 CREATE INDEX idx_kb_pages_kb_id ON kb_pages (kb_id);
 CREATE INDEX idx_kb_pages_fts ON kb_pages USING GIN (text_search);
+CREATE INDEX idx_kb_pages_embedding ON kb_pages USING hnsw (embedding vector_cosine_ops);
 ```
 
-**Note:** There is NO `vector` extension or `embedding` column. The docstring and README mention "pgvector with OpenAI embeddings" but this was never implemented — the system uses pure Full-Text Search.
+**Migrated 2026-08-09:** `text_search` was rebuilt from `simple` → `english` (fixes stemming: `diagnostic codes` now matches `diagnostic code`). `embedding vector(1536)` + HNSW index added. Requires the `vector` extension. Backfill existing rows via `tools/backfill_embeddings.py` (idempotent/resumable, `--dry-run` to preview).
 
 ## Tag Filtering
 
@@ -110,17 +133,20 @@ This allows the backend to define tags like `["sales", "pricing"]` and the agent
 ## Key Decisions
 
 - **Function Tool RAG (not upfront injection):** KB content is retrieved on-demand via a function tool, not injected into the system prompt. This keeps prompt size manageable. (There is a commented-out comment `# Removed query_knowledge_base tool` at line 370 suggesting a prior approach was merged into the job context then reverted.)
-- **Full-Text Search (not vector/embedding):** PostgreSQL `websearch_to_tsquery` + `ts_rank` provides usable search without any external embedding API or vector database dependency. Semantic/embedding search remains a future upgrade path.
+- **Hybrid FTS + semantic (2026-08-09):** `english` FTS is the base tier; pgvector cosine similarity is blended in via RRF. Semantic search complements FTS rather than replacing it — no match ever depends on embeddings alone.
+- **`english` config for FTS:** the previous `simple` config had no stemming, so `diagnostic codes` failed to match `diagnostic code` (the reported org 77 bug). `english` stems both sides.
+- **1536-dim embeddings via Google Gemini `gemini-embedding-2`:** 1536 was chosen because pgvector HNSW/IVFFlat indexes cap at 2000 dimensions; Gemini supports `output_dimensionality=1536`. (3072 native dims cannot be HNSW-indexed.)
+- **No OpenAI / no local embedding infra:** OpenAI key was unavailable; DeepSeek has no embedding API; a local embedding server was rejected to avoid Docker bloat. Gemini key already present in `.env.local`.
+- **Graceful degradation:** missing `GOOGLE_API_KEY`, empty embedding column, or failed embed calls all fall back to FTS-only — the KB never becomes unusable because of the embedding layer.
 - **kb_id column filter:** Single table, column-level isolation, simple queries.
 - **In-memory per-call cache:** `KnowledgeRetriever.session_cache` deduplicates repeated queries within a single call session.
-- **No embedding env vars set:** `EMBEDDING_MODEL`, `EMBEDDING_API_KEY`, `KB_SIMILARITY_THRESHOLD`, `KB_MAX_CHUNK_TOKENS` are documented in README but **not configured** in `.env` or `.env.local`.
+- **Truthful no-results:** when nothing matches, the retriever returns the list of available documents (with tags) instead of a bare "no relevant information", so the LLM doesn't hallucinate or claim the KB is empty.
 
 ## Known Gaps
 
-1. **No vector/embedding search** — Despite docs claiming pgvector, the system uses pure FTS. Semantic search would require adding the `pgvector` extension, generating embeddings via OpenAI API, and adding a vector column.
+1. **Embeddings require backfill for existing rows** — the migration adds the column but pre-existing rows have `embedding IS NULL` until `tools/backfill_embeddings.py` runs. FTS covers them meanwhile.
 2. **No upfront prompt injection** — The Obsidian vault previously described "Zero-Latency Prompt Injection" but this was never implemented. The function-tool approach relies on the LLM choosing to call the tool.
 3. **LLM-dependent KB usage** — The KB is only queried if the LLM decides to call `search_knowledge_base`. There is no forced/automatic KB retrieval.
-4. **No fallback blending** — If the KB returns no results, the LLM gets a `"No relevant information found"` message and falls back to its own knowledge.
 
 ## Guardrails & Factual Overrides
 

@@ -9,6 +9,7 @@
 | — | **Post-call webhook 404** — n8n endpoint missing on ngrok backend | `utils.py` | High | Open |
 | — | **S3 not configured** — `AWS_S3_BUCKET_NAME` not set, recordings silently dropped | Infra | High | Open |
 | — | **No KB data for org 66** — `kb_pages` has zero rows for this org | KB | Blocker | Open |
+| — | **KB retrieval missed data (org 77)** — `diagnostic codes` returned nothing while page contained `diagnostic code` (simple FTS config, no stemming) | KB | High | **Fixed 2026-08-09** (english config + tiered fallback + vector; migration 006, see Changelog) |
 
 ## Known Issues
 

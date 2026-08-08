@@ -8,6 +8,7 @@ Supports tag-based sub-scoping via JSONB tags_name in page_meta.
 import json
 import uuid
 import logging
+import os
 from typing import Optional
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -20,21 +21,90 @@ import asyncio
 logger = logging.getLogger("mantra.knowledge_base")
 
 
+FTS_CONFIG = os.getenv("KB_FTS_CONFIG", "english")
+
+
 def build_search_query(use_generated_column: bool = True) -> str:
-    """Build the KB search SQL using either the generated text_search column or a direct expression."""
-    vector_expr = "text_search" if use_generated_column else "to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content_in_text, ''))"
+    """Build the KB FTS search SQL using either the generated text_search column or a direct expression."""
+    vector_expr = "text_search" if use_generated_column else f"to_tsvector('{FTS_CONFIG}', coalesce(title, '') || ' ' || coalesce(content_in_text, ''))"
     return f"""
         SELECT id, kb_id, title, content, source_type, page_meta, content_in_text, created_at,
-               ts_rank({vector_expr}, websearch_to_tsquery('simple', $2)) as similarity
+               ts_rank({vector_expr}, websearch_to_tsquery('{FTS_CONFIG}', $2)) as similarity
         FROM kb_pages
         WHERE kb_id = ANY($1::text[])
-          AND {vector_expr} @@ websearch_to_tsquery('simple', $2)
+          AND {vector_expr} @@ websearch_to_tsquery('{FTS_CONFIG}', $2)
           AND ($4::text[] IS NULL OR 
               (jsonb_typeof(page_meta->'tags_name') = 'array' AND page_meta->'tags_name' ?| $4::text[]) OR
               (jsonb_typeof(page_meta->'tags_name') = 'string' AND page_meta->>'tags_name' = ANY($4::text[]))
           )
         ORDER BY similarity DESC
         LIMIT $3
+    """
+
+
+def build_loose_search_query(use_generated_column: bool = True) -> str:
+    """
+    Loose (OR) FTS search: matches pages containing ANY of the query terms.
+    Used as Tier B fallback when strict AND finds nothing.
+    """
+    vector_expr = "text_search" if use_generated_column else f"to_tsvector('{FTS_CONFIG}', coalesce(title, '') || ' ' || coalesce(content_in_text, ''))"
+    return f"""
+        SELECT id, kb_id, title, content, source_type, page_meta, content_in_text, created_at,
+               ts_rank({vector_expr}, plainto_tsquery('{FTS_CONFIG}', $2)) as similarity
+        FROM kb_pages
+        WHERE kb_id = ANY($1::text[])
+          AND {vector_expr} @@ plainto_tsquery('{FTS_CONFIG}', $2)
+          AND ($4::text[] IS NULL OR 
+              (jsonb_typeof(page_meta->'tags_name') = 'array' AND page_meta->'tags_name' ?| $4::text[]) OR
+              (jsonb_typeof(page_meta->'tags_name') = 'string' AND page_meta->>'tags_name' = ANY($4::text[]))
+          )
+        ORDER BY similarity DESC
+        LIMIT $3
+    """
+
+
+def build_vector_search_query() -> str:
+    """Semantic (pgvector) search: cosine distance on the embedding column."""
+    return """
+        SELECT id, kb_id, title, content, source_type, page_meta, content_in_text, created_at,
+               1 - (embedding <=> $2::vector) as similarity
+        FROM kb_pages
+        WHERE kb_id = ANY($1::text[])
+          AND embedding IS NOT NULL
+          AND ($4::text[] IS NULL OR 
+              (jsonb_typeof(page_meta->'tags_name') = 'array' AND page_meta->'tags_name' ?| $4::text[]) OR
+              (jsonb_typeof(page_meta->'tags_name') = 'string' AND page_meta->>'tags_name' = ANY($4::text[]))
+          )
+        ORDER BY embedding <=> $2::vector
+        LIMIT $3
+    """
+
+
+def build_tag_search_query() -> str:
+    """Tag-only match: pages whose tags_name overlap the requested tags (Tier C)."""
+    return """
+        SELECT id, kb_id, title, content, source_type, page_meta, content_in_text, created_at,
+               1.0 as similarity
+        FROM kb_pages
+        WHERE kb_id = ANY($1::text[])
+          AND (
+              (jsonb_typeof(page_meta->'tags_name') = 'array' AND page_meta->'tags_name' ?| $2::text[]) OR
+              (jsonb_typeof(page_meta->'tags_name') = 'string' AND page_meta->>'tags_name' = ANY($2::text[]))
+          )
+        ORDER BY created_at DESC
+        LIMIT $3
+    """
+
+
+def build_list_docs_query() -> str:
+    """List all pages (title + tags only) in the scoped KBs for Tier D fallback."""
+    return """
+        SELECT id, kb_id, title, content, source_type, page_meta, content_in_text, created_at,
+               0.0 as similarity
+        FROM kb_pages
+        WHERE kb_id = ANY($1::text[])
+        ORDER BY created_at DESC
+        LIMIT $2
     """
 
 
@@ -51,6 +121,36 @@ class KnowledgePage:
     page_meta: dict
     content_in_text: str
     created_at: Optional[str] = None
+    embedding: Optional[list] = None
+
+
+def _embedding_to_text(vec: list[float]) -> str:
+    """Serialize a float list into pgvector's text literal form ('[a,b,c]')."""
+    return "[" + ",".join(f"{v:.8f}" for v in vec) + "]"
+
+
+def _blend_results(
+    fts_pages: list[KnowledgePage],
+    vec_pages: list[KnowledgePage],
+    top_k: int,
+    fts_weight: float = 0.5,
+) -> list[KnowledgePage]:
+    """
+    Reciprocal Rank Fusion (RRF) of FTS + vector results.
+    Produces a stable, well-ranked blend regardless of score scale differences.
+    """
+    scores: dict[str, float] = {}
+    page_by_id: dict[str, KnowledgePage] = {}
+
+    for rank, page in enumerate(fts_pages):
+        scores[page.id] = scores.get(page.id, 0.0) + fts_weight / (60 + rank)
+        page_by_id[page.id] = page
+    for rank, page in enumerate(vec_pages):
+        scores[page.id] = scores.get(page.id, 0.0) + (1.0 - fts_weight) / (60 + rank)
+        page_by_id[page.id] = page
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    return [page_by_id[pid] for pid, _ in ranked[:top_k]]
 
 
 # ---- Abstract Storage Interface ----
@@ -72,7 +172,12 @@ class KnowledgeBase(ABC):
         top_k: int = 3,
         tags: Optional[list[str]] = None,
     ) -> list[KnowledgePage]:
-        """Full-text search within a KB, with optional metadata tag filtering."""
+        """Search within a KB (full-text + semantic when available), with optional metadata tag filtering."""
+        pass
+
+    @abstractmethod
+    async def list_available(self, kb_ids: list[str], top_k: int = 10) -> list[KnowledgePage]:
+        """List pages available in the scoped KBs (title + tags) for graceful no-match fallback."""
         pass
 
     @abstractmethod
@@ -136,6 +241,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
         self.dsn = dsn
         self._pool: Optional[asyncpg.Pool] = None
         self._use_generated_text_search: Optional[bool] = None
+        self._use_embeddings: Optional[bool] = None
 
     async def _get_pool(self) -> asyncpg.Pool:
         if self._pool is None:
@@ -161,22 +267,40 @@ class PostgresKnowledgeBase(KnowledgeBase):
         source_type = clean_val(page.source_type)
         content_in_text = clean_val(page.content_in_text)
         page_meta = clean_val(page.page_meta)
+        embedding = page.embedding
 
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO kb_pages (id, kb_id, title, content, source_type, page_meta, content_in_text)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING id
-            """,
-                uuid.UUID(page.id),
-                kb_id,
-                title,
-                content,
-                source_type,
-                json.dumps(page_meta),
-                content_in_text,
-            )
+            if embedding is not None:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO kb_pages (id, kb_id, title, content, source_type, page_meta, content_in_text, embedding)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
+                    RETURNING id
+                """,
+                    uuid.UUID(page.id),
+                    kb_id,
+                    title,
+                    content,
+                    source_type,
+                    json.dumps(page_meta),
+                    content_in_text,
+                    _embedding_to_text(embedding),
+                )
+            else:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO kb_pages (id, kb_id, title, content, source_type, page_meta, content_in_text)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING id
+                """,
+                    uuid.UUID(page.id),
+                    kb_id,
+                    title,
+                    content,
+                    source_type,
+                    json.dumps(page_meta),
+                    content_in_text,
+                )
             return str(row["id"])
 
     async def _supports_generated_text_search(self, conn: asyncpg.Connection) -> bool:
@@ -195,6 +319,34 @@ class PostgresKnowledgeBase(KnowledgeBase):
         self._use_generated_text_search = bool(row["has_column"]) if row else False
         return self._use_generated_text_search
 
+    async def _supports_embeddings(self, conn: asyncpg.Connection) -> bool:
+        if self._use_embeddings is not None:
+            return self._use_embeddings
+
+        row = await conn.fetchrow(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'kb_pages' AND column_name = 'embedding'
+            ) AS has_column
+            """
+        )
+        self._use_embeddings = bool(row["has_column"]) if row else False
+        return self._use_embeddings
+
+    def _row_to_page(self, r) -> KnowledgePage:
+        return KnowledgePage(
+            id=str(r["id"]),
+            kb_id=r["kb_id"],
+            title=r["title"],
+            content=r["content"],
+            source_type=r["source_type"],
+            page_meta=json.loads(r["page_meta"]) if isinstance(r["page_meta"], str) else r["page_meta"],
+            content_in_text=r["content_in_text"],
+            created_at=r["created_at"].isoformat() if r["created_at"] else None,
+        )
+
     async def search(
         self,
         kb_ids: list[str],
@@ -203,14 +355,18 @@ class PostgresKnowledgeBase(KnowledgeBase):
         tags: Optional[list[str]] = None,
     ) -> list[KnowledgePage]:
         """
-        Executes a Full-Text Search (FTS) query against kb_pages.
-        Filters by kb_id and optionally by tags.
-        The tags filter uses the JSONB ?| operator to natively check for overlaps
-        between the requested tags and the stored 'tags_name' JSONB array in page_meta.
+        Tiered retrieval:
+          Tier A: strict FTS (AND) + optional semantic (pgvector) blended.
+          Tier B: loose FTS (OR) if A returns nothing.
+          Tier C: tag-only match if B returns nothing and tags are present.
+          Tier D: list available docs if all above return nothing.
         """
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             use_generated_column = await self._supports_generated_text_search(conn)
+            supports_embeddings = await self._supports_embeddings(conn)
+
+            # Tier A — strict FTS
             rows = await conn.fetch(
                 build_search_query(use_generated_column=use_generated_column),
                 kb_ids,
@@ -218,20 +374,74 @@ class PostgresKnowledgeBase(KnowledgeBase):
                 top_k,
                 tags,
             )
+            pages = [self._row_to_page(r) for r in rows]
 
-            return [
-                KnowledgePage(
-                    id=str(r["id"]),
-                    kb_id=r["kb_id"],
-                    title=r["title"],
-                    content=r["content"],
-                    source_type=r["source_type"],
-                    page_meta=json.loads(r["page_meta"]) if isinstance(r["page_meta"], str) else r["page_meta"],
-                    content_in_text=r["content_in_text"],
-                    created_at=r["created_at"].isoformat() if r["created_at"] else None,
+            # Soft tag filter: if tagged search missed, retry without tags
+            if not pages and tags:
+                rows = await conn.fetch(
+                    build_search_query(use_generated_column=use_generated_column),
+                    kb_ids,
+                    query,
+                    top_k,
+                    None,
                 )
-                for r in rows
-            ]
+                pages = [self._row_to_page(r) for r in rows]
+
+            # Blend in semantic results (Tier A+)
+            if pages and supports_embeddings:
+                query_embedding = await self._embed_query(query)
+                if query_embedding:
+                    vec_rows = await conn.fetch(
+                        build_vector_search_query(),
+                        kb_ids,
+                        _embedding_to_text(query_embedding),
+                        top_k,
+                        tags,
+                    )
+                    vec_pages = [self._row_to_page(r) for r in vec_rows]
+                    if vec_pages:
+                        pages = _blend_results(pages, vec_pages, top_k)
+
+            if not pages:
+                # Tier B — loose FTS (OR)
+                rows = await conn.fetch(
+                    build_loose_search_query(use_generated_column=use_generated_column),
+                    kb_ids,
+                    query,
+                    top_k,
+                    tags,
+                )
+                pages = [self._row_to_page(r) for r in rows]
+
+            if not pages and tags:
+                # Tier C — tag-only match
+                rows = await conn.fetch(
+                    build_tag_search_query(),
+                    kb_ids,
+                    tags,
+                    top_k,
+                )
+                pages = [self._row_to_page(r) for r in rows]
+
+            return pages
+
+    async def _embed_query(self, query: str) -> Optional[list[float]]:
+        """Embed a query for semantic search; None if embeddings unavailable."""
+        from mantra.gemini_embeddings import embed_text
+        return await embed_text(query)
+
+    async def list_available(self, kb_ids: list[str], top_k: int = 10) -> list[KnowledgePage]:
+        """List pages available in the scoped KBs (title + tags) for no-match fallback."""
+        if not kb_ids:
+            return []
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                build_list_docs_query(),
+                kb_ids,
+                top_k,
+            )
+            return [self._row_to_page(r) for r in rows]
 
     async def delete_page(self, page_id: str) -> bool:
         pool = await self._get_pool()
@@ -649,9 +859,24 @@ async def ingest_text(
     source_type: str = "text",
     content: str = "",
     page_meta: Optional[dict] = None,
+    embed: bool = True,
 ) -> dict:
     """Ingest raw text into the knowledge base."""
     chunks = adaptive_chunk(content_in_text)
+
+    # Compute embeddings for all chunks up front (batch API call), then fall
+    # back gracefully to FTS-only rows if embedding fails.
+    embeddings: list[Optional[list[float]]] = [None] * len(chunks)
+    if embed:
+        try:
+            from mantra.gemini_embeddings import embed_texts, embedding_enabled
+
+            if embedding_enabled():
+                texts = [chunk["content"][:8000] for chunk in chunks]
+                embeddings = await embed_texts(texts)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Embedding skipped during ingest (FTS-only): {e}")
+            embeddings = [None] * len(chunks)
 
     page_ids = []
     for i, chunk in enumerate(chunks):
@@ -662,7 +887,7 @@ async def ingest_text(
         }
         if page_meta:
             meta.update(page_meta)
-            
+
         page = KnowledgePage(
             id=str(uuid.uuid4()),
             kb_id=kb_id,
@@ -671,6 +896,7 @@ async def ingest_text(
             source_type=source_type,
             page_meta=meta,
             content_in_text=chunk["content"],
+            embedding=embeddings[i] if i < len(embeddings) else None,
         )
         page_id = await kb.add_page(page)
         page_ids.append(page_id)

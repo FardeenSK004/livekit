@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-09
+
+### KB Retrieval Fix — Hybrid FTS + Semantic (pgvector/Gemini) + Tiered Fallback
+- **bug:** Fixed org 77 inbound call failing to find "diagnostic codes" despite the KB page containing "diagnostic code". Root cause: `kb_pages.text_search` used the `simple` config with `websearch_to_tsquery` AND semantics — `'diagnostic' & 'codes'` never matched the stored `code` (no stemming, no OR fallback). Verified in scratch DB: `diagnostic codes` → 0 rows, `code`/`diagnostic` → 1 row.
+- **feat:** Migration `006_kb_english_vector.py` — rebuilds `text_search` with the `english` config (stemming), enables the `vector` extension, adds `embedding vector(1536)`, and creates an HNSW index (`embedding vector_cosine_ops`). 1536 dims because pgvector HNSW/IVFFlat caps at 2000 dimensions (Gemini `output_dimensionality=1536` verified working).
+- **feat:** New `mantra/gemini_embeddings.py` — lazy `google.genai.Client` singleton, `embed_texts()` (batch 100, 3 retries, exp backoff), `embed_text()`, `embedding_enabled()`. Uses `gemini-embedding-2` @ 1536 dims. NOTE: batch embeddings must use `types.Content(parts=[...])` — plain strings returned only 1 embedding for 2 inputs.
+- **feat:** `mantra/knowledge_base.py` now performs tiered search: Tier A strict FTS (`english`) blended with pgvector cosine via Reciprocal Rank Fusion (`_blend_results`), soft-tag retry, Tier B loose OR query, Tier C tag-only, Tier D `list_available()` document listing. New query builders: `build_loose_search_query`, `build_vector_search_query`, `build_tag_search_query`, `build_list_docs_query`. `add_page()`/`ingest_text()` embed chunks up front with graceful FTS-only fallback when embeddings unavailable. Abstract `list_available` added.
+- **feat:** `mantra/retriever.py` rewritten — tiered `retrieve()` with session cache; when nothing matches, returns the list of available documents (with tags) instead of a bare "no results", so the LLM can ask a better follow-up or answer truthfully. `_format_no_results` builds the doc list.
+- **feat:** New `tools/backfill_embeddings.py` — idempotent/resumable backfill of `embedding` for existing rows (`--kb-id`, `--batch-size`, `--limit`, `--dry-run`). URL-encodes the DB password in the DSN.
+- **verified:** End-to-end scratch repro of the exact failure: org 77 page with `diagnostic code`, query "diagnostic codes" → page found; "diagnostics" → found (stemming); "what is there in your knowledge base" → truthful doc listing; "appointment booking" → doc listing (no hallucination). `get_kb_ids_for_org` / `get_collection_details_for_org` confirmed working. 1536-dim embedding stored + HNSW index validated.
+- **unchanged:** `mantra/agent.py` — the `search_knowledge_base` tool already flows through `retriever.retrieve()`, so no code change needed there. Prod DB (52.7.20.203) untouched — migration SQL + backfill commands provided to the user to run.
+- Files: `mantra/knowledge_base.py`, `mantra/retriever.py`, `mantra/gemini_embeddings.py` (new), `mantra/migrations/006_kb_english_vector.py` (new), `tools/backfill_embeddings.py` (new)
+
 ## 2026-08-07
 
 ### KB Process & Stage Persistence for Inbound Webhooks

@@ -1,8 +1,10 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-08-07  
+> **Last Updated:** 2026-08-09  
 > **Status:** Active maintenance, trunk-based per-trunk call capacity gating, zombie room cleanup, DB enrichment
+
+- [x] **KB Retrieval Fix — Hybrid FTS + Semantic + Tiered Fallback (2026-08-09):** Fixed org 77 inbound call where "diagnostic codes" returned nothing despite the KB page containing "diagnostic code". Root cause: `text_search` used the `simple` FTS config (no stemming) + `websearch_to_tsquery` AND semantics — `'diagnostic' & 'codes'` never matched `code`. Migration `006_kb_english_vector.py` rebuilds `text_search` with the `english` config and adds `embedding vector(1536)` + HNSW index. New `mantra/gemini_embeddings.py` embeds via `gemini-embedding-2` @ 1536 dims. `mantra/knowledge_base.py` now does tiered search (strict FTS+vector RRF blend → loose OR → tag-only → `list_available()` doc listing); `mantra/retriever.py` returns the available-documents list when nothing matches so the LLM answers truthfully. `tools/backfill_embeddings.py` backfills existing rows (idempotent). Verified end-to-end on scratch DB: "diagnostic codes" now finds the page, "what is there in your knowledge base" lists docs truthfully. `agent.py` unchanged (tool already flows through the retriever). Prod DB migration + backfill left to the user to run.
 
 - [x] **ISO-8601 Timestamps & Relative Callback Duration Parser (2026-08-07):** Updated `normalize_datetime()` in `mantra/utils.py` to produce standard ISO-8601 UTC timestamp strings (`YYYY-MM-DDTHH:MM:SSZ`, e.g., `"2026-08-04T10:59:36Z"`). Updated `analyze_call` prompt and added Python regex parser fallback in `mantra/utils.py` for relative callback requests (e.g. "Call me in 2 minutes", "Call back in 10 mins", "in 1 hour"), calculating the exact `next_call_on` timestamp even if the LLM returns `null`.
 
