@@ -15,6 +15,10 @@ USAGE:
     python tools/backfill_embeddings.py --limit 100
 
 Requires POSTGRES_* and GOOGLE_API_KEY in .env.local
+
+NOTE: On Docker-only deployments, run the backfill over HTTP instead:
+    POST /api/v1/kb/backfill-embeddings
+(see mantra/ui_server.py)
 """
 import argparse
 import asyncio
@@ -24,12 +28,11 @@ from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 
-load_dotenv(".env")
+load_dotenv(".env.local")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mantra.knowledge_base import PostgresKnowledgeBase, _embedding_to_text
-from mantra.gemini_embeddings import embed_texts, get_embedding_dim
+from mantra.knowledge_base import PostgresKnowledgeBase
 
 
 async def run(args):
@@ -38,58 +41,25 @@ async def run(args):
         f"@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
     )
     kb = PostgresKnowledgeBase(dsn)
-    pool = await kb._get_pool()
+    try:
+        summary = await kb.backfill_embeddings(
+            kb_id=args.kb_id,
+            batch_size=args.batch_size,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            progress=print,
+        )
+    finally:
+        await kb.close()
 
-    where = "embedding IS NULL"
-    params = []
-    if args.kb_id:
-        where += " AND kb_id = $1"
-        params.append(args.kb_id)
-
-    async with pool.acquire() as conn:
-        supports = await kb._supports_embeddings(conn)
-        if not supports:
-            print("ERROR: kb_pages.embedding column does not exist. Run migration 006 first.")
-            await pool.close()
-            sys.exit(1)
-
-        sql = f"SELECT id, content_in_text FROM kb_pages WHERE {where} ORDER BY created_at"
-        if args.limit:
-            sql += f" LIMIT {args.limit}"
-        rows = await conn.fetch(sql, *params)
-
-    print(f"Found {len(rows)} rows missing embeddings" + (f" for kb_id={args.kb_id}" if args.kb_id else ""))
+    print(
+        f"Found {summary['found']} rows missing embeddings"
+        + (f" for kb_id={args.kb_id}" if args.kb_id else "")
+    )
     if args.dry_run:
-        await pool.close()
         print("Dry run complete — nothing was changed.")
         return
-
-    dim = get_embedding_dim()
-    done = 0
-    failed = 0
-
-    for start in range(0, len(rows), args.batch_size):
-        batch = rows[start : start + args.batch_size]
-        texts = [r["content_in_text"][:8000] for r in batch]
-        try:
-            vectors = await embed_texts(texts)
-        except Exception as e:  # noqa: BLE001
-            print(f"Batch {start // args.batch_size} failed: {e}")
-            failed += len(batch)
-            continue
-
-        async with pool.acquire() as conn:
-            for row, vec in zip(batch, vectors):
-                await conn.execute(
-                    "UPDATE kb_pages SET embedding = $1::vector WHERE id = $2",
-                    _embedding_to_text(vec),
-                    row["id"],
-                )
-        done += len(batch)
-        print(f"Backfilled {done}/{len(rows)} (dim={dim})")
-
-    await pool.close()
-    print(f"Done. {done} embedded, {failed} failed.")
+    print(f"Done. {summary['done']} embedded, {summary['failed']} failed.")
 
 
 def main():

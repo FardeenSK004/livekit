@@ -443,6 +443,79 @@ class PostgresKnowledgeBase(KnowledgeBase):
             )
             return [self._row_to_page(r) for r in rows]
 
+    async def backfill_embeddings(
+        self,
+        kb_id: Optional[str] = None,
+        batch_size: int = 100,
+        limit: Optional[int] = None,
+        dry_run: bool = False,
+        progress: Optional[callable] = None,
+    ) -> dict:
+        """
+        Backfill `embedding` for kb_pages rows that don't have one yet.
+
+        Idempotent/resumable: rows with an existing embedding are skipped, so
+        re-running after a failure continues from where it stopped.
+
+        Returns a summary dict. When `progress` is given, it is called with a
+        string after each batch (useful for streaming progress to an HTTP client).
+        """
+        pool = await self._get_pool()
+
+        where = "embedding IS NULL"
+        params: list = []
+        if kb_id:
+            where += " AND kb_id = $1"
+            params.append(kb_id)
+
+        async with pool.acquire() as conn:
+            supports = await self._supports_embeddings(conn)
+            if not supports:
+                raise RuntimeError("kb_pages.embedding column does not exist. Run migration 006 first.")
+
+            sql = f"SELECT id, content_in_text FROM kb_pages WHERE {where} ORDER BY created_at"
+            if limit:
+                sql += f" LIMIT {limit}"
+            rows = await conn.fetch(sql, *params)
+
+        summary = {
+            "found": len(rows),
+            "dry_run": dry_run,
+            "done": 0,
+            "failed": 0,
+            "kb_id": kb_id,
+        }
+
+        if dry_run:
+            return summary
+
+        from mantra.gemini_embeddings import embed_texts, get_embedding_dim
+
+        dim = get_embedding_dim()
+
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start : start + batch_size]
+            texts = [r["content_in_text"][:8000] for r in batch]
+            try:
+                vectors = await embed_texts(texts)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Backfill batch {start // batch_size} failed: {e}")
+                summary["failed"] += len(batch)
+                continue
+
+            async with pool.acquire() as conn:
+                for row, vec in zip(batch, vectors):
+                    await conn.execute(
+                        "UPDATE kb_pages SET embedding = $1::vector WHERE id = $2",
+                        _embedding_to_text(vec),
+                        row["id"],
+                    )
+            summary["done"] += len(batch)
+            if progress:
+                progress(f"Backfilled {summary['done']}/{len(rows)} (dim={dim})")
+
+        return summary
+
     async def delete_page(self, page_id: str) -> bool:
         pool = await self._get_pool()
         async with pool.acquire() as conn:

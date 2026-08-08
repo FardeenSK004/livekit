@@ -18,7 +18,7 @@ import redis.asyncio as redis
 from fastapi import FastAPI, Request, Response
 import hmac
 import base64
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote_plus
 from xml.sax.saxutils import escape
 from fastapi import HTTPException, File, UploadFile, Form
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -1185,6 +1185,60 @@ async def ingest_kb_data(request: Request):
         import traceback
         logger.error(f"KB ingest error: {e}\n{traceback.format_exc()}")
         return JSONResponse({"status_code": 500, "status": "error", "error": f"Failed to ingest to DB: {str(e)}"}, status_code=500)
+
+
+@app.post("/api/v1/kb/backfill-embeddings")
+async def backfill_kb_embeddings(request: Request):
+    """
+    Backfill missing `embedding` values on kb_pages rows (pgvector semantic search).
+
+    Runs the same logic as tools/backfill_embeddings.py but as an HTTP endpoint,
+    so it works on Docker-only deployments where a CLI cannot be executed.
+
+    Body (JSON, all optional):
+      - kb_id:       only backfill rows for this collection/org (default: all)
+      - batch_size:  rows per Gemini batch (default: 100)
+      - limit:       max rows to backfill (default: no limit)
+      - dry_run:     if true, only report how many rows need embeddings
+
+    Requires: kb_pages.embedding column (migration 006) + GOOGLE_API_KEY in .env.local
+    """
+    from mantra.knowledge_base import PostgresKnowledgeBase
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — empty/non-JSON body defaults to {}
+        pass
+
+    kb_id = body.get("kb_id")
+    batch_size = int(body.get("batch_size", 100))
+    limit = body.get("limit")
+    limit = int(limit) if limit is not None else None
+    dry_run = bool(body.get("dry_run", False))
+
+    dsn = (
+        f"postgresql://{os.getenv('POSTGRES_USER')}:{quote_plus(os.getenv('POSTGRES_PASSWORD') or '')}"
+        f"@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
+    )
+
+    kb = PostgresKnowledgeBase(dsn)
+    try:
+        summary = await kb.backfill_embeddings(
+            kb_id=kb_id,
+            batch_size=batch_size,
+            limit=limit,
+            dry_run=dry_run,
+        )
+    except RuntimeError as e:
+        return JSONResponse({"status_code": 400, "status": "error", "error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.error(f"KB backfill error: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"status_code": 500, "status": "error", "error": f"Backfill failed: {str(e)}"}, status_code=500)
+    finally:
+        await kb.close()
+
+    return JSONResponse({"status_code": 200, "status": "success", "summary": summary})
 
 
 @app.delete("/api/v1/kb/document")
