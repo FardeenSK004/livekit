@@ -497,7 +497,7 @@ class AssistantFunctions:
         return result
 
     @llm.function_tool(
-        description="End the call. Call this tool when the conversation is over — the user said goodbye, is not interested, or there is nothing left to discuss."
+        description="End the call. Call this tool when the conversation is over — the user said goodbye, is not interested, or there is nothing left to discuss. Only after both of you have completed teh conversations!"
     )
     async def end_call(self):
         logger.info("Agent decided to end the call via function tool. Disconnecting shortly.")
@@ -733,7 +733,7 @@ ENDING THE CALL (CRITICAL — YOU MUST FOLLOW THIS):
   * The user is clearly uninterested or disengaged.
 - The CORRECT sequence is: 1) Call `end_call` tool FIRST, 2) THEN say a brief warm goodbye in your response text.
 - Do NOT ask follow-up questions after the user indicates they want to end the call or is not interested.
-- Keep your final goodbye SHORT: "Thank you for your time, Anurag. Take care!" — that's it.
+- Keep your final goodbye SHORT: "Thank you for your time. Take care!" — that's it.
 - REMEMBER: If you find yourself writing a goodbye message, you MUST also call `end_call`. No exceptions.
 
 PRONUNCIATION (CRITICAL):
