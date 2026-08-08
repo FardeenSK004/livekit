@@ -1021,6 +1021,7 @@ Follow these specific instructions:
         if ev.new_state == "speaking":
             call_state["last_activity"] = asyncio.get_event_loop().time()
             call_state["prompted_inactivity"] = False
+            call_state["user_has_spoken"] = True
 
     async def inactivity_monitor():
         logger.info("Inactivity monitor started.")
@@ -1326,19 +1327,32 @@ Follow these specific instructions:
                 ctx.shutdown("voicemail detected")
                 return
 
-        logger.info(f"[DIAG] Generating greeting for {client_name}...")
-        try:
-            if is_inbound:
-                session.generate_reply(
-                    instructions="Initiate the conversation according to your system prompt. Introduce yourself and ask how you can help."
-                )
-            else:
-                session.generate_reply(
-                    instructions=f"Greet the user named {client_name} and follow the opening script in your instructions."
-                )
-            logger.info("[DIAG] Greeting generation requested.")
-        except RuntimeError as e:
-            logger.warning(f"[DIAG] Could not generate greeting (session may be closed): {e}")
+        if is_inbound:
+            # Inbound: Agent should speak first, but give a tiny delay to avoid clipping
+            await asyncio.sleep(0.5)
+        else:
+            # Outbound: Wait up to 2.0s for the user to say "Hello?" when picking up
+            wait_for_user = 20
+            while wait_for_user > 0 and not call_state.get("user_has_spoken"):
+                await asyncio.sleep(0.1)
+                wait_for_user -= 1
+
+        if not call_state.get("user_has_spoken"):
+            logger.info(f"[DIAG] Generating explicit greeting for {client_name} (inbound={is_inbound})...")
+            try:
+                if is_inbound:
+                    session.generate_reply(
+                        instructions="Initiate the conversation according to your system prompt. Introduce yourself and ask how you can help."
+                    )
+                else:
+                    session.generate_reply(
+                        instructions=f"Greet the user named {client_name} and follow the opening script in your instructions."
+                    )
+                logger.info("[DIAG] Greeting generation requested.")
+            except RuntimeError as e:
+                logger.warning(f"[DIAG] Could not generate greeting (session may be closed): {e}")
+        else:
+            logger.info("[DIAG] User spoke first. Relying on turn detector for initial reply.")
 
         logger.info(f"[DIAG] Entering main loop — blocking until room disconnects. connection_state={ctx.room.connection_state}")
         # Block until the room connection drops or the session closes

@@ -614,12 +614,12 @@ async def _run_dependency_checks() -> tuple[bool, dict[str, bool | str]]:
             checks["redis"] = str(e)
 
     await asyncio.gather(
-        # _check("livekit", lk_client.room.list_rooms(api.ListRoomsRequest()), timeout=5.0),
-        # _check_redis(),
-        # # _check_postgres(),
-        # _check_stt(),
-        # _check_mantraassist_backend(),
-        # _check_s3(),
+        _check("livekit", lk_client.room.list_rooms(api.ListRoomsRequest()), timeout=5.0),
+        _check_redis(),
+         _check_postgres(),
+        _check_stt(),
+        _check_mantraassist_backend(),
+        _check_s3(),
         return_exceptions=True
     )
 
