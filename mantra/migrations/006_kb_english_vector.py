@@ -10,7 +10,7 @@ Migration 006: English-stemmed FTS + pgvector semantic search prep.
    NOTE: pgvector HNSW/IVFFlat indexes cap at 2000 dimensions, so we request
    1536-dimensional embeddings from Gemini (supported) to stay indexable.
 
-   Embeddings themselves are backfilled separately (scripts/backfill_embeddings.py)
+   Embeddings themselves are backfilled separately (tools/backfill_embeddings.py)
    so existing rows stay searchable via FTS in the meantime.
 """
 
