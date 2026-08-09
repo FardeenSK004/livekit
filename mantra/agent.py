@@ -1607,7 +1607,7 @@ Follow these specific instructions:
                             derived_process_id = analysis.get("process_id")
                             if derived_process_id and not call_payload.get("process_id"):
                                 call_payload["process_id"] = derived_process_id
-                            next_call_on = analysis["next_call_on"]
+                            next_call_on = normalize_datetime(analysis["next_call_on"])
 
                             if analysis.get("appointment_date_time"):
                                 client_custom_fields["appointment_date_time"] = analysis["appointment_date_time"]
@@ -1684,8 +1684,8 @@ Follow these specific instructions:
                         "client_phone_number": call_state.get("caller_phone_number") or "",
                         "call_duration": duration,
                         "call_transcript": transcript_data or "",
-                        "next_call_on": normalize_datetime(next_call_on),
-                        "called_on": call_state.get("call_initiated_at") or "",
+                        "next_call_on": normalize_datetime(next_call_on) or "",
+                        "called_on": call_state.get("call_initiated_at") or call_state.get("agent_joined_at") or "",
                         "meta_data": {
                             "document_id": str(call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")),
                             "provider": (call_payload.get("metadata", {}) or {}).get("provider", ""),
@@ -1715,8 +1715,8 @@ Follow these specific instructions:
                             "ai_summary": summary_text,
                             "recording_url": recording_url,
                             "call_duration_seconds": duration,
-                            "next_call_on": normalize_datetime(next_call_on),
-                            "called_on": call_state.get("call_initiated_at") or None,
+                            "next_call_on": normalize_datetime(next_call_on) or "",
+                            "called_on": call_state.get("call_initiated_at") or call_state.get("agent_joined_at") or None,
                             "ai_call_id": ctx.job.id if ctx.job else "",
                             "process_id": effective_process_id,
                             "stage_id": effective_stage_id,
