@@ -2742,7 +2742,7 @@ async def handle_outbound_call_webhook(request: Request):
                     "ai_summary": f"{reason}: {sip_status}",
                     "recording_url": None,
                     "call_duration_seconds": 0,
-                    "next_call_on": None,
+                    "next_call_on": "",
                     "called_on": payload.get("metadata", {}).get("call_initiated_at"),
                     "ai_call_id": None,
                     "process_id": payload.get("process_id"),
