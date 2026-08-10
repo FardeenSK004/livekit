@@ -32,6 +32,28 @@ logger = logging.getLogger("mantra.agent")
 logging.getLogger("livekit.agents").setLevel(logging.DEBUG)
 logger.info("Initializing process...")
 
+POST_CALL_LLM_MODEL = os.getenv("POST_CALL_LLM_MODEL", "deepseek-v4-pro")
+
+
+def build_post_call_llm() -> "llm.LLM":
+    """Build a dedicated LLM engine for post-call analysis.
+
+    Uses the Pro-tier model so transcript analysis (stage transitions,
+    next_call_on, user_intent) is more reliable than the live-agent flash model.
+    Falls back to the Gemini flash model if DEEPSEEK_API_KEY is missing.
+    """
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+    if not deepseek_key:
+        logger.warning("DEEPSEEK_API_KEY not set for post-call LLM, falling back to gemini-2.5-flash")
+        return google.LLM(model="gemini-2.5-flash")
+    import openai as openai_client
+    client = openai_client.AsyncClient(
+        api_key=deepseek_key,
+        base_url="https://api.deepseek.com",
+    )
+    logger.info(f"Post-call LLM using model: {POST_CALL_LLM_MODEL}")
+    return openai.LLM(model=POST_CALL_LLM_MODEL, client=client)
+
 # Also suppress noisy OTEL SDK logs once the SDK initialises
 logging.getLogger("opentelemetry").setLevel(logging.ERROR)
 
@@ -1417,6 +1439,7 @@ Follow these specific instructions:
                 logger.info("[DIAG] finalize(): Call already finalized — skipping duplicate execution")
                 return
             call_state["_finalized"] = True
+            post_call_llm = build_post_call_llm()
 
             recording_url = None
             transcript_data = None
@@ -1588,13 +1611,13 @@ Follow these specific instructions:
                     new_stage_id = not_answering_id
                 else:
                     try:
-                        if llm_engine and history_snapshot:
+                        if post_call_llm and history_snapshot:
                             logger.info(f"[DIAG] finalize(): Step 5 — Running analyze_call with {len(list(history_snapshot))} messages...")
                             client_country_code = call_payload.get("client_country_code") or call_payload.get("country_code", "")
                             
                             analysis = await asyncio.wait_for(
                                 SessionRecorder.analyze_call(
-                                    llm_engine=llm_engine,
+                                    llm_engine=post_call_llm,
                                     history=list(history_snapshot),
                                     current_stage_id=current_stage_id,
                                     stage_details=stage_details,
