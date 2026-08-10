@@ -10,7 +10,23 @@
   - `"APPOINTMENT_RESCHEDULED"` iff an existing appointment was rescheduled to a new date/time during the call AND the outcome stage corresponds to appointment rescheduling.
   - `null` in all other cases (e.g. general inquiry, no appointment action).
 - **feat:** Updated `finalize()` in `mantra/agent.py` to allow `"APPOINTMENT_BOOKED"`, `"APPOINTMENT_CANCELLED"`, or `"APPOINTMENT_RESCHEDULED"` in `CALL_DATA_INBOUND_UPDATE` payload sent to MantraAssist backend.
-- Files: `mantra/utils.py`, `mantra/agent.py`
+- **fix:** Inbound Greeting & Name Assumption:
+  - Removed hardcoded `Identify yourself: 'Mantra Care'` instruction in `mantra/agent.py` which caused agents on inbound calls to greet with "Hi this is Mantra Care". Instructed agent to strictly follow custom prompt brand identity (e.g. `MantraAssist` or `Arushi`).
+  - Stopped injecting stored DB `client_name` (e.g., `'Anurag'` from `org_configs`) into `ADDITIONAL CALL CONTEXT` on inbound calls so the agent never assumes an incoming caller's identity before they introduce themselves.
+  - Added Turn-by-Turn Inbound Flow: Turn 1 (Greeting & "How can I help?"), Turn 2 (Caller states intent → Agent acknowledges and asks for caller's name before proceeding), Turn 3+ (Agent addresses request using caller's name naturally).
+- **feat:** Post-Call Stage & Status Logic for No Transition:
+  - When no stage transition occurs during a call (i.e. `new_stage_id` remains the same as initial `stage_id` or no useful outcome was achieved), `mantra/agent.py` now sends `new_stage_id: null` (empty data) instead of repeating `stage_id`.
+  - Sets `call_status` to `"Incomplete"` in the webhook payload (`CALL_DATA_UPDATE` & `CALL_DATA_INBOUND_UPDATE`) when no new stage transition was made.
+- **feat:** E.164 Inbound Phone Formatting:
+  - Added `format_e164_phone_number()` helper function in `mantra/utils.py`.
+  - Updated `CALL_DATA_INBOUND_UPDATE` payload in `mantra/agent.py` to ensure `client_phone_number` is formatted with country code and a leading `+` (e.g. `+918360625862`).
+- **fix:** AMD Initial Greeting Latency Optimization:
+  - Added a strict `timeout=2.5s` cap to `detect_voicemail()` in `mantra/amd.py` so AMD classification degrades cleanly to human if classification takes too long.
+  - Removed redundant 2.0-second post-AMD sleep loop in `mantra/agent.py` on outbound calls, reducing initial greeting delay by ~3.5 to 4.5 seconds.
+- **fix:** Relative Callback `next_call_on` Calculation:
+  - Enhanced Task 3 prompt in `SessionRecorder.analyze_call()` (`mantra/utils.py`) to instruct relative date/time calculations (e.g., "call back in 10 minutes", "in 1 hour", "tomorrow at 3 PM") relative to current server time.
+  - Added automatic Python regex fallback in `analyze_call()` that detects relative callback requests (e.g. `call me back in 10 minutes`) from call summary/transcript and calculates `next_call_on = current_time + timedelta(...)` automatically if the LLM output is missing.
+- Files: `mantra/agent.py`, `mantra/amd.py`, `mantra/utils.py`
 
 ## 2026-08-09
 

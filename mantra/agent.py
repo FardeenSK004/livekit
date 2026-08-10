@@ -52,7 +52,7 @@ from livekit.agents import TurnHandlingOptions
 
 from livekit.plugins import openai, google, silero, deepgram
 
-from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_datetime, save_call_log_to_db, save_call_event, report_telemetry
+from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_datetime, save_call_log_to_db, save_call_event, report_telemetry, format_e164_phone_number
 from mantra.amd import detect_voicemail
 
 # Import knowledge base
@@ -818,8 +818,8 @@ Follow these specific instructions:
                 if key == "prompt":
                     continue
                 
-                # For inbound calls, if the client name is just "User" or missing, don't inject it to avoid "Am I speaking with User?"
-                if is_inbound and key == "client_name" and (value == "User" or not value):
+                # For inbound calls, do not inject client_name into additional context so the LLM does not assume the caller's name from DB config
+                if is_inbound and key == "client_name":
                     continue
 
                 readable_key = key.replace("_", " ").title()
@@ -846,11 +846,13 @@ Follow these specific instructions:
 
 
             if is_inbound:
-                initial_instructions += "\n--- INBOUND CALL CONTEXT ---\n"
+                initial_instructions += "\n--- INBOUND CALL FLOW & CONTEXT (CRITICAL) ---\n"
                 initial_instructions += "- This is an INBOUND call. The caller reached out to you.\n"
-                initial_instructions += "- Greet warmly and ask how you can help.\n"
-                initial_instructions += "- Do not assume you know why they are calling. Let them explain.\n"
-                initial_instructions += "- Identify yourself: 'Mantra Care' or as instructed in your prompt.\n"
+                initial_instructions += "- TURN 1 (Initial Greeting): Greet warmly and ask how you can help (e.g. 'Hi, this is Arushi. How can I help you today?').\n"
+                initial_instructions += "- TURN 2 (Name Request): When the caller states their reason for calling or intent, briefly acknowledge it, and politely ask for their name BEFORE proceeding to address their request (e.g. 'Sure, I can help with that! May I know your name, please?' or 'Got it. Who am I speaking with?').\n"
+                initial_instructions += "- TURN 3+ (Addressing Request): Once the caller gives their name, address their request or answer their questions directly, using their name naturally.\n"
+                initial_instructions += "- Do not assume the caller's name unless they state it or your prompt explicitly specifies it.\n"
+                initial_instructions += "- Identify yourself strictly as instructed in your prompt or as Arushi. NEVER write 'Mantra Care' with a space.\n"
                 initial_instructions += "- If the caller seems confused, help them understand who you are.\n"
                 
             logger.info(f"Loaded full context for {client_name} (inbound: {is_inbound})")
@@ -1329,13 +1331,15 @@ Follow these specific instructions:
 
         if is_inbound:
             # Inbound: Agent should speak first, but give a tiny delay to avoid clipping
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
         else:
-            # Outbound: Wait up to 2.0s for the user to say "Hello?" when picking up
-            wait_for_user = 20
-            while wait_for_user > 0 and not call_state.get("user_has_spoken"):
-                await asyncio.sleep(0.1)
-                wait_for_user -= 1
+            # Outbound: If AMD was enabled, detect_voicemail() already waited for pickup audio.
+            # Only do a short 0.3s wait if AMD was disabled to allow audio connection.
+            if not AMD_ENABLED:
+                wait_for_user = 3
+                while wait_for_user > 0 and not call_state.get("user_has_spoken"):
+                    await asyncio.sleep(0.1)
+                    wait_for_user -= 1
 
         if not call_state.get("user_has_spoken"):
             logger.info(f"[DIAG] Generating explicit greeting for {client_name} (inbound={is_inbound})...")
@@ -1660,30 +1664,45 @@ Follow these specific instructions:
 
                 if kb_referred:
                     effective_process_id = _as_int(call_payload.get("process_id"))
-                    effective_stage_id = _as_int(new_stage_id if new_stage_id is not None else call_payload.get("stage_id"))
                 else:
                     effective_process_id = None
-                    effective_stage_id = None
             else:
                 effective_process_id = _as_int(call_payload.get("process_id") or derived_process_id)
-                effective_stage_id = _as_int(
-                    new_stage_id if new_stage_id is not None else (
-                        current_stage_id if current_stage_id is not None else call_payload.get("stage_id")
-                    )
-                )
+
+            initial_stage_id = _as_int(current_stage_id if current_stage_id is not None else call_payload.get("stage_id"))
+            analysis_stage_id = _as_int(new_stage_id) if new_stage_id is not None else None
+
+            # Determine if a stage transition occurred or if no useful stage update happened
+            if analysis_stage_id is not None and initial_stage_id is not None and analysis_stage_id != initial_stage_id:
+                payload_stage_id = initial_stage_id
+                payload_new_stage_id = analysis_stage_id
+            elif analysis_stage_id is not None and initial_stage_id is None:
+                payload_stage_id = None
+                payload_new_stage_id = analysis_stage_id
+            else:
+                # No new stage updated / nothing useful done -> send empty data (None / JSON null) for new_stage_id and set call_status to Incomplete
+                payload_stage_id = initial_stage_id
+                payload_new_stage_id = None
+                if call_status not in ["No Answer", "Busy", "Failed"]:
+                    call_status = "Incomplete"
 
             if direction == "inbound":
+                raw_caller_phone = call_state.get("caller_phone_number") or call_payload.get("client_phone_number") or call_payload.get("client_phone") or ""
+                cc_code = call_payload.get("client_country_code") or call_payload.get("country_code") 
+                formatted_caller_phone = format_e164_phone_number(raw_caller_phone, country_code=cc_code)
+
                 webhook_payload = {
                     "event": "CALL_DATA_INBOUND_UPDATE",
                     "data": {
                         "org_id": _as_int(call_payload.get("org_id")),
                         "call_recording": recording_url or "",
                         "process_id": effective_process_id,
-                        "stage_id": effective_stage_id,
-                        "new_stage_id": effective_stage_id,
+                        "stage_id": payload_stage_id,
+                        "new_stage_id": payload_new_stage_id,
+                        "call_status": call_status,
                         "client_name": call_payload.get("client_name") or "",
                         "client_email": call_payload.get("client_email") or "",
-                        "client_phone_number": call_state.get("caller_phone_number") or "",
+                        "client_phone_number": formatted_caller_phone,
                         "call_duration": duration,
                         "call_transcript": transcript_data or "",
                         "next_call_on": normalize_datetime(next_call_on) or "",
@@ -1722,8 +1741,8 @@ Follow these specific instructions:
                             "called_on": call_state.get("call_initiated_at") or call_state.get("agent_joined_at") or None,
                             "ai_call_id": ctx.job.id if ctx.job else "",
                             "process_id": effective_process_id,
-                            "stage_id": effective_stage_id,
-                            "new_stage_id": effective_stage_id,
+                            "stage_id": payload_stage_id,
+                            "new_stage_id": payload_new_stage_id,
                             "metadata": call_payload.get("metadata", {}),
                             "client_custom_fields": client_custom_fields or {},
                             "call_custom_fields": call_payload.get("call_custom_fields", {}),

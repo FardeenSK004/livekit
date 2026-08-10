@@ -19,6 +19,32 @@ import boto3
 logger = logging.getLogger("mantra.utils")
 
 
+def format_e164_phone_number(phone_num: str, country_code: str = "") -> str:
+    """Format phone number to E.164 with leading + sign and country code."""
+    if not phone_num:
+        return ""
+    num = str(phone_num).strip()
+    if not num:
+        return ""
+    if num.startswith("+"):
+        return num
+    
+    clean = "".join([c for c in num if c.isdigit()])
+    if not clean:
+        return num
+
+    cc = "".join([c for c in str(country_code) if c.isdigit()]) if country_code else ""
+    
+    if cc and clean.startswith(cc) and len(clean) > len(cc):
+        return f"+{clean}"
+    elif len(clean) == 10 and cc:
+        return f"+{cc}{clean}"
+    elif len(clean) == 10 and not cc:
+        return f"+91{clean}"
+    else:
+        return f"+{clean}"
+
+
 async def save_call_log_to_db(
     call_id: str,
     call_log: str,
@@ -612,7 +638,7 @@ Client Country Code: {client_country_code}
    - If the caller booked, cancelled, or rescheduled an appointment, select the stage whose description explicitly corresponds to that specific outcome.
    - If none of the stages match or the call did not change the state, default to the current stage ID: {current_stage_id}.
 3. Extract additional metadata:
-   - `next_call_on`: If a follow-up or callback is scheduled/needed, calculate the exact date and time in the server's local timezone (e.g., "2026-06-02 15:00:00"). If the stage description specifies adding 24 hours to the current time, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
+   - `next_call_on`: If a follow-up or callback is requested or scheduled (e.g. "call me back in 10 minutes", "call back in 1 hour", "call tomorrow at 3 PM"), calculate the EXACT future timestamp by adding that offset/duration to Current Date and Time ({current_time_str}) and return it in "YYYY-MM-DD HH:MM:SS" format. If the stage description specifies adding 24 hours, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
    - `appointment_date_time`: If the patient booked/confirmed/rescheduled an appointment, extract the date/time and convert to the server's local timezone (e.g., "2026-06-05 11:30:00"). Otherwise, use null.
    - `doctor`: Extract any mentioned doctor's name. Otherwise, use null.
    - `hospital_location`: Extract the preferred hospital location/center name. Otherwise, use null.
@@ -664,6 +690,23 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             process_id = res_dict.get("process_id")
             new_stage_id = res_dict.get("new_stage_id")
             next_call_on = res_dict.get("next_call_on")
+
+            # Fallback calculation if LLM failed to calculate relative callback timestamp
+            if not next_call_on or str(next_call_on).strip().lower() in ("null", "none", "n/a", ""):
+                import re
+                combined_text = (summary + " " + transcript_text).lower()
+                match = re.search(r'(?:call\s*(?:me\s*)?back|callback|follow-up|follow\s*up)\s*(?:in|after)?\s*(\d+)\s*(minute|min|hour|hr)s?', combined_text)
+                if not match:
+                    match = re.search(r'in\s*(\d+)\s*(minute|min|hour|hr)s?', combined_text)
+                if match:
+                    num = int(match.group(1))
+                    unit = match.group(2)
+                    if "hour" in unit or "hr" in unit:
+                        cb_time = current_time + datetime.timedelta(hours=num)
+                    else:
+                        cb_time = current_time + datetime.timedelta(minutes=num)
+                    next_call_on = cb_time.strftime("%Y-%m-%d %H:%M:%S")
+                    logger.info(f"Fallback next_call_on calculated: {next_call_on} (parsed {num} {unit}s from text)")
             appointment_date_time = res_dict.get("appointment_date_time")
             doctor = res_dict.get("doctor")
             hospital_location = res_dict.get("hospital_location")

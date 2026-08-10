@@ -44,6 +44,7 @@ async def detect_voicemail(
     participant_identity: str,
     *,
     interrupt_on_machine: bool = True,
+    timeout: float = 2.5,
 ) -> VoicemailDetection:
     """Detect whether ``participant_identity`` is an answering machine.
 
@@ -51,10 +52,11 @@ async def detect_voicemail(
         session: The agent session running the call.
         participant_identity: Identity of the SIP participant to classify.
         interrupt_on_machine: Stop the machine's greeting once detected.
+        timeout: Maximum seconds to wait for AMD classification before falling back to human.
 
     Returns:
-        A :class:`VoicemailDetection`. On any failure a non-detected result is
-        returned so the call is treated as a human answer.
+        A :class:`VoicemailDetection`. On any failure or timeout a non-detected result is
+        returned so the call is treated as a human answer immediately.
     """
     try:
         async with AMD(
@@ -64,7 +66,7 @@ async def detect_voicemail(
             interrupt_on_machine=interrupt_on_machine,
             suppress_compatibility_warning=True,
         ) as amd:
-            prediction = await amd.execute()
+            prediction = await asyncio.wait_for(amd.execute(), timeout=timeout)
         result = VoicemailDetection.from_prediction(prediction)
         logger.info(
             "AMD result: detected=%s category=%s reason=%s transcript=%s",
