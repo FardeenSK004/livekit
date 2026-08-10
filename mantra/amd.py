@@ -76,6 +76,9 @@ async def detect_voicemail(
             result.transcript[:120],
         )
         return result
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.info("AMD timed out after %.1fs — proceeding as human", timeout)
+        return VoicemailDetection(detected=False)
     except RuntimeError as e:
         logger.info(f"AMD runtime error: {e}")
         return VoicemailDetection(detected=False)

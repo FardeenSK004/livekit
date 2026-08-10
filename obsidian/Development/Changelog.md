@@ -20,8 +20,9 @@
 - **feat:** E.164 Inbound Phone Formatting:
   - Added `format_e164_phone_number()` helper function in `mantra/utils.py`.
   - Updated `CALL_DATA_INBOUND_UPDATE` payload in `mantra/agent.py` to ensure `client_phone_number` is formatted with country code and a leading `+` (e.g. `+918360625862`).
-- **fix:** AMD Initial Greeting Latency Optimization:
+- **fix:** AMD Initial Greeting Latency Optimization & Clean Logging:
   - Added a strict `timeout=2.5s` cap to `detect_voicemail()` in `mantra/amd.py` so AMD classification degrades cleanly to human if classification takes too long.
+  - Added explicit `(asyncio.TimeoutError, TimeoutError)` handler to `detect_voicemail()` so timeouts print a single clean info log line (`AMD timed out after 2.5s — proceeding as human`) instead of multiline stack tracebacks.
   - Removed redundant 2.0-second post-AMD sleep loop in `mantra/agent.py` on outbound calls, reducing initial greeting delay by ~3.5 to 4.5 seconds.
 - **fix:** Relative Callback `next_call_on` Calculation:
   - Enhanced Task 3 prompt in `SessionRecorder.analyze_call()` (`mantra/utils.py`) to instruct relative date/time calculations (e.g., "call back in 10 minutes", "in 1 hour", "tomorrow at 3 PM") relative to current server time.
