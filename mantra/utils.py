@@ -1,6 +1,5 @@
 import os
 import io
-import re
 import json
 import time
 import hmac
@@ -532,7 +531,7 @@ class SessionRecorder:
                 llm.ChatMessage(role="user", content=[summary_prompt]),
             ]
             stream = llm_engine.chat(chat_ctx=llm.ChatContext(items=messages))
-            response = await stream.collect()
+            response = await asyncio.wait_for(stream.collect(), timeout=45.0)
 
             import re
 
@@ -674,7 +673,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                 llm.ChatMessage(role="user", content=[prompt]),
             ]
             stream = llm_engine.chat(chat_ctx=llm.ChatContext(items=messages))
-            response = await asyncio.wait_for(stream.collect(), timeout=25.0)
+            response = await asyncio.wait_for(stream.collect(), timeout=60.0)
 
             text = response.text.strip()
             res_dict = None
@@ -709,14 +708,6 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             process_id = res_dict.get("process_id")
             new_stage_id = res_dict.get("new_stage_id")
             next_call_on = res_dict.get("next_call_on")
-
-            # Fallback calculation if LLM failed to calculate relative callback timestamp
-            if not next_call_on or str(next_call_on).strip().lower() in ("null", "none", "n/a", ""):
-                combined_text = (summary + " " + transcript_text)
-                parsed = parse_relative_callback(combined_text, current_time)
-                if parsed:
-                    next_call_on = parsed
-                    logger.info(f"Fallback next_call_on calculated: {next_call_on} (parsed from text)")
             appointment_date_time = res_dict.get("appointment_date_time")
             doctor = res_dict.get("doctor")
             hospital_location = res_dict.get("hospital_location")
@@ -729,13 +720,6 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                     process_id = int(process_id)
                 except (ValueError, TypeError):
                     process_id = None
-            if process_id is None and process_stage_data and len(process_stage_data) > 0:
-                first_proc = process_stage_data[0]
-                if isinstance(first_proc, dict) and "id" in first_proc:
-                    try:
-                        process_id = int(first_proc["id"])
-                    except (ValueError, TypeError):
-                        pass
 
             if new_stage_id is not None:
                 try:
@@ -745,30 +729,6 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             else:
                 new_stage_id = fallback_stage_id
 
-            # If the LLM reported no transition (or none detected), fall back to
-            # deterministic keyword inference so demo bookings still advance stages.
-            if new_stage_id in (None, fallback_stage_id):
-                inferred_stage = infer_stage_from_transcript(
-                    transcript_text, summary, stage_details, current_stage_id
-                )
-                if inferred_stage is not None:
-                    new_stage_id = inferred_stage
-                    logger.info(f"Stage inferred from transcript instead of LLM: {inferred_stage}")
-
-            if new_stage_id is None and process_stage_data and len(process_stage_data) > 0:
-                first_proc = process_stage_data[0]
-                if isinstance(first_proc, dict):
-                    stages = first_proc.get("stages", [])
-                    if isinstance(stages, list) and len(stages) > 0:
-                        first_stage = stages[0]
-                        if isinstance(first_stage, dict):
-                            sid = first_stage.get("stage_id") or first_stage.get("id")
-                            if sid is not None:
-                                try:
-                                    new_stage_id = int(sid)
-                                except (ValueError, TypeError):
-                                    pass
-
             if not summary:
                 summary = await SessionRecorder.generate_summary(llm_engine, history)
 
@@ -777,25 +737,9 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                 f"analyze_call failed: {e}. Falling back to default heuristics."
             )
             summary = await SessionRecorder.generate_summary(llm_engine, history)
-            new_stage_id = infer_stage_from_transcript(transcript_text, summary, stage_details, current_stage_id)
-            if new_stage_id is None:
-                new_stage_id = fallback_stage_id
+            new_stage_id = fallback_stage_id
             process_id = None
-            if process_stage_data and len(process_stage_data) > 0:
-                first_proc = process_stage_data[0]
-                if isinstance(first_proc, dict):
-                    if "id" in first_proc:
-                        try: process_id = int(first_proc["id"])
-                        except (ValueError, TypeError): pass
-                    if new_stage_id is None:
-                        stages = first_proc.get("stages", [])
-                        if isinstance(stages, list) and len(stages) > 0 and isinstance(stages[0], dict):
-                            sid = stages[0].get("stage_id") or stages[0].get("id")
-                            if sid is not None:
-                                try: new_stage_id = int(sid)
-                                except (ValueError, TypeError): pass
-
-            next_call_on = parse_relative_callback((summary or "") + " " + (transcript_text or ""), current_time)
+            next_call_on = None
             appointment_date_time = ""
             doctor = ""
             hospital_location = ""
@@ -901,102 +845,3 @@ def normalize_datetime(dt_str: Optional[str]) -> Optional[str]:
     if not val.endswith("Z"):
         val += "Z"
     return val
-
-
-def parse_relative_callback(combined_text: str, current_time: datetime.datetime) -> Optional[str]:
-    """Detect relative callback/follow-up requests (e.g. 'call back in 10 minutes') in text.
-
-    Returns a 'YYYY-MM-DD HH:MM:SS' timestamp offset from base_time, or None if no
-    relative callback term is found.
-    """
-    if not combined_text:
-        return None
-    import re
-    lower_text = str(combined_text).lower()
-    patterns = [
-        r'(?:call\s*(?:me\s*)?back|callback|follow\s*up|call\s+me\s+after)\s*(?:in|after)?\s*(\d+)\s*(minute|min|mins|hour|hr|hrs|day|days)s?',
-        r'(\d+)\s*(minute|min|mins|hour|hr|hrs|day|days)s?\s+(?:baad|bad|me|mein|kei?|after|from now)',
-        r'in\s*(\d+)\s*(minute|min|mins|hour|hr|hrs|day|days)s?',
-        r'tomorrow\s*(?:at|by)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)',
-        r'tomorrow',
-    ]
-    for pat in patterns:
-        m = re.search(pat, lower_text)
-        if m:
-            if pat == r'tomorrow':
-                return (current_time + datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
-            if re.search(r'tomorrow', lower_text) and m.lastindex == 3:
-                hour = int(m.group(1))
-                minute = int(m.group(2) or 0)
-                if "pm" in m.group(3) and hour < 12:
-                    hour += 12
-                if "am" in m.group(3) and hour == 12:
-                    hour = 0
-                base = current_time + datetime.timedelta(days=1)
-                cb = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                return cb.strftime("%Y-%m-%d %H:%M:%S")
-            num = int(m.group(1))
-            unit = m.group(2)
-            if "day" in unit:
-                delta = datetime.timedelta(days=num)
-            elif "hour" in unit or "hr" in unit:
-                delta = datetime.timedelta(hours=num)
-            else:
-                delta = datetime.timedelta(minutes=num)
-            return (current_time + delta).strftime("%Y-%m-%d %H:%M:%S")
-    return None
-
-
-def infer_stage_from_transcript(
-    transcript_text: str,
-    summary: str,
-    stage_details: List[dict],
-    current_stage_id: Optional[int],
-) -> Optional[int]:
-    """Infer the most likely next stage by keyword-matching transcript to stage descriptions.
-
-    Used as a deterministic fallback when LLM JSON analysis fails or reports no
-    transition, so a call that clearly booked a demo still moves stages instead of
-    being flagged Incomplete.
-    """
-    if not stage_details:
-        return None
-    combined = re.sub(r"[^a-z0-9\s]", " ", f"{(summary or '')} {(transcript_text or '')}".lower())
-    skip = set(
-        "a an the to for and or of in on at is are am was were be been will would "
-        "should can could this that with from by about as you your we our they them "
-        "i me my he she it his her its".split()
-    )
-    words = combined.split()
-    best = None
-    best_count = 0
-    for stage in stage_details:
-        desc = str(stage.get("description") or "").lower()
-        if not desc:
-            continue
-        tokens = [t for t in desc.split() if len(t) > 2 and t not in skip]
-        if not tokens:
-            continue
-        count = 0
-        for t in tokens:
-            if t not in words:
-                continue
-            idx = words.index(t)
-            # Negation guard: "no demo", "not interested", "don't want" shouldn't count
-            window = words[max(0, idx - 3): idx]
-            if any(w in ("no", "not", "nope", "never", "don", "dont", "decline") for w in window):
-                continue
-            count += 1
-        sid = stage.get("stage_id")
-        try:
-            sid = int(sid)
-        except (TypeError, ValueError):
-            continue
-        if sid == current_stage_id:
-            continue
-        if count > best_count:
-            best_count = count
-            best = sid
-    if best is not None and best_count >= 2:
-        return best
-    return None

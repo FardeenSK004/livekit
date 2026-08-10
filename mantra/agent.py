@@ -1625,7 +1625,7 @@ Follow these specific instructions:
                                     client_country_code=client_country_code,
                                     process_stage_data=kb_process_stage_data,
                                 ),
-                                timeout=30.0
+                                timeout=70.0
                             )
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]

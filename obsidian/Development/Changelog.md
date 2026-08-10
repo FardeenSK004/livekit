@@ -10,6 +10,13 @@
 - **fix:** Hardened JSON parsing in `analyze_call()` — handles ` ``` ``` `/` ```json ```` fences and extracts the balanced `{...}` object from prose-wrapped/mangled LLM output instead of failing outright.
 - Files: `mantra/utils.py`
 
+### Post-Call Analysis — LLM Sole Source of Truth
+- **refactor:** Removed all regex/heuristic fallbacks from `SessionRecorder.analyze_call()` (`mantra/utils.py`) — the post-call LLM is now the sole source of truth for AI-decided fields. Deleted `parse_relative_callback()` and `infer_stage_from_transcript()`, removed the top-level `import re`, and dropped the `next_call_on` regex fallback, the `process_id`/`new_stage_id` auto-fill from `process_stage_data`, and transcript keyword stage inference in both the success and exception paths.
+- **behavior:** `process_id` and current `stage_id` now come exclusively from the webhook payload (outbound) or KB tracking (`used_kb_process_ids` / `used_kb_stage_ids`, inbound). `new_stage_id`, `ai_summary`, `user_intent`, `next_call_on`, `appointment_date_time`, `doctor`, `hospital_location`, and `sentiment_score` come from the LLM only.
+- **refactor:** Exception path now falls back cleanly: `summary` via `generate_summary()`, `new_stage_id = current_stage_id` (no transition), `process_id = None`, `next_call_on = None`.
+- **perf:** `generate_summary()` bounded by 45s `wait_for`; `analyze_call` LLM inner timeout raised 25s → 60s (utils.py) and outer timeout 30s → 70s (agent.py) to fit `deepseek-v4-pro` (benchmarked 12–22s on a demo-booking transcript).
+- Files: `mantra/utils.py`, `mantra/agent.py`
+
 ### Inbound Call Post-Call `user_intent` Payload Field (Booked, Cancelled, Rescheduled)
 - **feat:** Extended `user_intent` field in post-call `CALL_DATA_INBOUND_UPDATE` webhook payload for inbound calls to support 3 distinct appointment outcomes: `"APPOINTMENT_BOOKED"`, `"APPOINTMENT_CANCELLED"`, and `"APPOINTMENT_RESCHEDULED"`.
 - **feat:** LLM call analysis in `SessionRecorder.analyze_call()` (`mantra/utils.py`) evaluates conversation history against KB process/stage descriptions:
