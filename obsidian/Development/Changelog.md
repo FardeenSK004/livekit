@@ -2,6 +2,14 @@
 
 ## 2026-08-10
 
+### Post-Call Analysis Hardening — `next_call_on` & Stage Transition Injection
+- **bug:** `next_call_on` was empty (`""`) in post-call payloads even when the transcript requested a callback (e.g. "Call me back in 10 minutes"). Root cause: the relative-callback regex fallback only ran in the success path of `SessionRecorder.analyze_call()`. When the LLM returned non-JSON output (common with flash models), the exception path hard-set `next_call_on = None` and never ran the regex.
+- **bug:** Stage transitions were lost on the same LLM failures — a call that clearly booked a demo (stage "said yes to book demo") was sent as `new_stage_id: null` with `call_status: "Incomplete"` because the exception path hard-set `new_stage_id = fallback_stage_id` (current stage).
+- **fix:** Added `parse_relative_callback()` helper in `mantra/utils.py` (module-level, shared by both paths) — handles "in 10 minutes", "1 hour", "N days", Hindi "10 minute baad", and "tomorrow at 3 PM"/"tomorrow". Runs in the success path (when LLM returns null) AND in the exception path.
+- **fix:** Added `infer_stage_from_transcript()` helper in `mantra/utils.py` — deterministic keyword matching (word-boundary, negation-guarded) of transcript/summary against stage descriptions. Runs in the exception path and as a fallback when the LLM reports no transition, so demo bookings still advance to the correct stage.
+- **fix:** Hardened JSON parsing in `analyze_call()` — handles ` ``` ``` `/` ```json ```` fences and extracts the balanced `{...}` object from prose-wrapped/mangled LLM output instead of failing outright.
+- Files: `mantra/utils.py`
+
 ### Inbound Call Post-Call `user_intent` Payload Field (Booked, Cancelled, Rescheduled)
 - **feat:** Extended `user_intent` field in post-call `CALL_DATA_INBOUND_UPDATE` webhook payload for inbound calls to support 3 distinct appointment outcomes: `"APPOINTMENT_BOOKED"`, `"APPOINTMENT_CANCELLED"`, and `"APPOINTMENT_RESCHEDULED"`.
 - **feat:** LLM call analysis in `SessionRecorder.analyze_call()` (`mantra/utils.py`) evaluates conversation history against KB process/stage descriptions:

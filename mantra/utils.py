@@ -744,6 +744,16 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             else:
                 new_stage_id = fallback_stage_id
 
+            # If the LLM reported no transition (or none detected), fall back to
+            # deterministic keyword inference so demo bookings still advance stages.
+            if new_stage_id in (None, fallback_stage_id):
+                inferred_stage = infer_stage_from_transcript(
+                    transcript_text, summary, stage_details, current_stage_id
+                )
+                if inferred_stage is not None:
+                    new_stage_id = inferred_stage
+                    logger.info(f"Stage inferred from transcript instead of LLM: {inferred_stage}")
+
             if new_stage_id is None and process_stage_data and len(process_stage_data) > 0:
                 first_proc = process_stage_data[0]
                 if isinstance(first_proc, dict):
@@ -766,7 +776,9 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                 f"analyze_call failed: {e}. Falling back to default heuristics."
             )
             summary = await SessionRecorder.generate_summary(llm_engine, history)
-            new_stage_id = fallback_stage_id
+            new_stage_id = infer_stage_from_transcript(transcript_text, summary, stage_details, current_stage_id)
+            if new_stage_id is None:
+                new_stage_id = fallback_stage_id
             process_id = None
             if process_stage_data and len(process_stage_data) > 0:
                 first_proc = process_stage_data[0]
@@ -931,4 +943,59 @@ def parse_relative_callback(combined_text: str, current_time: datetime.datetime)
             else:
                 delta = datetime.timedelta(minutes=num)
             return (current_time + delta).strftime("%Y-%m-%d %H:%M:%S")
+    return None
+
+
+def infer_stage_from_transcript(
+    transcript_text: str,
+    summary: str,
+    stage_details: List[dict],
+    current_stage_id: Optional[int],
+) -> Optional[int]:
+    """Infer the most likely next stage by keyword-matching transcript to stage descriptions.
+
+    Used as a deterministic fallback when LLM JSON analysis fails or reports no
+    transition, so a call that clearly booked a demo still moves stages instead of
+    being flagged Incomplete.
+    """
+    if not stage_details:
+        return None
+    combined = re.sub(r"[^a-z0-9\s]", " ", f"{(summary or '')} {(transcript_text or '')}".lower())
+    skip = set(
+        "a an the to for and or of in on at is are am was were be been will would "
+        "should can could this that with from by about as you your we our they them "
+        "i me my he she it his her its".split()
+    )
+    words = combined.split()
+    best = None
+    best_count = 0
+    for stage in stage_details:
+        desc = str(stage.get("description") or "").lower()
+        if not desc:
+            continue
+        tokens = [t for t in desc.split() if len(t) > 2 and t not in skip]
+        if not tokens:
+            continue
+        count = 0
+        for t in tokens:
+            if t not in words:
+                continue
+            idx = words.index(t)
+            # Negation guard: "no demo", "not interested", "don't want" shouldn't count
+            window = words[max(0, idx - 3): idx]
+            if any(w in ("no", "not", "nope", "never", "don", "dont", "decline") for w in window):
+                continue
+            count += 1
+        sid = stage.get("stage_id")
+        try:
+            sid = int(sid)
+        except (TypeError, ValueError):
+            continue
+        if sid == current_stage_id:
+            continue
+        if count > best_count:
+            best_count = count
+            best = sid
+    if best is not None and best_count >= 2:
+        return best
     return None
