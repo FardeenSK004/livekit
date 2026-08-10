@@ -676,15 +676,33 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             response = await asyncio.wait_for(stream.collect(), timeout=25.0)
 
             text = response.text.strip()
+            res_dict = None
             if text.startswith("```"):
-                first_newline = text.find("\n")
-                if first_newline != -1:
-                    text = text[first_newline:]
-                if text.endswith("```"):
-                    text = text[:-3]
+                open_idx = text.find("\n")
+                end_idx = text.rfind("```")
+                if open_idx != -1:
+                    text = text[open_idx + 1:]
+                if end_idx != -1:
+                    text = text[:end_idx]
                 text = text.strip()
+            try:
+                res_dict = json.loads(text)
+            except json.JSONDecodeError:
+                # Extract the first balanced { ... } object if the model wrapped
+                # the JSON with prose or partial fences.
+                start = text.find("{")
+                end = text.rfind("}")
+                if start != -1 and end > start:
+                    candidate = text[start:end + 1]
+                    res_dict = json.loads(candidate)
+                else:
+                    raise
 
-            res_dict = json.loads(text)
+            if not isinstance(res_dict, dict):
+                start = text.find("{")
+                end = text.rfind("}")
+                candidate = text[start:end + 1]
+                res_dict = json.loads(candidate)
 
             summary = res_dict.get("summary") or ""
             process_id = res_dict.get("process_id")
@@ -693,20 +711,11 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
 
             # Fallback calculation if LLM failed to calculate relative callback timestamp
             if not next_call_on or str(next_call_on).strip().lower() in ("null", "none", "n/a", ""):
-                import re
-                combined_text = (summary + " " + transcript_text).lower()
-                match = re.search(r'(?:call\s*(?:me\s*)?back|callback|follow-up|follow\s*up)\s*(?:in|after)?\s*(\d+)\s*(minute|min|hour|hr)s?', combined_text)
-                if not match:
-                    match = re.search(r'in\s*(\d+)\s*(minute|min|hour|hr)s?', combined_text)
-                if match:
-                    num = int(match.group(1))
-                    unit = match.group(2)
-                    if "hour" in unit or "hr" in unit:
-                        cb_time = current_time + datetime.timedelta(hours=num)
-                    else:
-                        cb_time = current_time + datetime.timedelta(minutes=num)
-                    next_call_on = cb_time.strftime("%Y-%m-%d %H:%M:%S")
-                    logger.info(f"Fallback next_call_on calculated: {next_call_on} (parsed {num} {unit}s from text)")
+                combined_text = (summary + " " + transcript_text)
+                parsed = parse_relative_callback(combined_text, current_time)
+                if parsed:
+                    next_call_on = parsed
+                    logger.info(f"Fallback next_call_on calculated: {next_call_on} (parsed from text)")
             appointment_date_time = res_dict.get("appointment_date_time")
             doctor = res_dict.get("doctor")
             hospital_location = res_dict.get("hospital_location")
@@ -773,7 +782,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                                 try: new_stage_id = int(sid)
                                 except (ValueError, TypeError): pass
 
-            next_call_on = None
+            next_call_on = parse_relative_callback((summary or "") + " " + (transcript_text or ""), current_time)
             appointment_date_time = ""
             doctor = ""
             hospital_location = ""
@@ -873,9 +882,53 @@ def normalize_datetime(dt_str: Optional[str]) -> Optional[str]:
     if not dt_str:
         return None
     val = str(dt_str).strip()
-    if not val or val.lower() in ("null", "none", "n/a"):
+    if not val or val.lower() in ("null", "none", "n/a", ""):
         return None
     val = val.replace(" ", "T")
     if not val.endswith("Z"):
         val += "Z"
     return val
+
+
+def parse_relative_callback(combined_text: str, current_time: datetime.datetime) -> Optional[str]:
+    """Detect relative callback/follow-up requests (e.g. 'call back in 10 minutes') in text.
+
+    Returns a 'YYYY-MM-DD HH:MM:SS' timestamp offset from base_time, or None if no
+    relative callback term is found.
+    """
+    if not combined_text:
+        return None
+    import re
+    lower_text = str(combined_text).lower()
+    patterns = [
+        r'(?:call\s*(?:me\s*)?back|callback|follow\s*up|call\s+me\s+after)\s*(?:in|after)?\s*(\d+)\s*(minute|min|mins|hour|hr|hrs|day|days)s?',
+        r'(\d+)\s*(minute|min|mins|hour|hr|hrs|day|days)s?\s+(?:baad|bad|me|mein|kei?|after|from now)',
+        r'in\s*(\d+)\s*(minute|min|mins|hour|hr|hrs|day|days)s?',
+        r'tomorrow\s*(?:at|by)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)',
+        r'tomorrow',
+    ]
+    for pat in patterns:
+        m = re.search(pat, lower_text)
+        if m:
+            if pat == r'tomorrow':
+                return (current_time + datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+            if re.search(r'tomorrow', lower_text) and m.lastindex == 3:
+                hour = int(m.group(1))
+                minute = int(m.group(2) or 0)
+                if "pm" in m.group(3) and hour < 12:
+                    hour += 12
+                if "am" in m.group(3) and hour == 12:
+                    hour = 0
+                base = current_time + datetime.timedelta(days=1)
+                cb = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                return cb.strftime("%Y-%m-%d %H:%M:%S")
+            num = int(m.group(1))
+            unit = m.group(2)
+            if "day" in unit:
+                delta = datetime.timedelta(days=num)
+            elif "hour" in unit or "hr" in unit:
+                delta = datetime.timedelta(hours=num)
+            else:
+                delta = datetime.timedelta(minutes=num)
+            return (current_time + delta).strftime("%Y-%m-%d %H:%M:%S")
+    return None
