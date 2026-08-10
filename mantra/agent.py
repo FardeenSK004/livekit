@@ -1341,22 +1341,19 @@ Follow these specific instructions:
         else:
             await asyncio.sleep(0.2)
 
-        if not call_state.get("user_has_spoken"):
-            logger.info(f"[DIAG] Generating explicit initial greeting for {client_name} (inbound={is_inbound})...")
-            try:
-                if is_inbound:
-                    session.generate_reply(
-                        instructions="Initiate the conversation according to your system prompt. Introduce yourself and ask how you can help."
-                    )
-                else:
-                    session.generate_reply(
-                        instructions=f"Greet the user named {client_name} and follow the opening script in your instructions."
-                    )
-                logger.info("[DIAG] Greeting generation requested immediately upon connect.")
-            except RuntimeError as e:
-                logger.warning(f"[DIAG] Could not generate greeting (session may be closed): {e}")
-        else:
-            logger.info("[DIAG] User spoke first. Relying on turn detector for initial reply.")
+        logger.info(f"[DIAG] Generating explicit initial greeting for {client_name} (inbound={is_inbound})...")
+        try:
+            if is_inbound:
+                session.generate_reply(
+                    instructions="Initiate the conversation according to your system prompt. Introduce yourself and ask how you can help."
+                )
+            else:
+                session.generate_reply(
+                    instructions=f"Greet the user named {client_name} and follow the opening script in your instructions."
+                )
+            logger.info("[DIAG] Greeting generation requested immediately upon connect.")
+        except RuntimeError as e:
+            logger.warning(f"[DIAG] Could not generate greeting (session may be closed): {e}")
 
         logger.info(f"[DIAG] Entering main loop — blocking until room disconnects. connection_state={ctx.room.connection_state}")
         # Block until the room connection drops or the session closes
