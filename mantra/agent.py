@@ -1302,47 +1302,47 @@ Follow these specific instructions:
             await _telemetry("Customer joined the call")
             await asyncio.sleep(0.5)
 
-        # ── Answering Machine Detection (outbound only) ──────────────────────
+        # ── Answering Machine Detection (outbound only - async background execution) ──
         if AMD_ENABLED and not is_inbound and not ctx.room.name.startswith("test_"):
-            detection = await detect_voicemail(session, participant_identity=f"sip_{call_id}")
-            if detection.category:
-                call_state["amd_category"] = detection.category
-                call_state["amd_transcript"] = detection.transcript
-                call_state["timeline"].append({
-                    "event": f"AMD Result: {detection.category}",
-                    "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-                })
-            if detection.detected:
-                logger.info("AMD: voicemail detected — handing off to agent")
+            async def _run_amd_background():
                 try:
-                    speech_handle = session.generate_reply(
-                        instructions=(
-                            "The call went to voicemail. Follow your instructions about "
-                            "voicemail. If you have no voicemail instructions, introduce "
-                            "yourself by name and ask them to call you back. Keep it brief."
-                        )
-                    )
-                    await speech_handle.wait_for_playout()
-                    await _telemetry("amd_voicemail_message_played")
+                    detection = await detect_voicemail(session, participant_identity=f"sip_{call_id}", timeout=2.5)
+                    if detection.category:
+                        call_state["amd_category"] = detection.category
+                        call_state["amd_transcript"] = detection.transcript
+                        call_state["timeline"].append({
+                            "event": f"AMD Result: {detection.category}",
+                            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+                        })
+                    if detection.detected:
+                        logger.info("AMD: voicemail detected — interrupting agent and leaving voicemail message")
+                        try:
+                            session.interrupt()
+                            speech_handle = session.generate_reply(
+                                instructions=(
+                                    "The call went to voicemail. Follow your instructions about "
+                                    "voicemail. If you have no voicemail instructions, introduce "
+                                    "yourself by name and ask them to call you back. Keep it brief."
+                                )
+                            )
+                            await speech_handle.wait_for_playout()
+                            await _telemetry("amd_voicemail_message_played")
+                        except Exception as e:
+                            logger.error(f"AMD voicemail message failed: {e}")
+                        ctx.shutdown("voicemail detected")
                 except Exception as e:
-                    logger.error(f"AMD voicemail message failed: {e}")
-                ctx.shutdown("voicemail detected")
-                return
+                    logger.warning(f"Background AMD check error: {e}")
 
+            create_bg_task(_run_amd_background())
+
+        # Give tiny 0.2s delay for WebRTC track binding before requesting initial greeting
         if is_inbound:
-            # Inbound: Agent should speak first, but give a tiny delay to avoid clipping
             await asyncio.sleep(0.3)
         else:
-            # Outbound: If AMD was enabled, detect_voicemail() already waited for pickup audio.
-            # Only do a short 0.3s wait if AMD was disabled to allow audio connection.
-            if not AMD_ENABLED:
-                wait_for_user = 3
-                while wait_for_user > 0 and not call_state.get("user_has_spoken"):
-                    await asyncio.sleep(0.1)
-                    wait_for_user -= 1
+            await asyncio.sleep(0.2)
 
         if not call_state.get("user_has_spoken"):
-            logger.info(f"[DIAG] Generating explicit greeting for {client_name} (inbound={is_inbound})...")
+            logger.info(f"[DIAG] Generating explicit initial greeting for {client_name} (inbound={is_inbound})...")
             try:
                 if is_inbound:
                     session.generate_reply(
@@ -1352,7 +1352,7 @@ Follow these specific instructions:
                     session.generate_reply(
                         instructions=f"Greet the user named {client_name} and follow the opening script in your instructions."
                     )
-                logger.info("[DIAG] Greeting generation requested.")
+                logger.info("[DIAG] Greeting generation requested immediately upon connect.")
             except RuntimeError as e:
                 logger.warning(f"[DIAG] Could not generate greeting (session may be closed): {e}")
         else:
