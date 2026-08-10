@@ -1,8 +1,10 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-08-09  
+> **Last Updated:** 2026-08-10  
 > **Status:** Active maintenance, trunk-based per-trunk call capacity gating, zombie room cleanup, DB enrichment
+
+- [x] **Inbound Call Post-Call `user_intent` Payload Field (2026-08-10):** Added `user_intent` field to post-call `CALL_DATA_INBOUND_UPDATE` webhook payload supporting `"APPOINTMENT_BOOKED"`, `"APPOINTMENT_CANCELLED"`, and `"APPOINTMENT_RESCHEDULED"`. LLM call analysis in `SessionRecorder.analyze_call()` (`mantra/utils.py`) evaluates conversation history against KB process/stage descriptions and sets `user_intent` accordingly (or `null` for general inquiry). Updated `finalize()` in `mantra/agent.py` to deliver the intent in the webhook payload.
 
 - [x] **KB Retrieval Fix — Hybrid FTS + Semantic + Tiered Fallback (2026-08-09):** Fixed org 77 inbound call where "diagnostic codes" returned nothing despite the KB page containing "diagnostic code". Root cause: `text_search` used the `simple` FTS config (no stemming) + `websearch_to_tsquery` AND semantics — `'diagnostic' & 'codes'` never matched `code`. Migration `006_kb_english_vector.py` rebuilds `text_search` with the `english` config and adds `embedding vector(1536)` + HNSW index. New `mantra/gemini_embeddings.py` embeds via `gemini-embedding-2` @ 1536 dims. `mantra/knowledge_base.py` now does tiered search (strict FTS+vector RRF blend → loose OR → tag-only → `list_available()` doc listing); `mantra/retriever.py` returns the available-documents list when nothing matches so the LLM answers truthfully. `tools/backfill_embeddings.py` backfills existing rows (idempotent). Verified end-to-end on scratch DB: "diagnostic codes" now finds the page, "what is there in your knowledge base" lists docs truthfully. `agent.py` unchanged (tool already flows through the retriever). Prod DB migration + backfill left to the user to run.
 

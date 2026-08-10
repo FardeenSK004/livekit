@@ -36,8 +36,8 @@ Step 5: REAL-TIME CONVERSATION (STT → LLM → TTS)
 Step 6: POST-CALL PROCESSING
   ├── Session recorder captures transcript & audio
   ├── MP3 mixed & uploaded to AWS S3
-  ├── LLM analysis (summary, sentiment, stage transition, process_id from KB)
-  ├── Inbound webhook: `CALL_DATA_INBOUND_UPDATE` — `org_id`/`process_id`/`new_stage_id` coerced string→int (null if missing)
+  ├── LLM analysis (summary, sentiment, stage transition, process_id from KB, user_intent)
+  ├── Inbound webhook: `CALL_DATA_INBOUND_UPDATE` — `user_intent` set to `"APPOINTMENT_BOOKED"` iff appointment booked AND outcome stage is appointment booking stage from KB (else null); `org_id`/`process_id`/`new_stage_id` coerced string→int (null if missing)
   └── Call log saved to PostgreSQL `call_logs` table
 ```
 

@@ -604,21 +604,23 @@ Client Country Code: {client_country_code}
 1. Generate a call summary as a single, coherent paragraph. It must properly state:
    - What the patient concern/reason for calling was.
    - The details discussed in the call.
-   - The conclusion (e.g. appointment booked, callback scheduled, disconnected, not interested).
+   - The conclusion (e.g. appointment booked, demo requested, callback scheduled, disconnected, not interested).
    - Any other important patient details based on the transcript.
 2. Determine the correct process_id and next stage_id.
-   - If processes are available (with their stages), select the process_id whose name best matches the call topic, then select the stage_id within that process whose description best matches the call outcome.
-   - If only stages are available (no processes), select the stage_id whose description best matches the call outcome.
-   - If the patient confirmed/booked an appointment, select the stage for "confirmed the appointment".
-   - If the patient asked to call back or follow up later, select the stage for "follow up or call later".
-   - If the patient showed interest but didn't book yet, select the stage for "shown interest".
-   - If the patient is not interested or declined, select the stage for "not interested" or the specific declining reason stage.
+   - Carefully inspect every stage's `stage_id` and `description` field in `AVAILABLE CRM STAGES` (or `AVAILABLE PROCESSES`).
+   - Match the call outcome directly to the stage `description`. For example, if the caller expressed positive interest or agreed to a live demo/booking, select the stage whose description mentions positive intent or demo booking (e.g. "User shared positive intent and said yes to book demo.").
+   - If the caller booked, cancelled, or rescheduled an appointment, select the stage whose description explicitly corresponds to that specific outcome.
    - If none of the stages match or the call did not change the state, default to the current stage ID: {current_stage_id}.
 3. Extract additional metadata:
    - `next_call_on`: If a follow-up or callback is scheduled/needed, calculate the exact date and time in the server's local timezone (e.g., "2026-06-02 15:00:00"). If the stage description specifies adding 24 hours to the current time, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
-   - `appointment_date_time`: If the patient booked/confirmed an appointment, extract the date/time and convert to the server's local timezone (e.g., "2026-06-05 11:30:00"). Otherwise, use null.
+   - `appointment_date_time`: If the patient booked/confirmed/rescheduled an appointment, extract the date/time and convert to the server's local timezone (e.g., "2026-06-05 11:30:00"). Otherwise, use null.
    - `doctor`: Extract any mentioned doctor's name. Otherwise, use null.
    - `hospital_location`: Extract the preferred hospital location/center name. Otherwise, use null.
+   - `user_intent`: Refer to the KB process and stage descriptions in AVAILABLE PROCESSES. Determine the user intent regarding appointments:
+     - IF AND ONLY IF an appointment was successfully booked during the call AND the outcome stage corresponds to appointment booking/confirmation, set `user_intent` to "APPOINTMENT_BOOKED".
+     - IF AND ONLY IF an appointment was cancelled during the call AND the outcome stage corresponds to appointment cancellation, set `user_intent` to "APPOINTMENT_CANCELLED".
+     - IF AND ONLY IF an appointment was rescheduled to a new date/time during the call AND the outcome stage corresponds to appointment rescheduling, set `user_intent` to "APPOINTMENT_RESCHEDULED".
+     - Otherwise, set `user_intent` to null.
    - `sentiment_score`: Rate the user's sentiment from 0.0 (very negative/angry) to 1.0 (very positive/happy), with 0.5 as neutral.
 
 You MUST return your response as a valid JSON object with the following schema:
@@ -630,6 +632,7 @@ You MUST return your response as a valid JSON object with the following schema:
   "appointment_date_time": "string or null",
   "doctor": "string or null",
   "hospital_location": "string or null",
+  "user_intent": "APPOINTMENT_BOOKED" or "APPOINTMENT_CANCELLED" or "APPOINTMENT_RESCHEDULED" or null,
   "sentiment_score": float
 }}
 
@@ -644,7 +647,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                 llm.ChatMessage(role="user", content=[prompt]),
             ]
             stream = llm_engine.chat(chat_ctx=llm.ChatContext(items=messages))
-            response = await asyncio.wait_for(stream.collect(), timeout=12.0)
+            response = await asyncio.wait_for(stream.collect(), timeout=25.0)
 
             text = response.text.strip()
             if text.startswith("```"):
@@ -665,6 +668,8 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             doctor = res_dict.get("doctor")
             hospital_location = res_dict.get("hospital_location")
             sentiment_score = res_dict.get("sentiment_score", 0.5)
+            user_intent_raw = res_dict.get("user_intent")
+            user_intent = user_intent_raw.strip().upper() if user_intent_raw and str(user_intent_raw).strip().upper() in ["APPOINTMENT_BOOKED", "APPOINTMENT_CANCELLED", "APPOINTMENT_RESCHEDULED"] else None
 
             if process_id is not None:
                 try:
@@ -730,6 +735,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             doctor = ""
             hospital_location = ""
             sentiment_score = 0.5
+            user_intent = None
 
         return {
             "summary": summary,
@@ -739,6 +745,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             "appointment_date_time": appointment_date_time,
             "doctor": doctor,
             "hospital_location": hospital_location,
+            "user_intent": user_intent,
             "sentiment_score": sentiment_score,
         }
 

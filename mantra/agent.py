@@ -1003,7 +1003,7 @@ Follow these specific instructions:
                                 content_preview = content[:200] + ("..." if len(content) > 200 else "")
                                 logger.info(f"[DIAG] TRANSCRIPT | {role}: {content_preview}")
             except Exception as e:
-                logger.debug(f"[DIAG] Transcript logger error: {e}")
+                logger.info(f"[DIAG] Transcript logger error: {e}")
             await asyncio.sleep(2.0)
 
     transcript_task = asyncio.create_task(transcript_logger())
@@ -1118,7 +1118,7 @@ Follow these specific instructions:
                     await _force_disconnect_room(ctx)
                     break
             except Exception as e:
-                logger.debug(f"Farewell safety net error: {e}")
+                logger.info(f"Farewell safety net error: {e}")
 
     # Call duration limiter logic
     async def call_limiter():
@@ -1562,6 +1562,7 @@ Follow these specific instructions:
 
                 summary_text = None
                 new_stage_id = current_stage_id
+                derived_user_intent = None
                 client_custom_fields = call_payload.get("client_custom_fields", {})
                 if not isinstance(client_custom_fields, dict):
                     client_custom_fields = {}
@@ -1605,6 +1606,7 @@ Follow these specific instructions:
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]
                             derived_process_id = analysis.get("process_id")
+                            derived_user_intent = analysis.get("user_intent")
                             if derived_process_id and not call_payload.get("process_id"):
                                 call_payload["process_id"] = derived_process_id
                             next_call_on = normalize_datetime(analysis["next_call_on"])
@@ -1617,7 +1619,7 @@ Follow these specific instructions:
                                 client_custom_fields["hospital_location"] = analysis["hospital_location"]
 
                             logger.info(
-                                f"Analysis completed. Process: {derived_process_id}, New Stage ID: {new_stage_id}, Next Call On: {next_call_on}"
+                                f"Analysis completed. Process: {derived_process_id}, New Stage ID: {new_stage_id}, Next Call On: {next_call_on}, User Intent: {derived_user_intent}"
                             )
                         else:
                             logger.warning(
@@ -1686,6 +1688,7 @@ Follow these specific instructions:
                         "call_transcript": transcript_data or "",
                         "next_call_on": normalize_datetime(next_call_on) or "",
                         "called_on": call_state.get("call_initiated_at") or call_state.get("agent_joined_at") or "",
+                        "user_intent": derived_user_intent if derived_user_intent in ["APPOINTMENT_BOOKED", "APPOINTMENT_CANCELLED", "APPOINTMENT_RESCHEDULED"] else None,
                         "meta_data": {
                             "document_id": str(call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")),
                             "provider": (call_payload.get("metadata", {}) or {}).get("provider", ""),

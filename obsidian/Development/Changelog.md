@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-10
+
+### Inbound Call Post-Call `user_intent` Payload Field (Booked, Cancelled, Rescheduled)
+- **feat:** Extended `user_intent` field in post-call `CALL_DATA_INBOUND_UPDATE` webhook payload for inbound calls to support 3 distinct appointment outcomes: `"APPOINTMENT_BOOKED"`, `"APPOINTMENT_CANCELLED"`, and `"APPOINTMENT_RESCHEDULED"`.
+- **feat:** LLM call analysis in `SessionRecorder.analyze_call()` (`mantra/utils.py`) evaluates conversation history against KB process/stage descriptions:
+  - `"APPOINTMENT_BOOKED"` iff an appointment was successfully booked during the call AND the outcome stage corresponds to appointment booking/confirmation.
+  - `"APPOINTMENT_CANCELLED"` iff an existing appointment was cancelled during the call AND the outcome stage corresponds to appointment cancellation.
+  - `"APPOINTMENT_RESCHEDULED"` iff an existing appointment was rescheduled to a new date/time during the call AND the outcome stage corresponds to appointment rescheduling.
+  - `null` in all other cases (e.g. general inquiry, no appointment action).
+- **feat:** Updated `finalize()` in `mantra/agent.py` to allow `"APPOINTMENT_BOOKED"`, `"APPOINTMENT_CANCELLED"`, or `"APPOINTMENT_RESCHEDULED"` in `CALL_DATA_INBOUND_UPDATE` payload sent to MantraAssist backend.
+- Files: `mantra/utils.py`, `mantra/agent.py`
+
 ## 2026-08-09
 
 ### KB Retrieval Fix — Hybrid FTS + Semantic (pgvector/Gemini) + Tiered Fallback
