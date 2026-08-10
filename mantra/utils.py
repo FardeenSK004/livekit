@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import json
 import time
 import hmac
