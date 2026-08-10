@@ -638,7 +638,7 @@ Client Country Code: {client_country_code}
    - If the caller booked, cancelled, or rescheduled an appointment, select the stage whose description explicitly corresponds to that specific outcome.
    - If none of the stages match or the call did not change the state, default to the current stage ID: {current_stage_id}.
 3. Extract additional metadata:
-   - `next_call_on`: If a follow-up or callback is requested or scheduled (e.g. "call me back in 10 minutes", "call back in 1 hour", "call tomorrow at 3 PM"), calculate the EXACT future timestamp by adding that offset/duration to Current Date and Time ({current_time_str}) and return it in "YYYY-MM-DD HH:MM:SS" format. If the stage description specifies adding 24 hours, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
+   - `next_call_on`: If a follow-up or callback is requested or scheduled in any language (e.g. "call me back in 10 minutes", "10 minute baad", "दस minute बाद", "call back in 1 hour", "call tomorrow at 3 PM"), calculate the EXACT future timestamp by adding that duration/offset directly to `Current Date and Time` ({current_time_str}) and return it in "YYYY-MM-DD HH:MM:SS" format. If the stage description specifies adding 24 hours to the current time, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
    - `appointment_date_time`: If the patient booked/confirmed/rescheduled an appointment, extract the date/time and convert to the server's local timezone (e.g., "2026-06-05 11:30:00"). Otherwise, use null.
    - `doctor`: Extract any mentioned doctor's name. Otherwise, use null.
    - `hospital_location`: Extract the preferred hospital location/center name. Otherwise, use null.

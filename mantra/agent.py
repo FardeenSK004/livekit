@@ -1669,7 +1669,7 @@ Follow these specific instructions:
             initial_stage_id = _as_int(current_stage_id if current_stage_id is not None else call_payload.get("stage_id"))
             analysis_stage_id = _as_int(new_stage_id) if new_stage_id is not None else None
 
-            # Determine if a stage transition occurred or if no useful stage update happened
+            # Determine payload stage IDs
             if analysis_stage_id is not None and initial_stage_id is not None and analysis_stage_id != initial_stage_id:
                 payload_stage_id = initial_stage_id
                 payload_new_stage_id = analysis_stage_id
@@ -1677,10 +1677,17 @@ Follow these specific instructions:
                 payload_stage_id = None
                 payload_new_stage_id = analysis_stage_id
             else:
-                # No new stage updated / nothing useful done -> send empty data (None / JSON null) for new_stage_id and set call_status to Incomplete
                 payload_stage_id = initial_stage_id
                 payload_new_stage_id = None
-                if call_status not in ["No Answer", "Busy", "Failed"]:
+
+            # Determine final call_status precedence
+            normalized_next_call_on = normalize_datetime(next_call_on)
+            if call_status not in ["No Answer", "Busy", "Failed"]:
+                if normalized_next_call_on:
+                    call_status = "Scheduled"
+                elif payload_new_stage_id is not None:
+                    call_status = "Completed"
+                else:
                     call_status = "Incomplete"
 
             if direction == "inbound":

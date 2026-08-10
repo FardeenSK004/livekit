@@ -20,10 +20,9 @@
 - **feat:** E.164 Inbound Phone Formatting:
   - Added `format_e164_phone_number()` helper function in `mantra/utils.py`.
   - Updated `CALL_DATA_INBOUND_UPDATE` payload in `mantra/agent.py` to ensure `client_phone_number` is formatted with country code and a leading `+` (e.g. `+918360625862`).
-- **fix:** Mandatory Initial Greeting Generation on Connect:
-  - Removed conditional `if not call_state.get("user_has_spoken")` check during call startup in `mantra/agent.py`.
-  - Previously, if the caller said "Hello" while WebRTC audio/STT was initializing, `user_has_spoken` became `True` and bypassed `session.generate_reply()`, causing 18 seconds of silence if STT missed the first utterance.
-  - Now, `session.generate_reply()` is **always** triggered immediately upon call connect, guaranteeing zero silence on every call.
+- **fix:** `Scheduled` Call Status Precedence & Relative `next_call_on` Prompt:
+  - Updated `call_status` precedence in `mantra/agent.py` so that whenever `next_call_on` is present (i.e. a follow-up or callback was scheduled), `call_status` is explicitly set to `"Scheduled"` (overriding `"Incomplete"`).
+  - Refined LLM system prompt instructions in `mantra/utils.py` so relative callback durations in any language (e.g. Hindi "दस minute बाद", English "in 10 minutes") are calculated directly relative to `Current Date and Time` ({current_time_str}).
 - **fix:** Relative Callback `next_call_on` Calculation:
   - Enhanced Task 3 prompt in `SessionRecorder.analyze_call()` (`mantra/utils.py`) to instruct relative date/time calculations (e.g., "call back in 10 minutes", "in 1 hour", "tomorrow at 3 PM") relative to current server time.
   - Added automatic Python regex fallback in `analyze_call()` that detects relative callback requests (e.g. `call me back in 10 minutes`) from call summary/transcript and calculates `next_call_on = current_time + timedelta(...)` automatically if the LLM output is missing.
