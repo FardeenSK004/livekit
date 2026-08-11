@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-11
+
+### Post-Call Stage Transition — Trust LLM Analysis
+- **bug:** Successful calls (e.g. call 266385 — demo booked, user said "yeah I'm good") were sent with `new_stage_id: null` and `call_status: "Incomplete"` because `finalize()` compared the LLM's returned stage to the initial stage, and when equal (LLM timeout/fallback → `current_stage_id`), forced `new_stage_id = None` + `Incomplete`.
+- **fix:** Added `llm_analysis_ran` flag in `finalize()`. When `True` (LLM `analyze_call` completed without exception), the LLM's `new_stage_id` is always trusted — even if it equals the initial stage. `Incomplete` is now only set when the LLM analysis itself failed (timeout/exception).
+- Files: `mantra/agent.py`
+
 ## 2026-08-10
 
 ### Post-Call Analysis Hardening — `next_call_on` & Stage Transition Injection

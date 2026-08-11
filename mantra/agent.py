@@ -1586,6 +1586,7 @@ Follow these specific instructions:
 
                 summary_text = None
                 new_stage_id = current_stage_id
+                llm_analysis_ran = False
                 derived_user_intent = None
                 client_custom_fields = call_payload.get("client_custom_fields", {})
                 if not isinstance(client_custom_fields, dict):
@@ -1629,6 +1630,7 @@ Follow these specific instructions:
                             )
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]
+                            llm_analysis_ran = True
                             derived_process_id = analysis.get("process_id")
                             derived_user_intent = analysis.get("user_intent")
                             if derived_process_id and not call_payload.get("process_id"):
@@ -1692,19 +1694,25 @@ Follow these specific instructions:
             initial_stage_id = _as_int(current_stage_id if current_stage_id is not None else call_payload.get("stage_id"))
             analysis_stage_id = _as_int(new_stage_id) if new_stage_id is not None else None
 
-            # Determine if a stage transition occurred or if no useful stage update happened
-            if analysis_stage_id is not None and initial_stage_id is not None and analysis_stage_id != initial_stage_id:
+            # Determine stage transition — LLM is the sole source of truth
+            if llm_analysis_ran and analysis_stage_id is not None:
+                # LLM successfully analyzed the call — trust its stage decision
+                payload_stage_id = initial_stage_id
+                payload_new_stage_id = analysis_stage_id
+                logger.info(f"[DIAG] finalize(): LLM analysis succeeded — stage_id={analysis_stage_id} (initial={initial_stage_id})")
+            elif analysis_stage_id is not None and initial_stage_id is not None and analysis_stage_id != initial_stage_id:
                 payload_stage_id = initial_stage_id
                 payload_new_stage_id = analysis_stage_id
             elif analysis_stage_id is not None and initial_stage_id is None:
                 payload_stage_id = None
                 payload_new_stage_id = analysis_stage_id
             else:
-                # No new stage updated / nothing useful done -> send empty data (None / JSON null) for new_stage_id and set call_status to Incomplete
+                # LLM failed to analyze — no reliable stage info
                 payload_stage_id = initial_stage_id
                 payload_new_stage_id = None
                 if call_status not in ["No Answer", "Busy", "Failed"]:
                     call_status = "Incomplete"
+                logger.info(f"[DIAG] finalize(): LLM analysis failed — Incomplete (analysis_stage={analysis_stage_id}, initial={initial_stage_id})")
 
             if direction == "inbound":
                 raw_caller_phone = call_state.get("caller_phone_number") or call_payload.get("client_phone_number") or call_payload.get("client_phone") or ""
@@ -1763,6 +1771,7 @@ Follow these specific instructions:
                             "process_id": effective_process_id,
                             "stage_id": payload_stage_id,
                             "new_stage_id": payload_new_stage_id,
+                            "user_intent": derived_user_intent if derived_user_intent in ["APPOINTMENT_BOOKED", "APPOINTMENT_CANCELLED", "APPOINTMENT_RESCHEDULED"] else None,
                             "metadata": call_payload.get("metadata", {}),
                             "client_custom_fields": client_custom_fields or {},
                             "call_custom_fields": call_payload.get("call_custom_fields", {}),
