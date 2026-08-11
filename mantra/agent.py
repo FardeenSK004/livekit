@@ -1038,6 +1038,7 @@ Follow these specific instructions:
         logger.info(f"[DIAG] Agent state change: {getattr(ev, 'old_state', 'None')} -> {ev.new_state}")
         if getattr(ev, "old_state", None) == "speaking" and ev.new_state != "speaking":
             call_state["last_activity"] = asyncio.get_event_loop().time()
+            call_state["initial_greeting_done"] = True
 
     @session.on("user_state_changed")
     def on_user_state(ev):
@@ -1046,6 +1047,7 @@ Follow these specific instructions:
             call_state["last_activity"] = asyncio.get_event_loop().time()
             call_state["prompted_inactivity"] = False
             call_state["user_has_spoken"] = True
+            call_state["initial_greeting_done"] = True
 
     async def inactivity_monitor():
         logger.info("Inactivity monitor started.")
@@ -1057,6 +1059,11 @@ Follow these specific instructions:
 
         while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
             await asyncio.sleep(1.0)
+            # Only monitor inactivity AFTER initial greeting has completed and conversation has begun
+            if not call_state.get("initial_greeting_done"):
+                call_state["last_activity"] = asyncio.get_event_loop().time()
+                continue
+
             now = asyncio.get_event_loop().time()
             agent_state = call_state.get("agent_state", "initializing")
             last_activity = call_state.get("last_activity", now)
@@ -1690,31 +1697,25 @@ Follow these specific instructions:
             initial_stage_id = _as_int(current_stage_id if current_stage_id is not None else call_payload.get("stage_id"))
             analysis_stage_id = _as_int(new_stage_id) if new_stage_id is not None else None
 
-            # Determine stage transition — LLM is the sole source of truth
-            if llm_analysis_ran and analysis_stage_id is not None:
-                payload_stage_id = initial_stage_id
-                if initial_stage_id is not None and analysis_stage_id != initial_stage_id:
-                    payload_new_stage_id = analysis_stage_id
-                    logger.info(f"[DIAG] finalize(): LLM stage transition succeeded — new_stage_id={analysis_stage_id} (initial={initial_stage_id})")
-                elif initial_stage_id is None:
-                    payload_new_stage_id = analysis_stage_id
-                    logger.info(f"[DIAG] finalize(): LLM analysis assigned new_stage_id={analysis_stage_id} (no initial stage)")
-                else:
-                    payload_new_stage_id = None
-                    logger.info(f"[DIAG] finalize(): LLM analysis ran — no stage transition (stage remained {initial_stage_id})")
-            elif analysis_stage_id is not None and initial_stage_id is not None and analysis_stage_id != initial_stage_id:
-                payload_stage_id = initial_stage_id
-                payload_new_stage_id = analysis_stage_id
-            elif analysis_stage_id is not None and initial_stage_id is None:
-                payload_stage_id = None
+            payload_stage_id = initial_stage_id
+            if analysis_stage_id is not None:
                 payload_new_stage_id = analysis_stage_id
             else:
-                # LLM failed to analyze — no reliable stage info
-                payload_stage_id = initial_stage_id
-                payload_new_stage_id = None
-                if call_status not in ["No Answer", "Busy", "Failed"]:
+                payload_new_stage_id = initial_stage_id
+
+            # Enforce stage-based call status rule:
+            # If payload_new_stage_id == initial_stage_id (not updated) -> Incomplete
+            # If payload_new_stage_id != initial_stage_id (updated) -> Completed
+            if call_status not in ["No Answer", "Busy", "Failed"]:
+                if initial_stage_id is not None and payload_new_stage_id != initial_stage_id:
+                    call_status = "Completed"
+                    logger.info(f"[DIAG] finalize(): Stage updated from {initial_stage_id} to {payload_new_stage_id} — call_status='Completed'")
+                elif initial_stage_id is None and payload_new_stage_id is not None:
+                    call_status = "Completed"
+                    logger.info(f"[DIAG] finalize(): New stage assigned ({payload_new_stage_id}) with no initial stage — call_status='Completed'")
+                else:
                     call_status = "Incomplete"
-                logger.info(f"[DIAG] finalize(): LLM analysis failed — Incomplete (analysis_stage={analysis_stage_id}, initial={initial_stage_id})")
+                    logger.info(f"[DIAG] finalize(): Stage not updated (new_stage_id={payload_new_stage_id}, initial={initial_stage_id}) — call_status='Incomplete'")
 
             if direction == "inbound":
                 raw_caller_phone = call_state.get("caller_phone_number") or call_payload.get("client_phone_number") or call_payload.get("client_phone") or ""

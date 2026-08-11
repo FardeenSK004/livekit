@@ -6,8 +6,11 @@
 - **bug:** `SessionRecorder.analyze_call()` in `mantra/utils.py` completely excluded `AVAILABLE CRM STAGES` (`stage_details`) from the LLM prompt whenever `process_stage_data` (KB process stage data) was present. Because of this, for outbound calls and calls with CRM stage lists (e.g. stages 227, 228, 229, 230, 273, 274), the post-call LLM was shown only KB process stage data and could not match the transcript to the valid campaign CRM stage IDs, defaulting `new_stage_id` to `current_stage_id` (no stage transition).
 - **fix:** Updated `SessionRecorder.analyze_call()` to always include `AVAILABLE CRM STAGES` (`stage_details`) in the prompt alongside `AVAILABLE PROCESSES` when present, and added explicit prompt instructions directing the LLM to select `new_stage_id` from `AVAILABLE CRM STAGES` based on the outcome (appointment confirmed, call back/follow up, not interested, treatment done, failed).
 - **fix:** Moved inbound KB process/stage ID extraction (`used_kb_process_ids` / `used_kb_stage_ids`) in `mantra/agent.py` to BEFORE `SessionRecorder.analyze_call()` executes so `current_stage_id` is properly populated for inbound calls prior to analysis.
-- **fix:** Added `_check_livekit_primary()` health check in `mantra/ui_server.py`: directly pings the primary `LIVEKIT_URL` control plane endpoint with a strict 2.0s timeout. If the primary LiveKit endpoint is unreachable or returning server errors (preventing silent regional failover retries during dialing), the health gate immediately fails (`HTTP 503`) and blocks call dispatch so calls are not placed at all.
-- Files: `mantra/ui_server.py`
+- **feat:** Updated stage resolution and `call_status` logic in `mantra/agent.py`: `payload_new_stage_id` is never `null` when an initial stage ID exists — if the stage is not updated, `payload_new_stage_id` sends the initial `stage_id`. `call_status` is `"Completed"` if `payload_new_stage_id != initial_stage_id` (stage updated), and `"Incomplete"` if `payload_new_stage_id == initial_stage_id` (stage stayed the same).
+- Files: `mantra/agent.py`
+
+
+
 
 
 

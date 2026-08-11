@@ -4,7 +4,7 @@
 > **Last Updated:** 2026-08-10  
 > **Status:** Active maintenance, trunk-based per-trunk call capacity gating, zombie room cleanup, DB enrichment
 
-- [x] **Primary LiveKit Health Gate & Call Blocking (2026-08-11):** Added `_check_livekit_primary()` to `_run_dependency_checks()` in `mantra/ui_server.py`. Performs a direct HTTP health ping against the primary `LIVEKIT_URL` control plane endpoint with a 2.0s timeout. If the primary LiveKit endpoint is unreachable or failing, the health gate immediately fails (`HTTP 503`) and blocks outbound dispatch, preventing calls from being placed when the primary LiveKit Cloud control plane is down. Files: `mantra/ui_server.py`.
+- [x] **Stage ID Fallback & Stage-Based `call_status` Rule (2026-08-11):** Updated `finalize()` in `mantra/agent.py`: `payload_new_stage_id` sends current `stage_id` when the stage is not updated (never sends `null` when initial `stage_id` exists). `call_status` is `"Completed"` if `payload_new_stage_id != initial_stage_id` (stage updated to a new stage ID), and `"Incomplete"` if `payload_new_stage_id == initial_stage_id` (stage stayed the same). Files: `mantra/agent.py`.
 
 - [x] **Inbound Call Post-Call `user_intent` Payload Field (2026-08-10):** Added `user_intent` field to post-call `CALL_DATA_INBOUND_UPDATE` webhook payload supporting `"APPOINTMENT_BOOKED"`, `"APPOINTMENT_CANCELLED"`, and `"APPOINTMENT_RESCHEDULED"`. LLM call analysis in `SessionRecorder.analyze_call()` (`mantra/utils.py`) evaluates conversation history against KB process/stage descriptions and sets `user_intent` accordingly (or `null` for general inquiry). Updated `finalize()` in `mantra/agent.py` to deliver the intent in the webhook payload.
 
