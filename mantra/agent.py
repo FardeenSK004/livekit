@@ -1567,7 +1567,23 @@ Follow these specific instructions:
                 if recorder and hasattr(recorder, "recording_duration_seconds"):
                     duration = int(recorder.recording_duration_seconds)
 
-                # 5. Run unified analysis (bounded by 15s timeout)
+                # 5. Run unified analysis (bounded by 70s timeout)
+                direction = call_payload.get("direction")
+                if direction == "inbound":
+                    try:
+                        if fnc_ctx and hasattr(fnc_ctx, "used_kb_process_ids"):
+                            used_pids = fnc_ctx.used_kb_process_ids
+                            if used_pids and not call_payload.get("process_id"):
+                                call_payload["process_id"] = used_pids[0]
+                                logger.info(f"Using KB-tracked process_id for inbound before analysis: {used_pids[0]}")
+                        if fnc_ctx and hasattr(fnc_ctx, "used_kb_stage_ids"):
+                            used_sids = fnc_ctx.used_kb_stage_ids
+                            if used_sids and not call_payload.get("stage_id"):
+                                call_payload["stage_id"] = used_sids[0]
+                                logger.info(f"Using KB-tracked stage_id for inbound before analysis: {used_sids[0]}")
+                    except Exception as e:
+                        logger.error(f"Failed to extract KB usage metadata before analysis: {e}")
+
                 current_stage_id = call_payload.get("stage_id")
                 stage_details = call_payload.get("stageDetails", [])
                 kb_process_stage_data = (
@@ -1664,30 +1680,10 @@ Follow these specific instructions:
 
             # 6. Build webhook payload — separate structures for inbound vs outbound
             resolved_call_id = call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")
-            direction = call_payload.get("direction")
 
-            kb_referred = False
+            kb_referred = bool(direction == "inbound" and (call_payload.get("process_id") or call_payload.get("stage_id")))
             if direction == "inbound":
-                try:
-                    if fnc_ctx and hasattr(fnc_ctx, "used_kb_process_ids"):
-                        used_pids = fnc_ctx.used_kb_process_ids
-                        if used_pids:
-                            call_payload["process_id"] = used_pids[0]
-                            kb_referred = True
-                            logger.info(f"Using KB-tracked process_id for inbound: {used_pids[0]}")
-                    if fnc_ctx and hasattr(fnc_ctx, "used_kb_stage_ids"):
-                        used_sids = fnc_ctx.used_kb_stage_ids
-                        if used_sids:
-                            call_payload["stage_id"] = used_sids[0]
-                            kb_referred = True
-                            logger.info(f"Using KB-tracked stage_id for inbound: {used_sids[0]}")
-                except Exception as e:
-                    logger.error(f"Failed to extract KB usage metadata: {e}")
-
-                if kb_referred:
-                    effective_process_id = _as_int(call_payload.get("process_id"))
-                else:
-                    effective_process_id = None
+                effective_process_id = _as_int(call_payload.get("process_id")) if kb_referred else None
             else:
                 effective_process_id = _as_int(call_payload.get("process_id") or derived_process_id)
 
@@ -1696,10 +1692,16 @@ Follow these specific instructions:
 
             # Determine stage transition — LLM is the sole source of truth
             if llm_analysis_ran and analysis_stage_id is not None:
-                # LLM successfully analyzed the call — trust its stage decision
                 payload_stage_id = initial_stage_id
-                payload_new_stage_id = analysis_stage_id
-                logger.info(f"[DIAG] finalize(): LLM analysis succeeded — stage_id={analysis_stage_id} (initial={initial_stage_id})")
+                if initial_stage_id is not None and analysis_stage_id != initial_stage_id:
+                    payload_new_stage_id = analysis_stage_id
+                    logger.info(f"[DIAG] finalize(): LLM stage transition succeeded — new_stage_id={analysis_stage_id} (initial={initial_stage_id})")
+                elif initial_stage_id is None:
+                    payload_new_stage_id = analysis_stage_id
+                    logger.info(f"[DIAG] finalize(): LLM analysis assigned new_stage_id={analysis_stage_id} (no initial stage)")
+                else:
+                    payload_new_stage_id = None
+                    logger.info(f"[DIAG] finalize(): LLM analysis ran — no stage transition (stage remained {initial_stage_id})")
             elif analysis_stage_id is not None and initial_stage_id is not None and analysis_stage_id != initial_stage_id:
                 payload_stage_id = initial_stage_id
                 payload_new_stage_id = analysis_stage_id
@@ -1735,7 +1737,8 @@ Follow these specific instructions:
                         "call_transcript": transcript_data or "",
                         "next_call_on": normalize_datetime(next_call_on) or "",
                         "called_on": call_state.get("call_initiated_at") or call_state.get("agent_joined_at") or "",
-                        "user_intent": derived_user_intent if derived_user_intent in ["APPOINTMENT_BOOKED", "APPOINTMENT_CANCELLED", "APPOINTMENT_RESCHEDULED"] else None,
+                        "user_intent": derived_user_intent,
+                        "call_intent": derived_user_intent,
                         "meta_data": {
                             "document_id": str(call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")),
                             "provider": (call_payload.get("metadata", {}) or {}).get("provider", ""),
@@ -1771,7 +1774,8 @@ Follow these specific instructions:
                             "process_id": effective_process_id,
                             "stage_id": payload_stage_id,
                             "new_stage_id": payload_new_stage_id,
-                            "user_intent": derived_user_intent if derived_user_intent in ["APPOINTMENT_BOOKED", "APPOINTMENT_CANCELLED", "APPOINTMENT_RESCHEDULED"] else None,
+                            "user_intent": derived_user_intent,
+                            "call_intent": derived_user_intent,
                             "metadata": call_payload.get("metadata", {}),
                             "client_custom_fields": client_custom_fields or {},
                             "call_custom_fields": call_payload.get("call_custom_fields", {}),

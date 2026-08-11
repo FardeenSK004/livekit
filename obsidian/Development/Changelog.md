@@ -2,10 +2,17 @@
 
 ## 2026-08-11
 
-### Post-Call Stage Transition — Trust LLM Analysis
-- **bug:** Successful calls (e.g. call 266385 — demo booked, user said "yeah I'm good") were sent with `new_stage_id: null` and `call_status: "Incomplete"` because `finalize()` compared the LLM's returned stage to the initial stage, and when equal (LLM timeout/fallback → `current_stage_id`), forced `new_stage_id = None` + `Incomplete`.
-- **fix:** Added `llm_analysis_ran` flag in `finalize()`. When `True` (LLM `analyze_call` completed without exception), the LLM's `new_stage_id` is always trusted — even if it equals the initial stage. `Incomplete` is now only set when the LLM analysis itself failed (timeout/exception).
-- Files: `mantra/agent.py`
+### Post-Call Stage Transition & CRM Stage Details Fix
+- **bug:** `SessionRecorder.analyze_call()` in `mantra/utils.py` completely excluded `AVAILABLE CRM STAGES` (`stage_details`) from the LLM prompt whenever `process_stage_data` (KB process stage data) was present. Because of this, for outbound calls and calls with CRM stage lists (e.g. stages 227, 228, 229, 230, 273, 274), the post-call LLM was shown only KB process stage data and could not match the transcript to the valid campaign CRM stage IDs, defaulting `new_stage_id` to `current_stage_id` (no stage transition).
+- **fix:** Updated `SessionRecorder.analyze_call()` to always include `AVAILABLE CRM STAGES` (`stage_details`) in the prompt alongside `AVAILABLE PROCESSES` when present, and added explicit prompt instructions directing the LLM to select `new_stage_id` from `AVAILABLE CRM STAGES` based on the outcome (appointment confirmed, call back/follow up, not interested, treatment done, failed).
+- **fix:** Moved inbound KB process/stage ID extraction (`used_kb_process_ids` / `used_kb_stage_ids`) in `mantra/agent.py` to BEFORE `SessionRecorder.analyze_call()` executes so `current_stage_id` is properly populated for inbound calls prior to analysis.
+- **fix:** Updated `user_intent` / `call_intent` prompt and normalization logic in `SessionRecorder.analyze_call()` (`mantra/utils.py`): any positive conversation outcome (such as demo booked, demo requested, visit agreed, or positive intent) is explicitly mapped and normalized to `"APPOINTMENT_BOOKED"`. Removed `CALLBACK_REQUESTED` and `NOT_INTERESTED` intents entirely per user requirement. Valid intents are now strictly `"APPOINTMENT_BOOKED"`, `"APPOINTMENT_CANCELLED"`, `"APPOINTMENT_RESCHEDULED"`, or `null`.
+- Files: `mantra/utils.py`, `mantra/agent.py`
+
+
+
+
+
 
 ## 2026-08-10
 

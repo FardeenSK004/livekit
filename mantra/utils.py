@@ -598,21 +598,16 @@ class SessionRecorder:
         current_time = datetime.datetime.now()
         current_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
 
-        process_block = ""
+        process_blocks = []
+        if stage_details:
+            process_blocks.append(
+                f"--- AVAILABLE CRM STAGES ---\n{json.dumps(stage_details, indent=2)}"
+            )
         if process_stage_data:
-            process_block = f"""
---- AVAILABLE PROCESSES (with stages) ---
-{json.dumps(process_stage_data, indent=2)}
-
-The call conversation relates to one of these processes. Analyze the transcript and determine:
-  - Which process (by `id`) the call is about. Pick the process whose name/description best matches the topic discussed.
-  - Which stage (by `id`) within that process best reflects the outcome of the call.
-"""
-        else:
-            process_block = f"""
---- AVAILABLE CRM STAGES ---
-{json.dumps(stage_details, indent=2)}
-"""
+            process_blocks.append(
+                f"--- AVAILABLE PROCESSES (with stages) ---\n{json.dumps(process_stage_data, indent=2)}"
+            )
+        process_block = "\n\n".join(process_blocks)
 
         prompt = f"""
 You are an expert analyst for a care support and CRM system. Analyze the phone call transcript and metadata below.
@@ -622,7 +617,9 @@ Current Date and Time (Server Local Time): {current_time_str}
 Call Duration: {duration} seconds
 Current Stage ID: {current_stage_id}
 Client Country Code: {client_country_code}
+
 {process_block}
+
 --- TRANSCRIPT ---
 {transcript_text}
 
@@ -633,20 +630,28 @@ Client Country Code: {client_country_code}
    - The conclusion (e.g. appointment booked, demo requested, callback scheduled, disconnected, not interested).
    - Any other important patient details based on the transcript.
 2. Determine the correct process_id and next stage_id.
-   - Carefully inspect every stage's `stage_id` and `description` field in `AVAILABLE CRM STAGES` (or `AVAILABLE PROCESSES`).
-   - Match the call outcome directly to the stage `description`. For example, if the caller expressed positive interest or agreed to a live demo/booking, select the stage whose description mentions positive intent or demo booking (e.g. "User shared positive intent and said yes to book demo.").
-   - If the caller booked, cancelled, or rescheduled an appointment, select the stage whose description explicitly corresponds to that specific outcome.
-   - If none of the stages match or the call did not change the state, default to the current stage ID: {current_stage_id}.
+   - If `AVAILABLE CRM STAGES` is provided:
+     * You MUST select `new_stage_id` from the `stage_id` values listed in `AVAILABLE CRM STAGES`.
+     * Carefully compare every stage's `description` in `AVAILABLE CRM STAGES` against what happened in the call transcript:
+       - If the patient confirmed an appointment date/time or agreed/confirmed to visit a branch (e.g. Paschim Vihar, Noida, Gurugram, etc.), select the stage for appointment confirmation / visit confirmed (e.g. stage_id where description mentions confirmed appointment/visit).
+       - If the patient requested a callback or to follow up later (e.g. "call me back later", "call tomorrow", "busy right now"), select the stage for follow-up / call later.
+       - If the patient declined, stated they are not interested in eye checkup/visit, or pricing/location didn't match, select the stage for not interested / declined.
+       - If the patient confirmed treatment/visit is already done, select the stage for treatment/visit completed.
+       - If the patient was not responding or call failed, select the stage for not answering / failed.
+     * If no stage transition criteria are met or the call was purely informational with no state change, default `new_stage_id` to current stage ID: {current_stage_id}.
+   - If `AVAILABLE CRM STAGES` is not provided but `AVAILABLE PROCESSES` is provided:
+     * Select `process_id` and `new_stage_id` from `AVAILABLE PROCESSES` based on the matching process and stage descriptions.
+   - If neither is provided or no stage transition occurred, set `new_stage_id` to {current_stage_id}.
 3. Extract additional metadata:
    - `next_call_on`: If a follow-up or callback is requested or scheduled (e.g. "call me back in 10 minutes", "call back in 1 hour", "call tomorrow at 3 PM"), calculate the EXACT future timestamp by adding that offset/duration to Current Date and Time ({current_time_str}) and return it in "YYYY-MM-DD HH:MM:SS" format. If the stage description specifies adding 24 hours, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
    - `appointment_date_time`: If the patient booked/confirmed/rescheduled an appointment, extract the date/time and convert to the server's local timezone (e.g., "2026-06-05 11:30:00"). Otherwise, use null.
    - `doctor`: Extract any mentioned doctor's name. Otherwise, use null.
    - `hospital_location`: Extract the preferred hospital location/center name. Otherwise, use null.
-   - `user_intent`: Refer to the KB process and stage descriptions in AVAILABLE PROCESSES. Determine the user intent regarding appointments:
-     - IF AND ONLY IF an appointment was successfully booked during the call AND the outcome stage corresponds to appointment booking/confirmation, set `user_intent` to "APPOINTMENT_BOOKED".
-     - IF AND ONLY IF an appointment was cancelled during the call AND the outcome stage corresponds to appointment cancellation, set `user_intent` to "APPOINTMENT_CANCELLED".
-     - IF AND ONLY IF an appointment was rescheduled to a new date/time during the call AND the outcome stage corresponds to appointment rescheduling, set `user_intent` to "APPOINTMENT_RESCHEDULED".
-     - Otherwise, set `user_intent` to null.
+   - `user_intent`: Determine the primary caller intent from the call transcript and outcome:
+     - "APPOINTMENT_BOOKED": If the conversation outcome is positive — e.g. the user agreed to/booked an appointment, checkup, visit, or live demo (such as demo booked or requested).
+     - "APPOINTMENT_CANCELLED": If the user explicitly cancelled an appointment/booking.
+     - "APPOINTMENT_RESCHEDULED": If the user rescheduled an appointment/booking to a new date/time.
+     - Otherwise, null.
    - `sentiment_score`: Rate the user's sentiment from 0.0 (very negative/angry) to 1.0 (very positive/happy), with 0.5 as neutral.
 
 You MUST return your response as a valid JSON object with the following schema:
@@ -712,8 +717,19 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             doctor = res_dict.get("doctor")
             hospital_location = res_dict.get("hospital_location")
             sentiment_score = res_dict.get("sentiment_score", 0.5)
-            user_intent_raw = res_dict.get("user_intent")
-            user_intent = user_intent_raw.strip().upper() if user_intent_raw and str(user_intent_raw).strip().upper() in ["APPOINTMENT_BOOKED", "APPOINTMENT_CANCELLED", "APPOINTMENT_RESCHEDULED"] else None
+            user_intent_raw = res_dict.get("user_intent") or res_dict.get("call_intent")
+            if user_intent_raw:
+                ui_str = str(user_intent_raw).strip().upper()
+                if ui_str in ["APPOINTMENT_BOOKED", "DEMO_BOOKED", "DEMO_REQUESTED", "POSITIVE_INTENT"]:
+                    user_intent = "APPOINTMENT_BOOKED"
+                elif ui_str in ["APPOINTMENT_CANCELLED", "CANCELLED"]:
+                    user_intent = "APPOINTMENT_CANCELLED"
+                elif ui_str in ["APPOINTMENT_RESCHEDULED", "RESCHEDULED"]:
+                    user_intent = "APPOINTMENT_RESCHEDULED"
+                else:
+                    user_intent = None
+            else:
+                user_intent = None
 
             if process_id is not None:
                 try:
