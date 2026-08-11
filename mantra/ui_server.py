@@ -613,7 +613,23 @@ async def _run_dependency_checks() -> tuple[bool, dict[str, bool | str]]:
         except Exception as e:
             checks["redis"] = str(e)
 
+    async def _check_livekit_primary():
+        lk_url = os.getenv("LIVEKIT_URL", "")
+        if not lk_url:
+            checks["livekit_primary"] = "LIVEKIT_URL not set"
+            return
+        http_url = lk_url.replace("wss://", "https://").replace("ws://", "http://").rstrip("/")
+        try:
+            r = await http_client.get(http_url, timeout=2.0)
+            if r.status_code < 500:
+                checks["livekit_primary"] = True
+            else:
+                checks["livekit_primary"] = f"Primary LiveKit endpoint HTTP {r.status_code}"
+        except Exception as e:
+            checks["livekit_primary"] = f"Primary LiveKit endpoint unreachable: {e}"
+
     await asyncio.gather(
+        _check_livekit_primary(),
         _check("livekit", lk_client.room.list_rooms(api.ListRoomsRequest()), timeout=5.0),
         _check_redis(),
         _check_postgres(),
