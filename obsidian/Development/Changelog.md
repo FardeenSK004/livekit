@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-08-12
+
+### Outbound SIP Dispatch Latency Optimization
+- **perf:** Fixed 4-second API response latency on `/api/v1/sip/plivo/create-and-call` by setting `wait_until_answered=False` on `CreateSIPParticipantRequest`.
+- **behavior:** Previously, the HTTP POST request blocked for ~3.5 to 5 seconds waiting for the recipient's phone to physically ring and be picked up over the cellular network. With `wait_until_answered=False`, the API dispatches the SIP call asynchronously and returns `200 OK` (`status: success`) immediately in **<100ms**.
+- Files: `mantra/ui_server.py`
+
+### Smart In-Progress Call Deduplication Rejection System
+- **feat:** Implemented fail-safe Smart In-Progress Call Deduplication (`lock:call:{call_id}`) across `mantra/ui_server.py` and `mantra/agent.py`:
+  - `handle_outbound_call_webhook` (`/api/v1/webhooks/telephony`) & `create_and_call_plivo` (`/api/v1/sip/plivo/create-and-call`) acquire a 30-second TTL lock (`ex=30`).
+  - Sub-second duplicate webhooks arriving while a call is currently in-progress are rejected with `{"status": "ignored", "message": "Duplicate request for call_id ... already in progress"}`.
+  - When the call completes (or SIP fails), `finalize()` in `agent.py` and `_deliver_call_failure()` in `ui_server.py` delete `lock:call:{call_id}` immediately.
+  - Updated Operations Dashboard UI (`static/dashboard.html`, `static/dashboard.js`): added styled status badges and filter dropdown options for `Ignored`, `Incomplete`, and `Busy` statuses.
+- Files: `mantra/ui_server.py`, `mantra/agent.py`, `static/dashboard.html`, `static/dashboard.js`
+
+### LiveKit TurnDetector Tuning & Inactivity Monitor Hardening
+- **fix:** TurnDetector & Endpointing Misconfiguration (`mantra/agent.py`):
+  - Previously, `endpointing` was set to `min_delay: 0.1` and `max_delay: 0.35` (100ms–350ms), overriding LiveKit turn detector recommendations with an ultra-short window that forcefully cut off users mid-sentence whenever they took a brief breath or pause.
+  - Reconfigured `endpointing` to recommended LiveKit defaults for `inference.TurnDetector()` (`min_delay: 0.3`, `max_delay: 2.5`, `mode: "dynamic"`). The turn detector now accurately evaluates end-of-turn acoustic/semantic cues without premature interruptions.
+- **fix:** VAD Sensitivity Tuning (`mantra/agent.py`):
+  - Raised Silero VAD `min_speech_duration` from `0.08`s (80ms) to `0.15`s (150ms) and `min_silence_duration` to `0.35`s (350ms) to eliminate false VAD triggers caused by telephony line clicks, pops, or breathing.
+  - Switched `interruption` mode to `"adaptive"` (dropped VAD-mode `resume_false_interruption` / `false_interruption_timeout` overrides) to prevent VAD line-noise false-interruption loops from stuttering agent audio output.
+- **fix:** Premature Initial Greeting Inactivity Prompt & Disconnect (`mantra/agent.py`):
+  - Fixed bug where `on_user_state` set `initial_greeting_done = True` on early SIP connect line noise, starting the inactivity timer while the agent was still preparing/playing its greeting.
+  - Added `greeting_started` flag set when the agent first enters the `speaking` state; `initial_greeting_done` is now set strictly AFTER the agent finishes speaking its opening greeting (guarded by `greeting_started`), and `on_user_state` no longer sets it directly.
+  - Increased gentle inactivity nudge threshold from 5.0s → 15.0s, and total silence disconnect threshold from 10.0s → 30.0s. Prevents agent from prematurely saying "hii are you still on the line" at the start of a call or during natural pauses.
+- **fix:** Start-of-Call Latency (`mantra/agent.py`):
+  - Removed redundant artificial `asyncio.sleep(0.5)` and `asyncio.sleep(0.3)` delays prior to initial greeting generation, and reduced the remote-participant join sleep from 0.5s to 0.05s — unified to a single 0.05s WebRTC track-binding delay, cutting ~0.8s–1.0s of dead air when participants join.
+- Files: `mantra/agent.py`
+
 ## 2026-08-11
 
 ### Post-Call Stage Transition & CRM Stage Details Fix

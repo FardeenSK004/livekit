@@ -47,7 +47,7 @@ SIP failures are classified in `trigger_sip` (`ui_server.py`):
 - `486`/busy/decline → `"Busy"`
 - Other → `"Incomplete"`
 
-The webhook awaits the SIP call and returns an empty `503` when it fails (matching the capacity gate); the room is deleted, the dedup lock is released for retry, and the classification is written to Redis `sip_error_status:{call_id}` (TTL: 300s).
+The webhook awaits the SIP call and returns an empty `503` when it fails (matching the capacity gate); the room is deleted and the classification is written to Redis `sip_error_status:{call_id}` (TTL: 300s).
 
 ## Inbound Setup
 

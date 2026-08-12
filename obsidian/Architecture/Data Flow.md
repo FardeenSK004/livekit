@@ -74,6 +74,5 @@ Webhook → Redis sorted set (queue:pending) → Dispatcher (0.5s poll)
 | `calls:active` | Hash | `call_id → room_name` mapping |
 | `calls:status:{call_id}` | String | Current call status |
 | `sip_error_status:{call_id}` | String | SIP error from UI server (TTL 300s) |
-| `lock:call:{call_id}` | String | Dedup lock for webhook (TTL 600s) |
 | `trunk:provider:{trunk_id}` | String | Cached trunk→provider mapping (TTL 30d) |
 | `{provider}:sip_trunk:{number}` | String | Provider SIP trunk mapping (TTL 30d) |

@@ -36,7 +36,7 @@ Launches both agent + UI server, prints API endpoints.
 |---------|---------|------------|
 | LiveKit Cloud | WebRTC + SIP trunking | API key/secret |
 | PostgreSQL | Call log persistence + KB storage + org configs | `lkdb` docker-compose (5433 local) |
-| Redis | Queue + state + capacity + dedup locks | Local (6379) |
+| Redis | Queue + state + capacity + SIP error status | Local (6379) |
 | AWS S3 | Recording storage | Bucket + credentials |
 | SMTP (Gmail) | Crash email alerts | Gmail app password |
 | Deepgram API | Speech-to-text | API key |

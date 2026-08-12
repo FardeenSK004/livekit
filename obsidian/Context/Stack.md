@@ -18,7 +18,7 @@
 
 ## Infrastructure
 - **PostgreSQL** — Call log storage + KB (Full-Text Search via `tsvector`) + org configs
-- **Redis >=8.0** — Queue, state, capacity, dedup locks
+- **Redis >=8.0** — Queue, state, capacity, SIP error status
 - **AWS S3** — Recording storage + KB file storage
 - **LiveKit Cloud** — WebRTC + SIP
 

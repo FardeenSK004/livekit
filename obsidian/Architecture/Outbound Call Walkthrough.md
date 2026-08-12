@@ -27,22 +27,11 @@ An external system sends a `POST /api/v1/webhooks/telephony` with this payload s
 }
 ```
 
-**Key fields:** `call_id` (dedup key), `client_phone` (E.164 dial target), `trunk_id` (LiveKit SIP outbound trunk), `prompt` (LLM system prompt override), `model`/`voice` (LLM/TTS selection).
+**Key fields:** `call_id`, `client_phone` (E.164 dial target), `trunk_id` (LiveKit SIP outbound trunk), `prompt` (LLM system prompt override), `model`/`voice` (LLM/TTS selection).
 
 ---
 
 ## Phase 1: Webhook Handler (`ui_server.py:1934`)
-
-### 1a. Dedup Lock
-
-```python
-# Redis SET NX EX 600 prevents concurrent dispatch of same call_id
-lock_acquired = await redis_client.set(f"lock:call:{call_id}", "1", nx=True, ex=600)
-if not lock_acquired:
-    return JSONResponse({"status": "ignored"})
-```
-
-If a second identical payload arrives within 10 minutes, it is silently ignored.
 
 ### 1b. Phone & Trunk Resolution
 
@@ -392,7 +381,6 @@ Also removes the Redis `calls:active` entry (handled by dispatcher periodic zomb
 External        UI Server       LiveKit Cloud    Agent Worker    SIP Trunk      Redis        S3       MantraAssist
   |                 |               |               |              |             |         |            |
   |--POST /webhook-->|               |               |              |             |         |            |
-  |                 |--SET NX(call)------------------------------->|   dedup    |         |            |
   |                 |--dispatch----->|               |              |             |         |            |
   |                 |--create_sip_participant------->|              |             |         |            |
   |<---HTTP 200------|               |               |              |             |         |            |
@@ -417,7 +405,7 @@ External        UI Server       LiveKit Cloud    Agent Worker    SIP Trunk      
 
 | Property                | Mechanism                                                                |
 | ----------------------- | ------------------------------------------------------------------------ |
-| **Dedup**               | Redis `SET NX EX 600` on call_id                                         |
+| **Dedup**               | None — duplicate `call_id` requests processed immediately (no Redis lock) |
 | **Capacity**            | Dispatcher checks `calls:active` hash length against env limits          |
 | **No-answer handling**  | 60s wait in agent + SIP failure stored to Redis -> status=No Answer/Busy |
 | **Recording**           | In-memory PCM -> silence trim -> 128k MP3 -> S3                          |
@@ -441,4 +429,4 @@ External        UI Server       LiveKit Cloud    Agent Worker    SIP Trunk      
 | Agent crash mid-call    | Crash email sent, `finally` block runs                      | Post-call still executes                |
 | S3 upload failure       | `recording_url`=None in webhook                             | Call data still sent to backend         |
 | Backend webhook failure | 3 retries w/ backoff, logged                                | Data saved to local PostgreSQL          |
-| Redis unavailable       | Skip Redis operations, proceed without dedup/zombie cleanup | Degraded but functional                 |
+| Redis unavailable       | Skip Redis operations (queue, capacity, SIP error status) | Degraded but functional                 |

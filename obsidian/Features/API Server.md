@@ -46,11 +46,11 @@ End-to-end SIP inbound setup: `/api/v1/sip/inbound/setup` handles trunk + dispat
 ## Webhook Flow
 
 ```python
-webhook_handler() → dedup lock (Redis) → create_dispatch() + await trigger_sip()
+webhook_handler() → create_dispatch() + await trigger_sip()
                                               ├── SIP participant creation
                                               ├── On success: return 200 with room + token
                                               └── On failure: classify error (408→NoAnswer, 486→Busy),
-                                                  delete room, release lock, return 503
+                                                  delete room, return 503
 ```
 
 ## Capacity Gating

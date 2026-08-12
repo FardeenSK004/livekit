@@ -21,8 +21,8 @@ No automated test suite exists. All testing is manual.
 - [ ] Valid payload: Verify agent dispatch + SIP call initiation
 - [ ] Missing phone: Verify appropriate error response
 - [ ] Invalid trunk: Verify error handling
-- [ ] SIP failure: Verify 503 response and lock release
-- [ ] Duplicate webhook: Verify dedup lock rejection (200 + ignored)
+- [ ] SIP failure: Verify 503 response and room cleanup
+- [ ] Duplicate webhook: Verify repeated `call_id` is processed immediately (no dedup lock rejection)
 - [ ] Per-provider capacity: Verify 503 when Plivo/Zadarma/VoiceLink/Twilio at limit
 - [ ] Global capacity: Verify 503 when total calls = MAX_CONCURRENCY
 

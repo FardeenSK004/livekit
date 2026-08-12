@@ -2639,6 +2639,7 @@ async def handle_outbound_call_webhook(request: Request):
         except Exception:
             pass
 
+        # Smart Deduplication Lock: Catch sub-second duplicate requests if call is currently in-progress
         is_retry = bool(
             payload.get("is_retry")
             or payload.get("retry")
@@ -2651,14 +2652,16 @@ async def handle_outbound_call_webhook(request: Request):
             except Exception:
                 pass
 
-        lock_acquired = await redis_client.set(f"lock:call:{call_id}", "1", nx=True, ex=600)
+        lock_acquired = await redis_client.set(f"lock:call:{call_id}", "1", nx=True, ex=30)
         if not lock_acquired:
-            logger.warning(f"Duplicate telephony webhook hit ignored for call_id: {call_id}")
+            logger.warning(f"Duplicate telephony webhook hit ignored for call_id: {call_id} (call in-progress)")
             return JSONResponse({
                 "status": "ignored",
-                "message": f"Duplicate request for call_id {call_id} already processing",
-                "room": room_name
+                "message": f"Duplicate request for call_id {call_id} already in progress",
+                "room": f"call_{call_id}"
             }, status_code=200)
+
+
     # Construct phone number in E.164 format
     country_code = payload.get("client_country_code", "").strip("+")
     client_phone = payload.get("client_phone", "").strip()
@@ -3292,17 +3295,19 @@ async def create_and_call_plivo(request: Request):
         # 3. Trigger Agent Dispatch — use direct client (no proxy needed for LiveKit Cloud)
         call_id = payload.get("call_id") or payload.get("voice_id") or int(time.time())
         room_name = f"call_{trunk_id}_{call_id}"
-        
-        # Check Redis deduplication lock to prevent concurrent duplicate calls for the same call_id
+
+        # Smart Deduplication Lock: Prevent sub-second duplicate calls for the same call_id
         if redis_client:
-            lock_acquired = await redis_client.set(f"lock:call:{call_id}", "1", nx=True, ex=600)
+            lock_acquired = await redis_client.set(f"lock:call:{call_id}", "1", nx=True, ex=30)
             if not lock_acquired:
-                logger.warning(f"Duplicate Plivo call request ignored for call_id: {call_id}")
+                logger.warning(f"Duplicate Plivo call request ignored for call_id: {call_id} (call in-progress)")
                 return JSONResponse({
                     "status": "ignored",
-                    "message": f"Duplicate request for call_id {call_id} already processing",
+                    "message": f"Duplicate request for call_id {call_id} already in progress",
                     "room": room_name
                 }, status_code=200)
+        
+
 
         logger.info(f"Dispatching agent to room {room_name}")
         await lk_client.agent_dispatch.create_dispatch(

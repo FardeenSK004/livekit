@@ -120,7 +120,6 @@ Default port mapping: `5433` (local `lkdb` docker-compose) / `5432` (container i
 | `queue:pending` | Sorted Set | Call queue (score = priority) | — |
 | `calls:active` | Hash | `call_id → room_name` | — |
 | `calls:status:{call_id}` | String | Per-call status | — |
-| `lock:call:{call_id}` | String | Dedup lock for webhooks | 600s |
 | `sip_error_status:{call_id}` | String | SIP failure classification (No Answer / Busy / Incomplete) | 300s |
 | `trunk:provider:{trunk_id}` | String | Cached trunk→provider mapping | 30d |
 | `{provider}:sip_trunk:{number}` | String | Provider SIP trunk mapping | 30d |

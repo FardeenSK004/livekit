@@ -291,7 +291,9 @@
         }
 
         .status-in_progress, .status-completed { background: var(--success-subtle); color: var(--success); }
-        .status-dispatching, .status-pending { background: var(--warning-subtle); color: var(--warning); }
+        .status-incomplete { background: rgba(240, 178, 50, 0.15); color: #f0b232; }
+        .status-busy, .status-dispatching, .status-pending { background: var(--warning-subtle); color: var(--warning); }
+        .status-ignored { background: rgba(148, 155, 164, 0.15); color: #949ba4; }
         .status-failed, .status-error { background: var(--danger-subtle); color: var(--danger); }
         .status-no_answer, .status-unknown { background: var(--accent-subtle); color: var(--accent); }
 
@@ -304,7 +306,9 @@
         }
 
         .status-dot-sm.completed, .status-dot-sm.in_progress { background: var(--success); }
+        .status-dot-sm.incomplete { background: #f0b232; }
         .status-dot-sm.busy, .status-dot-sm.dispatching { background: var(--warning); }
+        .status-dot-sm.ignored { background: #949ba4; }
         .status-dot-sm.error, .status-dot-sm.failed { background: var(--danger); }
         .status-dot-sm.no_answer, .status-dot-sm.unknown { background: var(--text-tertiary); }
 
@@ -685,6 +689,7 @@
                             <option value="No Answer">No Answer</option>
                             <option value="Error">Error</option>
                             <option value="Incomplete">Incomplete</option>
+                            <option value="Ignored">Ignored</option>
                         </select>
                         <button id="btn-refresh-history" class="btn-logout" style="padding:6px 10px;">🔄 Sync DB</button>
                     </div>

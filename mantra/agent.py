@@ -971,13 +971,11 @@ Follow these specific instructions:
             turn_detection=inference.TurnDetector(),
             endpointing={
                 "mode": "dynamic",
-                "min_delay": 0.1,
-                "max_delay": 0.35,
+                "min_delay": 0.3,
+                "max_delay": 2.5,
             },
             interruption={
-                "mode": "vad",
-                "resume_false_interruption": True,
-                "false_interruption_timeout": 0.5,
+                "mode": "adaptive",
                 "min_words": 1,
             },
             preemptive_generation={
@@ -985,8 +983,8 @@ Follow these specific instructions:
             },
         ),
         vad=silero.VAD.load(
-            min_speech_duration=0.08,
-            min_silence_duration=0.25,
+            min_speech_duration=0.15,
+            min_silence_duration=0.35,
         ),
         # Multilingual STT so English stays English and Hindi/Hinglish still work
         stt=deepgram.STT(
@@ -1036,9 +1034,12 @@ Follow these specific instructions:
     def on_agent_state(ev):
         call_state["agent_state"] = ev.new_state
         logger.info(f"[DIAG] Agent state change: {getattr(ev, 'old_state', 'None')} -> {ev.new_state}")
-        if getattr(ev, "old_state", None) == "speaking" and ev.new_state != "speaking":
+        if ev.new_state == "speaking":
+            call_state["greeting_started"] = True
+        elif getattr(ev, "old_state", None) == "speaking" and ev.new_state != "speaking":
             call_state["last_activity"] = asyncio.get_event_loop().time()
-            call_state["initial_greeting_done"] = True
+            if call_state.get("greeting_started"):
+                call_state["initial_greeting_done"] = True
 
     @session.on("user_state_changed")
     def on_user_state(ev):
@@ -1047,7 +1048,6 @@ Follow these specific instructions:
             call_state["last_activity"] = asyncio.get_event_loop().time()
             call_state["prompted_inactivity"] = False
             call_state["user_has_spoken"] = True
-            call_state["initial_greeting_done"] = True
 
     async def inactivity_monitor():
         logger.info("Inactivity monitor started.")
@@ -1059,7 +1059,7 @@ Follow these specific instructions:
 
         while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
             await asyncio.sleep(1.0)
-            # Only monitor inactivity AFTER initial greeting has completed and conversation has begun
+            # Only monitor inactivity AFTER initial greeting has completed speaking
             if not call_state.get("initial_greeting_done"):
                 call_state["last_activity"] = asyncio.get_event_loop().time()
                 continue
@@ -1071,8 +1071,8 @@ Follow these specific instructions:
             time_since_activity = now - last_activity
 
             if agent_state in ["listening", "idle"]:
-                if time_since_activity > 10.0:
-                    # logger.warning(f"{Fore.YELLOW}No response for 10s. Destroying room.{Style.RESET_ALL}")
+                if time_since_activity > 30.0:
+                    logger.warning("[DIAG] No user response for 30s. Disconnecting room due to inactivity.")
                     call_state["timeline"].append(
                         {
                             "event": "Inactivity Timeout Disconnect",
@@ -1081,14 +1081,14 @@ Follow these specific instructions:
                     )
                     create_bg_task(_force_disconnect_room(ctx))
                     break
-                elif time_since_activity > 5.0 and not call_state.get(
+                elif time_since_activity > 15.0 and not call_state.get(
                     "prompted_inactivity", False
                 ):
-                    logger.info("No response for 5s. Prompting user...")
+                    logger.info("No response for 15s. Prompting user...")
                     call_state["prompted_inactivity"] = True
                     try:
                         session.generate_reply(
-                            user_input="[System: The user has been silent. Briefly ask if they are still there (e.g. ''Hello, are you still on the line?' or 'Hello?'). Keep it extremely short.]"
+                            user_input="[System: The user has been silent for a while. Politely ask if they are still there (e.g. 'Are you still there?' or 'Let me know if you need help.'). Keep it extremely short.]"
                         )
                     except RuntimeError as e:
                         logger.warning(
@@ -1329,7 +1329,7 @@ Follow these specific instructions:
             call_state["human_joined_at"] = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             call_state["timeline"].append({"event": "Remote Participant Joined", "timestamp": datetime.datetime.utcnow().isoformat() + "Z"})
             await _telemetry("Customer joined the call")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.05)
 
         # ── Answering Machine Detection (outbound only - async background execution) ──
         if AMD_ENABLED and not is_inbound and not ctx.room.name.startswith("test_"):
@@ -1364,11 +1364,8 @@ Follow these specific instructions:
 
             create_bg_task(_run_amd_background())
 
-        # Give tiny 0.2s delay for WebRTC track binding before requesting initial greeting
-        if is_inbound:
-            await asyncio.sleep(0.3)
-        else:
-            await asyncio.sleep(0.2)
+        # Give tiny 0.05s delay for WebRTC track binding before requesting initial greeting
+        await asyncio.sleep(0.05)
 
         logger.info(f"[DIAG] Generating explicit initial greeting for {client_name} (inbound={is_inbound})...")
         try:
@@ -1852,6 +1849,18 @@ Follow these specific instructions:
                     pass
 
             await _telemetry(f"call_complete — status={call_status}, duration={duration}s")
+
+            # Call has ended — release call lock in Redis so future retry attempts for call_id are allowed
+            try:
+                redis_url = os.getenv("REDIS_URL")
+                if redis_url and c_id:
+                    import redis.asyncio as redis
+                    r_client = redis.from_url(redis_url, decode_responses=True)
+                    await r_client.delete(f"lock:call:{c_id}")
+                    await r_client.aclose()
+                    logger.info(f"[DIAG] finalize(): Cleared lock:call:{c_id}")
+            except Exception as lock_err:
+                logger.warning(f"[DIAG] finalize(): Failed to clear call lock: {lock_err}")
 
             logger.info(
                 f"[DIAG] ======== POST-CALL COMPLETE ========\n"
