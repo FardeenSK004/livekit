@@ -2,22 +2,25 @@
 
 ## 2026-08-13
 
-### Turn-Taking & STT Endpointing Latency Optimization
-- **perf:** Deepgram STT & LiveKit `TurnDetector()` Tuning in `mantra/agent.py`:
-  - Configured `endpointing_ms=10` and `utterance_end_ms=1000` on Deepgram `nova-3` STT (down from LiveKit's 25ms default buffer), eliminating **~0.7s of transcript delivery lag** from Deepgram to the agent.
-  - Lowered `TurnDetector` `unlikely_threshold` from `0.56` → `0.35` so the turn detector commits end-of-turn immediately when a user finishes a sentence or hesitates.
-  - Lowered `TurnHandlingOptions` endpointing `max_delay` from 2.5s → 0.7s and `min_delay` from 0.3s → 0.15s.
-- **behavior:** In the previous log trace, when the user said *"Hello? Can you hear me?"*, `TurnDetector` calculated `end_of_turn_probability: 0.045` (well below the default `0.56` threshold), forcing `delay_completed: true` to wait the entire 0.7s–2.5s buffer before sending the turn to DeepSeek. With `endpointing_ms=10` and `unlikely_threshold=0.35`, the turn is committed within **<200ms**, eliminating the ~3-second dead-air pause where users wondered if they were being heard.
+### Kannada, Telugu & Marathi Language Integration & Instant Switch Latency Optimization
+
+- **feat:** Added native language matching rules and TTS payload resolution for Kannada (`kn`), Telugu (`te`), and Marathi (`mr`) in `mantra/agent.py`.
+- **perf:** Language-Switching Latency Tuning (`mantra/agent.py`):
+  - Added `INSTANT LANGUAGE SWITCH RULE` to prompt instructions preventing LLM preamble hesitations ("Sure, I can speak Kannada") and forcing instant first-word replies in the requested language.
+  - Tightened VAD `min_silence_duration` from 350ms → 250ms (`0.25`s) and endpointing `max_delay` from 700ms → 500ms (`0.5`s) to eliminate turn-detector silence delays on short 2-3 word language switch requests.
+- **details:** Deepgram `nova-3` STT operates in `language="multi"` mode to auto-transcribe Kannada, Telugu, and Marathi speech. Cartesia TTS language is dynamically resolved from call payload (`"language": "kn"` / `"language": "te"` / `"language": "mr"`). Configured system prompt script rule forcing DeepSeek to output Kannada in Latin-script **Kanglish**, Telugu in **Telugish**, and Marathi in **Marathish**.
 - Files: `mantra/agent.py`
 
 ## 2026-08-12
 
 ### Outbound SIP Dispatch Latency Optimization
+
 - **perf:** Fixed 4-second API response latency on `/api/v1/sip/plivo/create-and-call` by setting `wait_until_answered=False` on `CreateSIPParticipantRequest`.
 - **behavior:** Previously, the HTTP POST request blocked for ~3.5 to 5 seconds waiting for the recipient's phone to physically ring and be picked up over the cellular network. With `wait_until_answered=False`, the API dispatches the SIP call asynchronously and returns `200 OK` (`status: success`) immediately in **<100ms**.
 - Files: `mantra/ui_server.py`
 
 ### Smart In-Progress Call Deduplication Rejection System
+
 - **feat:** Implemented fail-safe Smart In-Progress Call Deduplication (`lock:call:{call_id}`) across `mantra/ui_server.py` and `mantra/agent.py`:
   - `handle_outbound_call_webhook` (`/api/v1/webhooks/telephony`) & `create_and_call_plivo` (`/api/v1/sip/plivo/create-and-call`) acquire a 30-second TTL lock (`ex=30`).
   - Sub-second duplicate webhooks arriving while a call is currently in-progress are rejected with `{"status": "ignored", "message": "Duplicate request for call_id ... already in progress"}`.
@@ -26,6 +29,7 @@
 - Files: `mantra/ui_server.py`, `mantra/agent.py`, `static/dashboard.html`, `static/dashboard.js`
 
 ### LiveKit TurnDetector Tuning & Inactivity Monitor Hardening
+
 - **fix:** TurnDetector & Endpointing Misconfiguration (`mantra/agent.py`):
   - Previously, `endpointing` was set to `min_delay: 0.1` and `max_delay: 0.35` (100ms–350ms), overriding LiveKit turn detector recommendations with an ultra-short window that forcefully cut off users mid-sentence whenever they took a brief breath or pause.
   - Reconfigured `endpointing` to recommended LiveKit defaults for `inference.TurnDetector()` (`min_delay: 0.3`, `max_delay: 2.5`, `mode: "dynamic"`). The turn detector now accurately evaluates end-of-turn acoustic/semantic cues without premature interruptions.
@@ -43,24 +47,17 @@
 ## 2026-08-11
 
 ### Post-Call Stage Transition & CRM Stage Details Fix
+
 - **bug:** `SessionRecorder.analyze_call()` in `mantra/utils.py` completely excluded `AVAILABLE CRM STAGES` (`stage_details`) from the LLM prompt whenever `process_stage_data` (KB process stage data) was present. Because of this, for outbound calls and calls with CRM stage lists (e.g. stages 227, 228, 229, 230, 273, 274), the post-call LLM was shown only KB process stage data and could not match the transcript to the valid campaign CRM stage IDs, defaulting `new_stage_id` to `current_stage_id` (no stage transition).
 - **fix:** Updated `SessionRecorder.analyze_call()` to always include `AVAILABLE CRM STAGES` (`stage_details`) in the prompt alongside `AVAILABLE PROCESSES` when present, and added explicit prompt instructions directing the LLM to select `new_stage_id` from `AVAILABLE CRM STAGES` based on the outcome (appointment confirmed, call back/follow up, not interested, treatment done, failed).
 - **fix:** Moved inbound KB process/stage ID extraction (`used_kb_process_ids` / `used_kb_stage_ids`) in `mantra/agent.py` to BEFORE `SessionRecorder.analyze_call()` executes so `current_stage_id` is properly populated for inbound calls prior to analysis.
 - **feat:** Updated stage resolution and `call_status` logic in `mantra/agent.py`: `payload_new_stage_id` is never `null` when an initial stage ID exists — if the stage is not updated, `payload_new_stage_id` sends the initial `stage_id`. `call_status` is `"Completed"` if `payload_new_stage_id != initial_stage_id` (stage updated), and `"Incomplete"` if `payload_new_stage_id == initial_stage_id` (stage stayed the same).
 - Files: `mantra/agent.py`
 
-
-
-
-
-
-
-
-
-
 ## 2026-08-10
 
 ### Post-Call Analysis Hardening — `next_call_on` & Stage Transition Injection
+
 - **bug:** `next_call_on` was empty (`""`) in post-call payloads even when the transcript requested a callback (e.g. "Call me back in 10 minutes"). Root cause: the relative-callback regex fallback only ran in the success path of `SessionRecorder.analyze_call()`. When the LLM returned non-JSON output (common with flash models), the exception path hard-set `next_call_on = None` and never ran the regex.
 - **bug:** Stage transitions were lost on the same LLM failures — a call that clearly booked a demo (stage "said yes to book demo") was sent as `new_stage_id: null` with `call_status: "Incomplete"` because the exception path hard-set `new_stage_id = fallback_stage_id` (current stage).
 - **fix:** Added `parse_relative_callback()` helper in `mantra/utils.py` (module-level, shared by both paths) — handles "in 10 minutes", "1 hour", "N days", Hindi "10 minute baad", and "tomorrow at 3 PM"/"tomorrow". Runs in the success path (when LLM returns null) AND in the exception path.
@@ -69,6 +66,7 @@
 - Files: `mantra/utils.py`
 
 ### Post-Call Analysis — LLM Sole Source of Truth
+
 - **refactor:** Removed all regex/heuristic fallbacks from `SessionRecorder.analyze_call()` (`mantra/utils.py`) — the post-call LLM is now the sole source of truth for AI-decided fields. Deleted `parse_relative_callback()` and `infer_stage_from_transcript()`, removed the top-level `import re`, and dropped the `next_call_on` regex fallback, the `process_id`/`new_stage_id` auto-fill from `process_stage_data`, and transcript keyword stage inference in both the success and exception paths.
 - **behavior:** `process_id` and current `stage_id` now come exclusively from the webhook payload (outbound) or KB tracking (`used_kb_process_ids` / `used_kb_stage_ids`, inbound). `new_stage_id`, `ai_summary`, `user_intent`, `next_call_on`, `appointment_date_time`, `doctor`, `hospital_location`, and `sentiment_score` come from the LLM only.
 - **refactor:** Exception path now falls back cleanly: `summary` via `generate_summary()`, `new_stage_id = current_stage_id` (no transition), `process_id = None`, `next_call_on = None`.
@@ -76,6 +74,7 @@
 - Files: `mantra/utils.py`, `mantra/agent.py`
 
 ### Inbound Call Post-Call `user_intent` Payload Field (Booked, Cancelled, Rescheduled)
+
 - **feat:** Extended `user_intent` field in post-call `CALL_DATA_INBOUND_UPDATE` webhook payload for inbound calls to support 3 distinct appointment outcomes: `"APPOINTMENT_BOOKED"`, `"APPOINTMENT_CANCELLED"`, and `"APPOINTMENT_RESCHEDULED"`.
 - **feat:** LLM call analysis in `SessionRecorder.analyze_call()` (`mantra/utils.py`) evaluates conversation history against KB process/stage descriptions:
   - `"APPOINTMENT_BOOKED"` iff an appointment was successfully booked during the call AND the outcome stage corresponds to appointment booking/confirmation.
@@ -105,6 +104,7 @@
 ## 2026-08-09
 
 ### KB Retrieval Fix — Hybrid FTS + Semantic (pgvector/Gemini) + Tiered Fallback
+
 - **bug:** Fixed org 77 inbound call failing to find "diagnostic codes" despite the KB page containing "diagnostic code". Root cause: `kb_pages.text_search` used the `simple` config with `websearch_to_tsquery` AND semantics — `'diagnostic' & 'codes'` never matched the stored `code` (no stemming, no OR fallback). Verified in scratch DB: `diagnostic codes` → 0 rows, `code`/`diagnostic` → 1 row.
 - **feat:** Migration `006_kb_english_vector.py` — rebuilds `text_search` with the `english` config (stemming), enables the `vector` extension, adds `embedding vector(1536)`, and creates an HNSW index (`embedding vector_cosine_ops`). 1536 dims because pgvector HNSW/IVFFlat caps at 2000 dimensions (Gemini `output_dimensionality=1536` verified working).
 - **feat:** New `mantra/gemini_embeddings.py` — lazy `google.genai.Client` singleton, `embed_texts()` (batch 100, 3 retries, exp backoff), `embed_text()`, `embedding_enabled()`. Uses `gemini-embedding-2` @ 1536 dims. NOTE: batch embeddings must use `types.Content(parts=[...])` — plain strings returned only 1 embedding for 2 inputs.
@@ -119,6 +119,7 @@
 ## 2026-08-07
 
 ### KB Process & Stage Persistence for Inbound Webhooks
+
 - **feat:** Migration `005_kb_process_stage.py` — added `process_id`, `stage_id`, `stage_ids`, `process_assignments`, `process_description`, and `stage_description` columns to `kb_collections`, and `stage_id` to `org_configs`.
 - **feat:** Updated `/api/v1/kb/ingest` in `mantra/ui_server.py` to parse Zod-schema aligned `process_assignments` (`[{"process_id": int, "stage_ids": [int]}]`) as well as explicit `process_id` and `stage_id` parameters, storing them directly on `kb_collections` and `kb_pages.page_meta`.
 - **fix:** Updated `normalize_datetime()` in `mantra/utils.py` to output ISO-8601 UTC timestamp format (`YYYY-MM-DDTHH:MM:SSZ`, e.g. `"2026-08-04T10:59:36Z"`), returning `null` when no callback is scheduled for both inbound and outbound webhooks.
@@ -127,6 +128,7 @@
 - Files: `mantra/utils.py`, `mantra/agent.py`
 
 ### AMD Exception Handling & Unevaluated LLM Compatibility
+
 - **fix:** Updated `detect_voicemail()` in `mantra/amd.py` to handle early audio stream closures (`RuntimeError("amd closed before a result was available")`) as clean `info` logs rather than logging noisy multiline Python stack traces.
 - **fix:** Added `suppress_compatibility_warning=True` to `AMD(...)` instantiation in `mantra/amd.py` for unevaluated LLMs like `deepseek-v4-flash`.
 - Files: `mantra/amd.py`
@@ -134,11 +136,13 @@
 ## 2026-08-06
 
 ### Grafana Memory & CPU Arc Gauges
+
 - **feat:** Added authentic Grafana Arc Gauge widgets for **Memory** and **CPU Utilization** to `static/network.html`.
 - **feat:** Rendered 180° semi-circular arc gauge canvas with outer thin threshold ring (Green <70%, Orange 70-90%, Red >90%), inner progress arc fill, and centered dynamic value text (`114 MB`, `14.2%`).
 - Files: `static/network.html`
 
 ### Call Retry Redis Deduplication Lock & DB Persistence
+
 - **fix:** Resolved duplicate suppression bug where retrying a call within 5-10 minutes of a previous attempt logged `"delivered"` but skipped sending HTTP POST requests to the n8n backend.
 - **fix:** Enhanced `_claim_backend_delivery` and `send_to_backend` in `mantra/utils.py` to deduplicate by `call_id + ai_call_id` (`f"backend_sent:{call_id}_{ai_call_id}"`).
 - **fix:** Removed automatic `force=True` on `CALL_RETRY` inside `send_to_backend()`, eliminating double HTTP POST deliveries caused by the background Redis queue worker (`mantra:pending_webhooks`).
@@ -147,16 +151,19 @@
 - Files: `mantra/utils.py`, `mantra/ui_server.py`
 
 ### Operations Dashboard DB Sync & Search
+
 - **feat:** Updated `/api/v1/dashboard/calls` endpoint in `mantra/ui_server.py` to support `search` filtering (across call ID, caller/called phone numbers, and call log JSON text) and `status` filtering (`Completed`, `Busy`, `No Answer`, `Error`, `Incomplete`).
 - **feat:** Updated `static/dashboard.html` and `static/dashboard.js` with search bar, status selector dropdown, manual "Sync DB" button, and auto-sync triggers on SSE call-end events and periodic 15s intervals.
 - **feat:** Enhanced Call Details Inspect Modal in `static/dashboard.html` and `static/dashboard.js` to parse and render full AI summaries and turn-by-turn conversation transcripts (with styled 🤖 AI Agent and 👤 Caller speech bubbles, unicode Hindi/English support, and raw JSON fallback).
 
 ### Redis Operations & Queue Monitor
+
 - **feat:** Created `/redis` route in `mantra/ui_server.py` serving `static/redis.html`.
 - **feat:** Added Redis API endpoints: `/api/v1/redis/info` (server info, memory, clients, queue count, active count), `/api/v1/redis/queue` (inspect `queue:pending` sorted set items & payloads), `/api/v1/redis/active-details` (inspect `calls:active` hash, status, lock TTLs), `/api/v1/redis/keys` (scan and list keys by pattern with type and TTL), `/api/v1/redis/key-detail` (full value inspector), `/api/v1/redis/key` (delete key).
 - **feat:** Created `static/redis.html` UI with summary metric cards, queue inspector table, active calls hash viewer, live key explorer, and JSON value inspector modal.
 
 ### Grafana-Style Network Telemetry Dashboard
+
 - **feat:** Redesigned `static/network.html` with an authentic Grafana Dark Theme aesthetic (`#111217` canvas, `#181b1f` panels, Grafana orange/blue/green/red color palette).
 - **feat:** Added top control toolbar with time range selector (`Last 5m`, `15m`, `30m`), refresh interval selector (`2s`, `5s`, `10s`, `Off`), and manual refresh.
 - **feat:** Added single stat cards for Request Rate (RPS), Avg Response Latency (ms) + estimated p95, Error Rate %, RAM Memory usage, and CPU seconds.
@@ -164,6 +171,7 @@
 - **feat:** Added high-density Grafana endpoint metrics grid table with status code class filtering (`2xx`, `3xx`, `4xx`, `5xx`), live search filtering, and human-readable API endpoint labels (mapping raw technical paths like `/api/v1/stream` → **Real-Time SSE Stream** and `/api/v1/redis/active-details` → **Redis Active Calls Inspector**).
 
 ### Redis Webhook Worker Failover & Read-Only Replica Reconnection Fix
+
 - **fix:** Updated `process_pending_webhooks()` worker in `mantra/ui_server.py` to handle Redis failovers (Master → Replica transitions) and socket read timeouts.
 - **fix:** Added exception handlers for `ReadOnlyError` ("You can't write against a read only replica") and `ResponseError` ("UNBLOCKED force unblock..."). When failover occurs, the worker logs a warning, closes/disconnects the stale Redis connection pool (`await client.aclose()`), resets `client = None`, and reconnects cleanly on the next iteration.
 - **fix:** Configured `socket_timeout=15`, `socket_connect_timeout=5`, `health_check_interval=15`, and `retry_on_timeout=True` on `redis.from_url` to prevent socket hanging and ensure swift reconnects.
@@ -172,6 +180,7 @@
 ## 2026-08-05
 
 ### Standard-String Timestamps for `next_call_on`
+
 - **fix:** Renamed `normalize_to_iso8601` → `normalize_datetime` in `mantra/utils.py`. It now returns `next_call_on` as a standard server-local time string (`YYYY-MM-DD HH:MM:SSZ`, `Z` suffix appended) instead of ISO-8601 (`YYYY-MM-DDTHH:MM:SS`).
 - **fix:** `analyze_call` LLM prompt in `mantra/utils.py` no longer hardcodes IST — `next_call_on` / `appointment_date_time` are now instructed to be emitted in the server's local time (`YYYY-MM-DD HH:MM:SS`), matching the `datetime.now()`-based `current_time_str`.
 - **fix:** Updated `mantra/agent.py` import and both `CALL_DATA_INBOUND_UPDATE` / `CALL_DATA_UPDATE` webhook payloads to use the renamed helper, so `next_call_on` is delivered as a plain string in server-local time.
@@ -180,6 +189,7 @@
 ## 2026-08-04
 
 ### Post-Call Webhook Delivery & Finalize Refactoring
+
 - **fix:** Added `_finalized` single-execution guard in `finalize()` in `mantra/agent.py` to prevent duplicate post-call execution and double-webhook delivery.
 - **fix:** Guarded all `fnc_ctx` and `recorder` accesses in `finalize()` against uninitialized/None states, preventing `AttributeError` / `UnboundLocalError` from terminating finalization early.
 - **fix:** Added 15s timeout on `SessionRecorder.analyze_call` and 10s timeout on `upload_to_s3` in `mantra/agent.py` so slow LLM or S3 requests never block post-call backend delivery.
@@ -189,6 +199,7 @@
 - Files: `mantra/agent.py`, `mantra/utils.py`, `scripts/reprocess_unsent_calls.py`
 
 ### Webhook Schema & Inbound Call KB Analysis
+
 - **fix:** Enhanced `get_process_stage_data_for_kb_ids` in `mantra/knowledge_base.py` to query both `kb_pages` (`page_meta->process_stage_data`) and `kb_collections` fallback (`process_description`, `stage_description`), ensuring KB process/stage structures are always present for inbound call analysis.
 - **fix:** Fixed missing `process_id` in `SessionRecorder.analyze_call` return dictionary in `mantra/utils.py` — previously `analyze_call` dropped `process_id`, causing `derived_process_id` to evaluate to `None` and downstream PDO prepared statement parameter errors.
 - **fix:** Added automatic fallback extraction for `process_id` and `stage_id` from `process_stage_data` in `analyze_call` when LLM returns null or fails to parse.
@@ -199,6 +210,7 @@
 ## 2026-08-03
 
 ### Trunk-Based Call Capacity Gating
+
 - **refactor:** Replaced per-provider capacity (`PROVIDER_MAX_CONCURRENCY`) with per-trunk capacity. Each trunk gets an independent limit derived from its provider's default (Plivo=2, Zadarma=3, VoiceLink=5, Twilio=3).
 - **refactor:** Room naming changed from `call_{provider}_{call_id}` → `call_{trunk_id}_{call_id}` across webhook handler, Plivo outbound endpoint, and dispatcher.
 - **feat:** `_resolve_trunk_limit(trunk_id)` — resolves trunk→provider→limit via in-memory `_TRUNK_TO_PROVIDER` cache, falling back to `_get_provider_from_trunk()` (LiveKit API + Redis cache). Unknown trunks default to limit 1.
@@ -210,11 +222,13 @@
 - Files: `mantra/ui_server.py` (lines 64-138, 556-567, 672-690, 2350-2376, 2875), `mantra/dispatcher.py` (lines 51, 187)
 
 ### Zombie Room Cleanup
+
 - **feat:** `cleanup_zombie_rooms()` in `mantra/dispatcher.py` — runs every 60s in the dispatcher loop. Lists LiveKit rooms, deletes `call_*` rooms with `num_participants == 0` via `delete_room()`.
 - **feat:** One-shot startup cleanup in `ui_server.py` lifespan — identical logic, runs immediately after startup health check. Writes warning log for each zombie deleted.
 - Files: `mantra/dispatcher.py` (lines 117-136, 169), `mantra/ui_server.py` (lines 214-232)
 
 ### DB Migration — Call Metadata Columns
+
 - **feat:** Added `caller_number` (VARCHAR 20), `called_number` (VARCHAR 20), `trunk_id` (VARCHAR 100) to `call_logs`. Index on `trunk_id`.
 - **feat:** `save_call_log_to_db()` in `mantra/utils.py` now accepts and upserts all three columns.
 - **feat:** Agent `finalize()` extracts `caller_number` ← `call_payload.call_from`, `called_number` ← `call_payload.client_phone`, `trunk_id` ← `call_payload.call_from_id`.
@@ -222,6 +236,7 @@
 - Migration: `migrations/add_trunk_fields.sql`
 
 ### DB Migration — kb_collections Process/Stage Descriptions
+
 - **feat:** Added `process_description` (TEXT), `stage_description` (TEXT) to `kb_collections`.
 - **feat:** Ingest endpoint (`/api/v1/kb/ingest`) extracts first process's `description`/`name` and first stage's `description`/`name` from `process_stage_data` JSON.
 - **feat:** `get_or_create_collection()` (abstract + Postgres impl) accepts and upserts both columns.
@@ -232,12 +247,14 @@
 ## 2026-08-02
 
 ### Inbound webhook int coercion + language matching
+
 - **fix:** `CALL_DATA_INBOUND_UPDATE` coerces `org_id` / `process_id` / `new_stage_id` string→int when present; missing stays `null`.
 - **fix:** Language matching prompt + STT `language=multi` so agent does not stick in Hindi after one Hindi filler.
 
 ## 2026-08-01
 
 ### Inbound SIP Setup — Plivo Zentrunk Trunk Reuse & Retry Self-Healing
+
 - **fix:** Plivo Zentrunk inbound trunk is now found by its deterministic name (`Inbound via LiveKit ({domain})`) as well as by `primary_uri_uuid` in `_update_plivo_sip_forwarding()`. Previously a trunk created for an earlier number was missed by the URI-only match, so setup for a new number tried to create a duplicate and Plivo rejected it with "A trunk with the same name ... already exists" — even though no trunk was created by this attempt.
 - **feat:** `_plivo_list_all()` — paginated helper for Plivo list endpoints (URI + trunk), so lookups no longer miss objects past the default 20-item page.
 - **feat:** When a reused Zentrunk trunk points to a stale URI, it is repointed (`primary_uri_uuid`) to the current LiveKit SIP domain.
@@ -245,6 +262,7 @@
 - **fix:** `org_configs` is now written only after provider forwarding succeeds, so a DB row reflects an actually-configured number instead of a partially-failed setup.
 
 ### Per-Provider Call Capacity & Health Gating
+
 - **feat:** Per-provider concurrency limits in `ui_server.py` — `PROVIDER_MAX_CONCURRENCY` (`plivo: 2`, `zadarma: 3`, `voice_link: 5`), env-overridable via `PLIVO_MAX_CONCURRENCY` / `ZADARMA_MAX_CONCURRENCY` / `VOICELINK_MAX_CONCURRENCY`.
 - **feat:** `/health` now reports per-provider and global capacity — returns `{"healthy": false}` when any provider is at its limit or total live `call_*` rooms reach `MAX_CALL_CONCURRENCY` (5, `CARTESIA_MAX_CONCURRENCY` fallback). Health check keys: `provider_capacity_{provider}`, `capacity_max_concurrency`.
 - **feat:** Middleware `health_gate_middleware` (POST dispatch paths only) — per-provider gate for `/api/v1/webhooks/telephony` returns empty `503` when the call's provider is saturated; global gate returns `503` when live rooms ≥ `MAX_CALL_CONCURRENCY`; dependency gate still blocks `503` on infra failure. Provider saturation never blocks another provider's traffic.
@@ -259,6 +277,7 @@
 ## 2026-07-30
 
 ### Voicelink Integration & SIP Fixes
+
 - **fix:** Resolved `NameError: name 'voicelink_client' is not defined` by adding module-level client/session declarations and lifespan initialization.
 - **feat:** Added `voice_link` / `voicelink` inbound SIP setup support and `_update_voicelink_sip_forwarding()` handler.
 - **feat:** Updated inbound SIP trunk name default fallback to `{provider} {number}`.
@@ -267,11 +286,13 @@
 - **refactor:** Cleaned up `_get_provider_from_trunk()` logic for cleaner execution and error logging.
 
 ### Outbound Call Walkthrough
+
 - **doc:** Created `Architecture/Outbound Call Walkthrough.md` — full end-to-end trace from webhook payload through post-call processing with payload samples, code references, sequence diagram, failure modes, and design properties table
 
 ## 2026-07-29
 
 ### Multi-KB per Org — KB Collections
+
 - **feat:** Added `kb_collections` table — each row = one document = one KB collection for an org. `kb_pages.kb_id` now stores the collection UUID instead of `org_id`. New migration: `003_kb_collections.py`.
 - **feat:** `_resolve_from_db()` in `agent.py` now queries `kb_collections` to get all collection UUIDs for the org, plus the `org_id` as fallback for legacy data. Agent searches across all collections.
 - **feat:** `/api/v1/kb/ingest` endpoint now creates/finds a `kb_collection` by `(org_id, document_id)` and stores pages under the collection UUID. Old data with `kb_pages.kb_id = org_id` still works via fallback.
@@ -281,6 +302,7 @@
 - **doc:** Updated `Database.md` with `kb_collections` table schema and KB resolution flow.
 
 ### Inbound KB Document Tracking
+
 - **feat:** Added `accessed_pages_meta` tracking to `KnowledgeRetriever` — every `retrieve()` call now appends `page_meta` from returned pages, enabling per-document metadata extraction
 - **feat:** Added `used_kb_process_ids` property to `AssistantFunctions` — reads tracked `page_meta` and returns unique `process_id` values from KB documents actually searched during the call
 - **feat:** Inbound `finalize()` now overlays `process_id` from tracked KB pages into `call_payload` — the `CALL_DATA_INBOUND_UPDATE` webhook carries the `process_id` of the specific document the agent queried, not the org-level `org_configs.process_id`
@@ -289,6 +311,7 @@
 ## 2026-07-27
 
 ### TTS Fix & Payload Cleanup
+
 - **fix:** TTS model changed from `cartesia/sonic-3` to `sonic-3` (LiveKit native inference, no Cartesia dependency)
 - **fix:** Removed `emotion` extra_kwarg from TTS config (not supported by LiveKit inference)
 - **fix:** Removed Cartesia API health check (TTS now uses LiveKit inference only)
@@ -299,12 +322,14 @@
 ## 2026-07-26
 
 ### Post-Call Data & Timestamps
+
 - **fix:** `normalize_to_iso8601` outputs `YYYY-MM-DDTHH:mm:ss` (local, no offset) for `next_call_on` — matches MA reschedule format requirement
 - **fix:** Post-call TOS telemetry (`[Agent Worker] Post-call processing complete`) now awaited directly instead of fire-and-forget bg task — ensures delivery of summary, transcript flag, stage, and timestamps to TOS
 - **feat:** Added `call_initiated_at` (set by UI server on webhook receipt), `agent_joined_at`, `human_joined_at` as explicit fields in n8n webhook payload and TOS telemetry
 - **feat:** `_telemetry()` helper in `entrypoint()` accepts `wait=True` for critical telemetry that must not be lost
 
 ### TOS Telemetry Cleanup
+
 - **feat:** `report_telemetry()` now accepts optional `data` dict for structured payloads
 - **feat:** Post-call processing sends rich TOS payload with `s3_recording`, `has_transcript`, `summary`, `new_stage_id`, `call_status`, `duration_seconds`, `backend_delivered`, `next_call_on`, appointment fields
 - **refactor:** Stripped verbose debug logging from `report_telemetry()` (no more request body/headers printed)
@@ -312,6 +337,7 @@
 - **chore:** Removed `log_io.py` colorama logging + `colorama` dependency (clean for production)
 
 ### Timezone Fix
+
 - **fix:** `next_call_on` (scheduled call time) now sent in UTC in both `agent.py` and `utils.py` fallbacks
 - **fix:** `email_alerts.py` crash timestamp uses local time (was labelled `UTC` but showed local)
 

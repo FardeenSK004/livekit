@@ -721,10 +721,12 @@ CORE BEHAVIOR:
 - Keep responses SHORT (1-2 sentences).
 - Use natural fillers that match the caller's language (English: "Got it", "Sure"; Hindi: "Theek hai", "Haan").
 - LANGUAGE MATCHING (CRITICAL):
-  * Start in English.
-  * MATCH the caller's language every turn. English → English. Hindi → Hindi.
-  * One Hindi filler (e.g. "arre", "yaar", "ji") in mostly English does NOT mean switch to Hindi.
-  * If the caller switches back to English, switch back immediately. Never stay stuck in Hindi.
+  * Start in English (or the language specified in call parameters).
+  * MATCH the caller's language every turn. English → English. Hindi → Hindi. Kannada → Kannada (Kanglish). Telugu → Telugu (Telugish). Marathi → Marathi (Marathish).
+  * INSTANT LANGUAGE SWITCH RULE (ZERO LAG): When the caller asks to switch language (e.g. "Kannada me bolo", "Can you speak Telugu?", "Marathi madhe bola"), switch IMMEDIATELY in your VERY FIRST word of the reply. Do NOT output meta-explanations like "Sure, I can speak Kannada". Reply instantly in the requested language (e.g. "Haudu! Namma branch Paschim Vihar nalli ide...").
+  * SCRIPT RULE FOR REGIONAL LANGUAGES (CRITICAL FOR TTS AUDIO): ALWAYS write regional responses in Latin script — Kannada in Kanglish (e.g. "Namaskara, namma branch Paschim Vihar nalli ide, yaavaga visit madthira?"), Telugu in Telugish (e.g. "Namaskaram, maa branch Paschim Vihar lo undi, eppudu visit chestharu?"), and Marathi in Marathish (e.g. "Namaskar, amchi Paschim Vihar branch ahe, tumhi kadhi visit karnar?"). NEVER output native Brahmic script (ಕನ್ನಡ, తెలుగు, मराठी) because TTS audio breaks on native script glyphs.
+  * One filler word in another language does NOT mean switch completely, but if the caller speaks in Kannada, Telugu, or Marathi, switch to match them immediately in Latin script (Kanglish/Telugish/Marathish).
+  * If the caller switches back to English, switch back immediately. Never stay stuck in one language if the caller changes.
 - Sound like a helpful human friend, not a robot.
 - Do NOT use markdown, bullet points, or special characters.
 - If the user pauses, wait patiently for them to finish.
@@ -950,6 +952,26 @@ Follow these specific instructions:
         llm_engine = openai.LLM(model="gpt-4o-mini")
     # TTS via LiveKit Inference — Cartesia provider
     language = "en"
+    if "payload" in locals() and isinstance(payload, dict):
+        ai_p = payload.get("ai_payload") if isinstance(payload.get("ai_payload"), dict) else {}
+        raw_lang = (
+            payload.get("language")
+            or payload.get("lang")
+            or ai_p.get("language")
+            or ai_p.get("lang")
+        )
+        if raw_lang:
+            raw_lang_str = str(raw_lang).lower().strip()
+            if raw_lang_str in ["kn", "kannada", "kn-in"]:
+                language = "kn"
+            elif raw_lang_str in ["te", "telugu", "te-in"]:
+                language = "te"
+            elif raw_lang_str in ["mr", "marathi", "mr-in"]:
+                language = "mr"
+            elif raw_lang_str in ["hi", "hindi", "hi-in"]:
+                language = "hi"
+            else:
+                language = raw_lang_str
 
     if language:
         language = str(language).lower()
@@ -973,8 +995,8 @@ Follow these specific instructions:
             ),
             endpointing={
                 "mode": "dynamic",
-                "min_delay": 0.15,
-                "max_delay": 0.7,
+                "min_delay": 0.12,
+                "max_delay": 0.5,
             },
             interruption={
                 "mode": "adaptive",
@@ -985,8 +1007,8 @@ Follow these specific instructions:
             },
         ),
         vad=silero.VAD.load(
-            min_speech_duration=0.15,
-            min_silence_duration=0.35,
+            min_speech_duration=0.12,
+            min_silence_duration=0.25,
         ),
         # Multilingual STT so English stays English and Hindi/Hinglish still work
         stt=deepgram.STT(
