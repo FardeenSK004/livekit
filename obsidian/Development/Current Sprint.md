@@ -1,8 +1,10 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-08-12  
-> **Status:** Active maintenance, LiveKit TurnDetector tuning, VAD sensitivity tuning, inactivity monitor hardening, smart in-progress call deduplication rejection system
+> **Last Updated:** 2026-08-13  
+> **Status:** Active maintenance, turn-taking endpointing latency tuning, LiveKit TurnDetector tuning, VAD sensitivity tuning
+
+- [x] **Turn-Taking Endpointing Latency Optimization (2026-08-13):** Optimized `TurnHandlingOptions` endpointing in `mantra/agent.py`: reduced `max_delay` from `2.5`s → `0.7`s and `min_delay` from `0.3`s → `0.15`s. Previously, short 1-2 word responses (e.g. "जी बोलिए.", "हाँ", "Okay") caused the dynamic turn detector to hesitate and wait up to 2.5 seconds of silence before finalizing the turn. Combined with remote DeepSeek API latency (~1.5s), callers experienced a 4.0-second silence gap. Lowering `max_delay` to 0.7s cuts **1.8 seconds of dead air silence** after short user replies. Files: `mantra/agent.py`.
 
 - [x] **Outbound SIP Dispatch Latency Optimization (2026-08-12):** Fixed 4-second API response latency on `/api/v1/sip/plivo/create-and-call` by setting `wait_until_answered=False` on `CreateSIPParticipantRequest`. The HTTP POST request now dispatches the SIP call asynchronously and returns `200 OK` (`status: success`) immediately in **<100ms** (instead of waiting 3.5–5s for the phone to physically ring and be picked up). Files: `mantra/ui_server.py`.
 

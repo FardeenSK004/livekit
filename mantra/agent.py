@@ -968,11 +968,13 @@ Follow these specific instructions:
 
     session = AgentSession(
         turn_handling=TurnHandlingOptions(
-            turn_detection=inference.TurnDetector(),
+            turn_detection=inference.TurnDetector(
+                unlikely_threshold=0.35,  # Lower threshold from default 0.56 so turn finishes faster when user pauses
+            ),
             endpointing={
                 "mode": "dynamic",
-                "min_delay": 0.3,
-                "max_delay": 2.5,
+                "min_delay": 0.15,
+                "max_delay": 0.7,
             },
             interruption={
                 "mode": "adaptive",
@@ -988,7 +990,12 @@ Follow these specific instructions:
         ),
         # Multilingual STT so English stays English and Hindi/Hinglish still work
         stt=deepgram.STT(
-            model="nova-3", language="multi", smart_format=True, numerals=True
+            model="nova-3",
+            language="multi",
+            smart_format=True,
+            numerals=True,
+            endpointing_ms=10,
+            utterance_end_ms=1000,
         ),
         llm=llm_engine,
         tts=tts_engine,

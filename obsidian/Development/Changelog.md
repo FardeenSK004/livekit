@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-08-13
+
+### Turn-Taking & STT Endpointing Latency Optimization
+- **perf:** Deepgram STT & LiveKit `TurnDetector()` Tuning in `mantra/agent.py`:
+  - Configured `endpointing_ms=10` and `utterance_end_ms=1000` on Deepgram `nova-3` STT (down from LiveKit's 25ms default buffer), eliminating **~0.7s of transcript delivery lag** from Deepgram to the agent.
+  - Lowered `TurnDetector` `unlikely_threshold` from `0.56` → `0.35` so the turn detector commits end-of-turn immediately when a user finishes a sentence or hesitates.
+  - Lowered `TurnHandlingOptions` endpointing `max_delay` from 2.5s → 0.7s and `min_delay` from 0.3s → 0.15s.
+- **behavior:** In the previous log trace, when the user said *"Hello? Can you hear me?"*, `TurnDetector` calculated `end_of_turn_probability: 0.045` (well below the default `0.56` threshold), forcing `delay_completed: true` to wait the entire 0.7s–2.5s buffer before sending the turn to DeepSeek. With `endpointing_ms=10` and `unlikely_threshold=0.35`, the turn is committed within **<200ms**, eliminating the ~3-second dead-air pause where users wondered if they were being heard.
+- Files: `mantra/agent.py`
+
 ## 2026-08-12
 
 ### Outbound SIP Dispatch Latency Optimization
