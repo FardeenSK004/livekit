@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-08-14
+
+### Native Script & Dynamic Multilingual Auto-Switching Hardening
+
+- **feat:** Updated prompt rules in `mantra/agent.py` to write responses in the native script of each language (Hindi in Devanagari हिन्दी, Kannada in ಕನ್ನಡ, Telugu in తెలుగు, Marathi in Devanagari मराठी).
+- **fix:** Fixed issue where Deepgram STT failed to recognize spoken Kannada/Telugu/Marathi due to 10ms micro-endpointing and restrictive prompt rules.
+- **perf:** Tuned Deepgram STT `endpointing_ms=100` for stable multilingual recognition and code-switching without cutting off regional phonetic units.
+- **prompt:** Added high-priority `DYNAMIC MULTILINGUAL SWITCHING` rule into `CRITICAL OVERRIDING RULES` in `mantra/agent.py`. Ensures the agent instantly switches whenever the caller speaks in those languages, overriding static prompt restrictions.
+- **feat:** Added dynamic STT language resolution when regional languages (`kn`, `te`, `mr`) are specified in call payload.
+- Files: `mantra/agent.py`
+
+### Premature `end_call` Trigger Guard & Prompt Hardening
+
+- **fix:** Fixed race condition where DeepSeek LLM called `end_call` tool concurrently with the opening greeting on turn 1, disconnecting calls prematurely after 3 seconds.
+- **feat:** Added runtime state checks inside `AssistantFunctions.end_call()`: ignores `end_call` if `not user_has_spoken` and `not initial_greeting_done`, returning a prompt to continue the conversation.
+- **prompt:** Updated `end_call` tool docstring and softened overly assertive `ENDING THE CALL` system prompt instructions in `mantra/agent.py` to prevent LLM bias towards immediate call termination.
+- Files: `mantra/agent.py`
+
 ## 2026-08-13
 
 ### Kannada, Telugu & Marathi Language Integration & Instant Switch Latency Optimization

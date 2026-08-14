@@ -277,11 +277,13 @@ class AssistantFunctions:
         ctx: JobContext = None,
         kb_ids: list[str] = None,
         kb_tags: list[str] = None,
+        call_state: dict = None,
     ):
         self.job_metadata = job_metadata
         self.room_name = room_name
         self.handoff_triggered = False
         self._end_call_triggered = False
+        self.call_state = call_state
         self.agent = None
         self.session = None
         self.ctx = ctx
@@ -519,9 +521,13 @@ class AssistantFunctions:
         return result
 
     @llm.function_tool(
-        description="End the call. Call this tool when the conversation is over — the user said goodbye, is not interested, or there is nothing left to discuss. Only after both of you have completed teh conversations!"
+        description="End the call. Call this tool ONLY when the conversation has reached its final conclusion (e.g. after saying final goodbye or when the user explicitly hangs up/declines). NEVER call this during the initial greeting or while the conversation is active."
     )
     async def end_call(self):
+        if self.call_state and not self.call_state.get("user_has_spoken", False) and not self.call_state.get("initial_greeting_done", False):
+            logger.warning("[DIAG] end_call invoked prematurely during initial greeting / before user spoke. Ignoring tool call.")
+            return "Call cannot be ended before the conversation starts. Please greet the user and proceed with the conversation."
+
         logger.info("Agent decided to end the call via function tool. Disconnecting shortly.")
         self._telemetry("Call ended by agent")
         self._end_call_triggered = True
@@ -671,7 +677,7 @@ async def entrypoint(ctx: JobContext):
 
     logger.info(f"KB scope: kb_ids={kb_ids_list}, kb_tags={kb_tags_list}")
 
-    fnc_ctx = AssistantFunctions(ctx.job.metadata, ctx.room.name, ctx=ctx, kb_ids=kb_ids_list, kb_tags=kb_tags_list)
+    fnc_ctx = AssistantFunctions(ctx.job.metadata, ctx.room.name, ctx=ctx, kb_ids=kb_ids_list, kb_tags=kb_tags_list, call_state=call_state)
 
     # Session ID for S3 key naming
     session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -722,10 +728,10 @@ CORE BEHAVIOR:
 - Use natural fillers that match the caller's language (English: "Got it", "Sure"; Hindi: "Theek hai", "Haan").
 - LANGUAGE MATCHING (CRITICAL):
   * Start in English (or the language specified in call parameters).
-  * MATCH the caller's language every turn. English → English. Hindi → Hindi. Kannada → Kannada (Kanglish). Telugu → Telugu (Telugish). Marathi → Marathi (Marathish).
-  * INSTANT LANGUAGE SWITCH RULE (ZERO LAG): When the caller asks to switch language (e.g. "Kannada me bolo", "Can you speak Telugu?", "Marathi madhe bola"), switch IMMEDIATELY in your VERY FIRST word of the reply. Do NOT output meta-explanations like "Sure, I can speak Kannada". Reply instantly in the requested language (e.g. "Haudu! Namma branch Paschim Vihar nalli ide...").
-  * SCRIPT RULE FOR REGIONAL LANGUAGES (CRITICAL FOR TTS AUDIO): ALWAYS write regional responses in Latin script — Kannada in Kanglish (e.g. "Namaskara, namma branch Paschim Vihar nalli ide, yaavaga visit madthira?"), Telugu in Telugish (e.g. "Namaskaram, maa branch Paschim Vihar lo undi, eppudu visit chestharu?"), and Marathi in Marathish (e.g. "Namaskar, amchi Paschim Vihar branch ahe, tumhi kadhi visit karnar?"). NEVER output native Brahmic script (ಕನ್ನಡ, తెలుగు, मराठी) because TTS audio breaks on native script glyphs.
-  * One filler word in another language does NOT mean switch completely, but if the caller speaks in Kannada, Telugu, or Marathi, switch to match them immediately in Latin script (Kanglish/Telugish/Marathish).
+  * MATCH the caller's language every turn. English → English. Hindi → Hindi (Devanagari script). Kannada → Kannada (Kannada script). Telugu → Telugu (Telugu script). Marathi → Marathi (Devanagari script).
+  * INSTANT LANGUAGE SWITCH RULE (ZERO LAG): When the caller speaks in or asks to switch to another language (e.g. "Kannada dalli mathadi", "Nimage Kannada gothaa", "Kannada me bolo", "Can you speak Telugu?", "Marathi madhe bola", "Hindi me baat karo"), switch IMMEDIATELY in your VERY FIRST word of the reply. Do NOT output meta-explanations like "Sure, I can speak Kannada". Reply instantly in the requested language (e.g. "ಹೌದು! ನಾನು ಮಂತ್ರಾಕೇರ್ ನಿಂದ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ...").
+  * SCRIPT RULE: Write responses in the natural native script of that language — Hindi in Devanagari (e.g. "हाँ बिल्कुल, मैं मंत्राकेयर से रिया बोल रही हूँ..."), Kannada in Kannada script (e.g. "ನಮಸ್ಕಾರ, ನಾನು ಮಂತ್ರಾಕೇರ್ ನಿಂದ ರಿಯಾ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ..."), Telugu in Telugu script (e.g. "నమస్కారం, నేను మంత్రకేర్ నుండి రియా మాట్లాడుతున్నాను..."), and Marathi in Devanagari (e.g. "नमस्कार, मी मंत्राकेअरमधून रिया बोलतेय...").
+  * If the caller speaks in Kannada, Telugu, Marathi, or Hindi, switch to match them immediately in their language and native script.
   * If the caller switches back to English, switch back immediately. Never stay stuck in one language if the caller changes.
 - Sound like a helpful human friend, not a robot.
 - Do NOT use markdown, bullet points, or special characters.
@@ -747,18 +753,16 @@ POLITENESS & EMPATHY:
 - Use a warm, caring, and reassuring tone.
 - Never be rude, dismissive, or impatient.
 
-ENDING THE CALL (CRITICAL — YOU MUST FOLLOW THIS):
-- You have a tool called `end_call`. You MUST call this tool to end every call. There is NO other way to hang up.
-- NEVER say goodbye, farewell, or any closing statement WITHOUT FIRST calling the `end_call` tool. Saying "goodbye" or "take care" without calling the tool means the call stays connected forever. This is a critical failure.
-- Call `end_call` IMMEDIATELY when ANY of these happen:
-  * The user says bye, goodbye, thank you, that's all, I'm done, not interested, hang up, disconnect, end the call, or anything similar.
+ENDING THE CALL:
+- You have a tool called `end_call`. Call this tool ONLY when the call is concluding.
+- NEVER call `end_call` during the opening greeting, introduction, or while the conversation is in progress.
+- Call `end_call` ONLY when:
+  * The user explicitly says goodbye, thank you, that's all, not interested, hang up, or end the call.
   * The user explicitly declines or rejects the offer (e.g. "not interested", "no thanks", "I don't need this").
-  * The conversation has reached a natural conclusion and there is nothing left to discuss.
-  * The user is clearly uninterested or disengaged.
-- The CORRECT sequence is: 1) Call `end_call` tool FIRST, 2) THEN say a brief warm goodbye in your response text.
+  * The conversation has reached its natural conclusion and all objectives are addressed.
+- The sequence for ending a call: 1) Call `end_call` tool, 2) THEN say a brief warm goodbye in your response text.
 - Do NOT ask follow-up questions after the user indicates they want to end the call or is not interested.
-- Keep your final goodbye SHORT: "Thank you for your time. Take care!" — that's it.
-- REMEMBER: If you find yourself writing a goodbye message, you MUST also call `end_call`. No exceptions.
+- Keep your final goodbye SHORT: "Thank you for your time. Have a great day!"
 
 PRONUNCIATION (CRITICAL):
 - ALWAYS write the brand name as "MantraCare" (as a single word). NEVER write "Mantra Care" with a space.
@@ -867,6 +871,7 @@ Follow these specific instructions:
             initial_instructions += "2. DO NOT push for an appointment if the user hasn't explicitly agreed or if they are asking about other things. Let the conversation flow naturally.\n"
             initial_instructions += "3. Answer user's questions DIRECTLY without appending a sales pitch or appointment request at the end of every turn.\n"
             initial_instructions += "4. If the user asks to speak to a human or asks to be transferred — apologize and explain that human transfer is currently unavailable. Do not promise transfer, and if they insist, politely end the call.\n"
+            initial_instructions += "5. DYNAMIC MULTILINGUAL SWITCHING: You MUST dynamically switch language to match the caller ANY time they speak in Kannada, Telugu, Marathi, Hindi, or English — even if the prompt specifies English or only mentions Hindi. If the caller speaks Kannada (e.g. 'Kannada dalli mathadi', 'Nimage Kannada barutha', or any Kannada phrases), switch IMMEDIATELY in your very first word to Kannada in native Kannada script (ಕನ್ನಡ). If the caller speaks Telugu, switch to Telugu (తెలుగు). If Marathi, switch to Marathi in Devanagari (मराठी). If Hindi, switch to Hindi in Devanagari (हिन्दी). If English, switch to English. Match the caller's language naturally and instantly on every turn.\n"
 
 
             if is_inbound:
@@ -988,6 +993,17 @@ Follow these specific instructions:
         }
     )
 
+    # Multilingual STT with code-switching support (endpointing=100ms for stable multilingual recognition)
+    stt_lang = language if language in ["kn", "te", "mr"] else "multi"
+    stt_engine = deepgram.STT(
+        model="nova-3",
+        language=stt_lang,
+        smart_format=True,
+        numerals=True,
+        endpointing_ms=100,
+        utterance_end_ms=1000,
+    )
+
     session = AgentSession(
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(
@@ -1010,15 +1026,7 @@ Follow these specific instructions:
             min_speech_duration=0.12,
             min_silence_duration=0.25,
         ),
-        # Multilingual STT so English stays English and Hindi/Hinglish still work
-        stt=deepgram.STT(
-            model="nova-3",
-            language="multi",
-            smart_format=True,
-            numerals=True,
-            endpointing_ms=10,
-            utterance_end_ms=1000,
-        ),
+        stt=stt_engine,
         llm=llm_engine,
         tts=tts_engine,
     )

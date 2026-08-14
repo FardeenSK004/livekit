@@ -23,8 +23,29 @@
               "icon": "lucide-layout-dashboard",
               "title": "Outbound Call Walkthrough"
             }
+          },
+          {
+            "id": "c9dc742e6327312d",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "Graph view"
+            }
+          },
+          {
+            "id": "9af13f4ff76f13d6",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "Graph view"
+            }
           }
-        ]
+        ],
+        "currentTab": 2
       }
     ],
     "direction": "vertical"
@@ -44,7 +65,9 @@
               "type": "file-explorer",
               "state": {
                 "sortOrder": "alphabetical",
-                "autoReveal": false
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
               },
               "icon": "lucide-folder-closed",
               "title": "Files"
@@ -183,7 +206,7 @@
       "bases:Create new base": false
     }
   },
-  "active": "ba89d0ebd22c5ea3",
+  "active": "9af13f4ff76f13d6",
   "lastOpenFiles": [
     "Outbound Call Walkthrough.canvas",
     "Untitled.canvas",
