@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-08-17
+
+### KB Ingestion JSON & Form Payload Compatibility
+
+- **fix:** Fixed issue where HTTP `POST /api/v1/kb/ingest` failed with `400 Bad Request: org_id is required` when sending text KB payloads with `Content-Type: application/json`.
+- **feat:** Updated `ingest_kb_data` in [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py#L952-L985) to inspect request content type and seamlessly parse both `application/json` and `multipart/form-data` / `application/x-www-form-urlencoded` payloads.
+- **feat:** Updated `parse_list` helper to handle list data types directly when passed in JSON body payloads.
+- Files: [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py)
+
 ## 2026-08-14
 
 ### Native Script & Dynamic Multilingual Auto-Switching Hardening

@@ -1,8 +1,10 @@
 # Current Sprint
 
 > **Sprint:** N/A (no formal sprint process)  
-> **Last Updated:** 2026-08-13  
-> **Status:** Active maintenance, Kannada, Telugu & Marathi regional language support, Deepgram STT & Cartesia TTS language routing
+> **Last Updated:** 2026-08-17  
+> **Status:** Active maintenance, KB ingestion JSON/Form compatibility, Kannada, Telugu & Marathi regional language support
+
+- [x] **KB Ingestion JSON & Form Payload Compatibility (2026-08-17):** Fixed issue where HTTP `POST /api/v1/kb/ingest` failed with `400 Bad Request: org_id is required` when sending text KB payloads with `Content-Type: application/json`. Updated `ingest_kb_data` in `mantra/ui_server.py` to inspect content type and seamlessly parse both `application/json` and `multipart/form-data` / `application/x-www-form-urlencoded` payloads, plus list-type parsing for `tags_name`. Verified using FastAPI TestClient with both JSON and Form payloads. Files: `mantra/ui_server.py`.
 
 - [x] **Native Script & Dynamic Multilingual Auto-Switching Hardening (2026-08-14):** Updated system instructions in `mantra/agent.py` to write responses in the native script of each language (Hindi in Devanagari हिन्दी, Kannada in ಕನ್ನಡ, Telugu in తెలుగు, Marathi in Devanagari मराठी). Fixed issue where Deepgram STT failed to recognize spoken Kannada/Telugu/Marathi due to 10ms micro-endpointing and restrictive prompt rules. Updated Deepgram STT `endpointing_ms=100` for stable multilingual recognition, added dynamic STT language resolution when regional languages are specified in payload, and injected high-priority `DYNAMIC MULTILINGUAL SWITCHING` rule into `CRITICAL OVERRIDING RULES` in `mantra/agent.py`. Files: `mantra/agent.py`.
 

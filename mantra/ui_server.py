@@ -954,26 +954,46 @@ async def ingest_kb_data(request: Request):
     """
     Ingest endpoint for MantraAssist KB data.
     Receives either a file or text content, and stores it in PostgreSQL.
+    Supports both JSON and Multipart/Form data payloads.
     """
-    form = await request.form()
-    raw = {}
-    for k, v in form.items():
-        if isinstance(v, UploadFile):
-            raw[k] = f"UploadFile({v.filename})"
-        else:
-            raw[k] = v
-    print(f"RAW FORM: {raw}")
+    form_data = {}
+    upload_file = None
 
-    org_id = form.get("org_id")
-    upload_file = form.get("file")
-    text = form.get("text")
-    tags_name = form.get("tags_name")
-    document_id = form.get("document_id")
-    process_stage_data = form.get("process_stage_data")
-    process_assignments_raw = form.get("process_assignments")
-    process_id_raw = form.get("process_id")
-    stage_id_raw = form.get("stage_id")
-    stage_ids_raw = form.get("stage_ids")
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" in content_type:
+        try:
+            form_data = await request.json()
+        except Exception as e:
+            logger.warning(f"Failed to parse JSON body in /api/v1/kb/ingest: {e}")
+    else:
+        try:
+            form = await request.form()
+            raw = {}
+            for k, v in form.items():
+                if isinstance(v, UploadFile):
+                    upload_file = v
+                    raw[k] = f"UploadFile({v.filename})"
+                else:
+                    form_data[k] = v
+                    raw[k] = v
+            print(f"RAW FORM: {raw}")
+        except Exception:
+            try:
+                form_data = await request.json()
+            except Exception:
+                pass
+
+    org_id = form_data.get("org_id")
+    if not upload_file:
+        upload_file = form_data.get("file")
+    text = form_data.get("text")
+    tags_name = form_data.get("tags_name")
+    document_id = form_data.get("document_id")
+    process_stage_data = form_data.get("process_stage_data")
+    process_assignments_raw = form_data.get("process_assignments")
+    process_id_raw = form_data.get("process_id")
+    stage_id_raw = form_data.get("stage_id")
+    stage_ids_raw = form_data.get("stage_ids")
 
     if not org_id:
         return JSONResponse({"status_code": 400, "status": "error", "error": "org_id is required"}, status_code=400)
@@ -1024,7 +1044,11 @@ async def ingest_kb_data(request: Request):
 
     try:
         def parse_list(val):
-            return [v.strip() for v in val.split(",")] if val else None
+            if isinstance(val, list):
+                return [str(v).strip() for v in val if str(v).strip()]
+            if isinstance(val, str):
+                return [v.strip() for v in val.split(",") if v.strip()]
+            return None
 
         parsed_process_assignments = None
         parsed_process_id = None
