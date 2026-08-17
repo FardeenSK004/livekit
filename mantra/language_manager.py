@@ -2,11 +2,9 @@
 Production-Grade Multilingual Language Manager for Mantra Voice Agent.
 
 Architecture:
-- LanguageIntentParser: Semantic token-based intent analyzer for explicit language switch requests.
-- NativeLanguageDetector: Unicode script block inspector & langdetect fallback.
-- PhoneticClassifier: Subword character 3-gram classifier for Romanized Indian speech.
-- LanguageHysteresisTracker: Hysteresis state machine for stability and code-switching tolerance.
-- LanguageManager: High-level pipeline coordinator for STT/TTS and system prompts.
+- NativeLanguageDetector: Unicode script block inspector & statistical ML (langdetect) model.
+- LanguageHysteresisTracker: Hysteresis state machine for smooth conversational transitions.
+- LanguageManager: Coordinates dynamic language orchestration across STT, LLM prompt, and Cartesia TTS.
 """
 
 import asyncio
@@ -40,68 +38,17 @@ NATIVE_SCRIPTS: Dict[str, str] = {
     "mr": "Devanagari (मराठी)",
 }
 
-# ── 1. Semantic Token Intent Parser ──────────────────────────────────────
 
-class LanguageIntentParser:
-    """
-    Parses explicit language switch requests using clean semantic token matching.
-    Avoids brittle regex string constructions or hardcoded string lists.
-    """
-
-    LANGUAGE_ENTITIES: Dict[str, str] = {
-        "kannada": "kn", "kan": "kn", "ಕನ್ನಡ": "kn",
-        "telugu": "te", "tel": "te", "తెలుగు": "te",
-        "hindi": "hi", "hin": "hi", "हिंदी": "hi", "हिन्दी": "hi",
-        "marathi": "mr", "mar": "mr", "मराठी": "mr",
-        "english": "en", "eng": "en",
-    }
-
-    INTENT_INDICATORS: Set[str] = {
-        "speak", "talk", "continue", "switch", "use", "baat", "bolo",
-        "bolie", "mathadi", "matladandi", "bola", "please", "can", "let's"
-    }
-
-    def parse_explicit_intent(self, text: str) -> Optional[str]:
-        """Detects if an utterance expresses an explicit request to switch language."""
-        text_lower = text.lower().strip()
-        words = [w.strip(".,!?-':;()\"") for w in text_lower.split() if w.strip(".,!?-':;()\"")]
-        if not words:
-            return None
-
-        # 1. Identify target language entity
-        target_code = None
-        for word in words:
-            for entity, code in self.LANGUAGE_ENTITIES.items():
-                if word == entity or word.startswith(entity):
-                    target_code = code
-                    break
-            if target_code:
-                break
-
-        if not target_code:
-            return None
-
-        # 2. Verify if the utterance expresses a switch directive
-        has_intent_word = any(w in self.INTENT_INDICATORS for w in words)
-        is_short_directive = len(words) <= 5
-
-        if has_intent_word or is_short_directive:
-            logger.info(f"[LANG] Explicit language switch intent parsed: '{text}' -> {target_code}")
-            return target_code
-
-        return None
-
-
-# ── 2. Native Script & Block Inspector ───────────────────────────────────
+# ── 1. Unicode Script & Statistical ML Language Detector ─────────────────
 
 class NativeLanguageDetector:
     """
     Deterministic Unicode script block profiling & statistical ML language detection.
-    Operates without hardcoded keyword dictionaries.
+    Zero hardcoded keyword lists or brittle phonetic lookup dictionaries.
     """
 
-    def detect(self, text: str, current_lang: str) -> Tuple[Optional[str], float]:
-        """Detects language code and confidence for native scripts."""
+    def detect(self, text: str, current_lang: str = "en") -> Tuple[Optional[str], float]:
+        """Detects language code and confidence for an utterance."""
         counts = {"devanagari": 0, "kannada": 0, "telugu": 0, "latin": 0}
         for ch in text:
             code = ord(ch)
@@ -118,79 +65,44 @@ class NativeLanguageDetector:
         if total == 0:
             return None, 0.0
 
-        if counts["kannada"] > 0 and counts["kannada"] >= max(counts["devanagari"], counts["telugu"]):
+        # 1. Kannada Unicode script block
+        if counts["kannada"] > 0 and counts["kannada"] >= max(counts["devanagari"], counts["telugu"], counts["latin"]):
             return "kn", counts["kannada"] / total
 
-        if counts["telugu"] > 0 and counts["telugu"] >= max(counts["devanagari"], counts["kannada"]):
+        # 2. Telugu Unicode script block
+        if counts["telugu"] > 0 and counts["telugu"] >= max(counts["devanagari"], counts["kannada"], counts["latin"]):
             return "te", counts["telugu"] / total
 
-        if counts["devanagari"] > 0:
+        # 3. Devanagari script block -> ML classification between Marathi and Hindi
+        if counts["devanagari"] > 0 and counts["devanagari"] >= counts["latin"]:
             ratio = counts["devanagari"] / total
             try:
                 detected = langdetect.detect(text)
                 if detected in ["mr", "hi"]:
-                    return detected, ratio
+                    return detected, max(ratio, 0.9)
             except Exception:
                 pass
             return current_lang if current_lang in ["hi", "mr"] else "hi", ratio
 
+        # 4. Latin script block -> Statistical ML detection
         if counts["latin"] > 0:
-            return "latin", counts["latin"] / total
+            ratio = counts["latin"] / total
+            try:
+                detected = langdetect.detect(text)
+                if detected in SUPPORTED_LANGUAGES:
+                    return detected, 0.95
+            except Exception:
+                pass
+            return "en", ratio
 
         return None, 0.0
 
 
-# ── 3. Subword Phonetic Classifier ───────────────────────────────────────
-
-class PhoneticClassifier:
-    """
-    Subword character trigram log-likelihood classifier for Romanized Indian speech.
-    """
-
-    TRIGRAMS: Dict[str, Set[str]] = {
-        "kn": {"nan", "ang", "bek", "tha", "mat", "adb", "nam", "ell", "iga", "ide", "eya", "rut", "got"},
-        "hi": {"muj", "ujh", "jhe", "kar", "arn", "cha", "ahi", "hai", "hoo", "rah", "thi", "kya", "aap"},
-        "te": {"naa", "aak", "aku", "kav", "val", "ali", "che", "eyl", "und", "ndi", "elg", "tel"},
-        "mr": {"mal", "ala", "pah", "ahi", "ije", "mha", "anj", "kas", "bol", "tay", "lta", "lte"},
-    }
-
-    def classify_romanized(self, text: str) -> Tuple[str, float]:
-        """Classifies Latin-script text using character 3-gram likelihood scoring."""
-        words = [w.lower().strip(".,!?-':;()\"") for w in text.split() if w.strip(".,!?-':;()\"")]
-        if not words:
-            return "en", 0.9
-
-        trigrams = set()
-        for w in words:
-            if len(w) >= 3:
-                for i in range(len(w) - 2):
-                    trigrams.add(w[i:i+3])
-
-        if not trigrams:
-            return "en", 0.9
-
-        scores = {lang: len(trigrams.intersection(profile)) / max(1, len(profile)) for lang, profile in self.TRIGRAMS.items()}
-        best_lang, best_score = max(scores.items(), key=lambda x: x[1])
-
-        if best_score > 0.08:
-            return best_lang, min(1.0, best_score * 3.0)
-
-        # Fallback to langdetect ML model for standard English / foreign text
-        try:
-            detected = langdetect.detect(text)
-            if detected in SUPPORTED_LANGUAGES:
-                return detected, 0.9
-        except Exception:
-            pass
-
-        return "en", 0.95
-
-
-# ── 4. Language Hysteresis Tracker ───────────────────────────────────────
+# ── 2. Language Hysteresis Tracker ───────────────────────────────────────
 
 class LanguageHysteresisTracker:
     """
-    Hysteresis state machine tracking language transitions and code-switching tolerance.
+    Hysteresis state machine tracking language transitions and stability.
     """
 
     def __init__(self, initial_lang: str):
@@ -202,30 +114,13 @@ class LanguageHysteresisTracker:
         self,
         detected_lang: str,
         confidence: float,
-        is_explicit: bool,
-        is_native_script: bool,
-        has_indic_context: bool,
     ) -> Tuple[str, bool]:
-        """Evaluates state transition based on confidence, script, and hysteresis."""
-        if is_explicit:
-            if detected_lang != self.current_language:
-                old = self.current_language
-                self.current_language = detected_lang
-                self._reset()
-                logger.info(f"[LANG] Explicit switch applied: {old} -> {self.current_language}")
-                return self.current_language, True
-            return self.current_language, False
-
-        # Code-switching tolerance: English words inside active Indian language
-        if detected_lang == "en" and self.current_language in ["hi", "kn", "te", "mr"] and has_indic_context:
-            logger.info(f"[LANG] Hysteresis: preserved {self.current_language} (code-switched English words)")
-            return self.current_language, False
-
-        if detected_lang == self.current_language:
+        """Evaluates state transition based on confidence and hysteresis."""
+        if not detected_lang or detected_lang == self.current_language:
             self._reset()
             return self.current_language, False
 
-        if is_native_script or confidence >= 0.75:
+        if confidence >= 0.75:
             old = self.current_language
             self.current_language = detected_lang
             self._reset()
@@ -251,18 +146,17 @@ class LanguageHysteresisTracker:
         self.pending_count = 0
 
 
-# ── 5. Main Language Manager ─────────────────────────────────────────────
+# ── 3. Main Language Manager ─────────────────────────────────────────────
 
 class LanguageManager:
     """
     Coordinating manager for multilingual speech-to-text, text-to-speech, and prompt orchestration.
+    Zero hardcoded keyword dictionaries.
     """
 
     def __init__(self, initial_language: str = "en"):
         normalized_init = self.normalize_language_code(initial_language)
-        self.intent_parser = LanguageIntentParser()
-        self.native_detector = NativeLanguageDetector()
-        self.phonetic_classifier = PhoneticClassifier()
+        self.detector = NativeLanguageDetector()
         self.tracker = LanguageHysteresisTracker(normalized_init)
         logger.info(f"[LANG] LanguageManager active with language='{self.tracker.current_language}'")
 
@@ -285,46 +179,25 @@ class LanguageManager:
         return "en"
 
     def process_user_utterance(self, text: str) -> Tuple[str, bool]:
-        """Processes a user utterance and updates active language state."""
+        """Processes a user utterance and updates active language state using pure ML and script detection."""
         cleaned = text.strip()
         if not cleaned:
             return self.tracker.current_language, False
 
-        # Step 1: Semantic Intent Parsing
-        explicit_code = self.intent_parser.parse_explicit_intent(cleaned)
-        if explicit_code:
-            return self.tracker.evaluate_transition(
-                detected_lang=explicit_code,
-                confidence=1.0,
-                is_explicit=True,
-                is_native_script=False,
-                has_indic_context=False,
-            )
-
-        # Step 2: Native Script & ML Detection
-        script_lang, confidence = self.native_detector.detect(cleaned, self.tracker.current_language)
-
-        is_native_script = False
-        has_indic_context = False
-
-        if script_lang == "latin":
-            detected_lang, confidence = self.phonetic_classifier.classify_romanized(cleaned)
-            has_indic_context = detected_lang in ["hi", "kn", "te", "mr"] and confidence > 0.3
-        elif script_lang:
-            detected_lang = script_lang
-            is_native_script = True
-            has_indic_context = True
-        else:
+        detected_lang, confidence = self.detector.detect(cleaned, self.tracker.current_language)
+        if not detected_lang:
             detected_lang = self.tracker.current_language
+            confidence = 0.5
 
-        # Step 3: Hysteresis Evaluation
         return self.tracker.evaluate_transition(
             detected_lang=detected_lang,
             confidence=confidence,
-            is_explicit=False,
-            is_native_script=is_native_script,
-            has_indic_context=has_indic_context,
         )
+
+    @property
+    def current_language(self) -> str:
+        """Returns the active language code."""
+        return self.tracker.current_language
 
     def get_current_language(self) -> str:
         """Returns the active language code."""
@@ -349,23 +222,25 @@ class LanguageManager:
 # ── 6. All-Ears Multilingual Parallel STT Engine ────────────────────────
 
 def _score_transcript(lang: str, text: str, confidence: float) -> float:
-    """Scores a candidate transcript based on confidence, native script match, and ML detection."""
+    """Scores a candidate transcript based on confidence, native script match, utterance length, and ML detection."""
     text = text.strip()
     if not text:
         return 0.0
 
     score = confidence
+    word_count = len(text.split())
+    length_bonus = min(word_count * 0.05, 0.3)
 
     has_kannada = any(0x0C80 <= ord(c) <= 0x0CFF for c in text)
     has_telugu = any(0x0C00 <= ord(c) <= 0x0C7F for c in text)
     has_devanagari = any(0x0900 <= ord(c) <= 0x097F for c in text)
 
     if lang == "kn" and has_kannada:
-        score += 0.4
+        score += 0.5 + length_bonus
     elif lang == "te" and has_telugu:
-        score += 0.4
+        score += 0.5 + length_bonus
     elif lang in ("mr", "hi") and has_devanagari:
-        score += 0.4
+        score += 0.5 + length_bonus
         try:
             detected = langdetect.detect(text)
             if detected == lang:
@@ -373,7 +248,7 @@ def _score_transcript(lang: str, text: str, confidence: float) -> float:
         except Exception:
             pass
     elif lang == "en" and not (has_kannada or has_telugu or has_devanagari):
-        score += 0.3
+        score += 0.4 + length_bonus
 
     return score
 
@@ -398,6 +273,8 @@ class MultilingualParallelStream(stt.RecognizeStream):
         self._pending_finals: List[Tuple[str, stt.SpeechEvent]] = []
         self._debounce_task: Optional[asyncio.Task] = None
         self._speaking: bool = False
+        self._last_final_emitted_time: float = 0.0
+        self._last_speech_started_time: float = 0.0
         self._lock = asyncio.Lock()
 
     async def _run(self) -> None:
@@ -408,7 +285,7 @@ class MultilingualParallelStream(stt.RecognizeStream):
                     language=lang,
                     smart_format=True,
                     numerals=True,
-                    endpointing_ms=100,
+                    endpointing_ms=250,
                     utterance_end_ms=1000,
                 )
                 stream = child_stt.stream()
@@ -465,6 +342,7 @@ class MultilingualParallelStream(stt.RecognizeStream):
             )
             self._pending_finals.clear()
             self._debounce_task = None
+            self._last_final_emitted_time = time.time()
 
         if best_ev.alternatives:
             best_ev.alternatives[0].language = LanguageCode(best_lang)
@@ -474,6 +352,7 @@ class MultilingualParallelStream(stt.RecognizeStream):
         try:
             async for ev in stream:
                 if ev.type == stt.SpeechEventType.START_OF_SPEECH:
+                    self._last_speech_started_time = time.time()
                     if not self._speaking:
                         self._speaking = True
                         self._event_ch.send_nowait(ev)
@@ -484,14 +363,17 @@ class MultilingualParallelStream(stt.RecognizeStream):
                 elif ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
                     if not ev.alternatives or not ev.alternatives[0].text.strip():
                         continue
+                    now = time.time()
+                    # Drop late-arriving residual transcripts from lagging streams for an already resolved turn
+                    if (now - self._last_final_emitted_time < 1.0) and (self._last_speech_started_time <= self._last_final_emitted_time):
+                        continue
+
                     async with self._lock:
                         self._pending_finals.append((lang, ev))
                         if self._debounce_task is None or self._debounce_task.done():
                             self._debounce_task = asyncio.create_task(self._flush_finals(0.08))
                 elif ev.type == stt.SpeechEventType.RECOGNITION_USAGE:
                     self._event_ch.send_nowait(ev)
-        except Exception:
-            pass
         except Exception:
             pass
 

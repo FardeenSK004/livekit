@@ -379,6 +379,9 @@ class PostgresKnowledgeBase(KnowledgeBase):
           Tier C: tag-only match if B returns nothing and tags are present.
           Tier D: list available docs if all above return nothing.
         """
+        kb_ids = [str(k) for k in kb_ids] if kb_ids else []
+        tags = [str(t) for t in tags] if tags else None
+
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             use_generated_column = await self._supports_generated_text_search(conn)
@@ -452,6 +455,7 @@ class PostgresKnowledgeBase(KnowledgeBase):
         """List pages available in the scoped KBs (title + tags) for no-match fallback."""
         if not kb_ids:
             return []
+        kb_ids = [str(k) for k in kb_ids]
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(

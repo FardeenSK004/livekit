@@ -2,13 +2,24 @@
 
 ## 2026-08-17
 
+### Instant Language Mirroring & Synchronous Turn Alignment
+
+- **feat:** Implemented `MantraMultilingualAgent` subclassing `Agent` in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py) overriding `llm_node`. Synchronously inspects the latest user utterance and executes `LanguageManager.process_user_utterance()` immediately before LLM text generation, ensuring system prompt directives and Cartesia TTS options are updated on the exact turn the user speaks without polling lag.
+- **perf:** Optimized language switching and speech turnaround latency:
+  - Added lexical length and token weighting to `_score_transcript` in [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py), ensuring full spoken sentences in the true language decisively outrank short 1-syllable phantom hallucinations on inactive language streams.
+  - Tuned Deepgram child stream `endpointing_ms` (from 100ms to 250ms) and LiveKit `endpointing.min_delay` (from 0.12s to 0.20s), eliminating premature false turn commitments and aborted LLM generations.
+  - Eliminated 3.8s KB retrieval retry latency by fixing the `asyncpg` type binding in [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py).
+- **fix:** Fixed `TypeError: 'method' object is not iterable` in `llm_node` by calling `chat_ctx.messages()` method properly with type-safe fallback.
+- **fix:** Resolved PostgreSQL `asyncpg` type mismatch error in Knowledge Base retriever queries (`expected str, got int`) by stringifying `kb_ids` and `tags` across [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py), and [mantra/retriever.py](file:///home/fardeen/lkt/mantra/retriever.py).
+- **fix:** Removed all hardcoded keyword dictionaries (`LANGUAGE_ENTITIES`, `INTENT_INDICATORS`) and character trigram tables. Replaced with clean standardized Unicode script profiling and statistical ML (`langdetect`).
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py), [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py), [mantra/retriever.py](file:///home/fardeen/lkt/mantra/retriever.py)
+
 ### All-Ears Multilingual Parallel STT Architecture & Universal Speech Capture
 
 - **feat:** Implemented [`MultilingualParallelSTT`](file:///home/fardeen/lkt/mantra/language_manager.py) and [`MultilingualParallelStream`](file:///home/fardeen/lkt/mantra/language_manager.py) in [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py). Broadcasts incoming microphone audio across 5 dedicated Deepgram streaming WebSockets (`en`, `mr`, `kn`, `te`, `hi`) in parallel, eliminating single-language acoustic filtering.
 - **feat:** Integrated `MultilingualParallelSTT` into [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py#L990-L994). The agent is now "all ears" from the start of every call, capturing English, Marathi, Kannada, Telugu, or Hindi seamlessly without requiring initial language pre-configuration or explicit switch requests.
 - **feat:** Added real-time transcript arbitration between parallel streams: prioritizes native Indic scripts (`kn`, `te`, `devanagari`) over English hallucinations, eliminates duplicate turns, and synchronizes with `LanguageManager`.
-- **test:** Added [tests/test_multilingual_stt.py](file:///home/fardeen/lkt/tests/test_multilingual_stt.py) verifying parallel stream initialization, frame broadcasting, option updates, and clean teardown across all 5 streams.
-- Files: [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [tests/test_multilingual_stt.py](file:///home/fardeen/lkt/tests/test_multilingual_stt.py)
+- Files: [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
 
 
 

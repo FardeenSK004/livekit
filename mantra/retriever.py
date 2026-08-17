@@ -22,6 +22,9 @@ class KnowledgeRetriever:
         if not kb_ids:
             return "No Knowledge Base configured for this session."
 
+        kb_ids = [str(k) for k in kb_ids]
+        tags = [str(t) for t in tags] if tags else None
+
         cache_key = (query.lower().strip(), tuple(sorted(kb_ids)), tuple(sorted(tags)) if tags else None)
 
         if cache_key in self.session_cache:

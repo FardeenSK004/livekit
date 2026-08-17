@@ -72,6 +72,7 @@ from livekit.agents import (
     llm,
 )
 from livekit.agents import TurnHandlingOptions
+from livekit.agents.voice.agent import ModelSettings
 
 from livekit.plugins import openai, google, silero, deepgram
 
@@ -663,16 +664,15 @@ async def entrypoint(ctx: JobContext):
                     logger.warning("[DIAG] Inbound call has no phone_number in metadata")
 
             if meta_payload.get("org_id"):
-                kb_ids_list.append(meta_payload["org_id"])
+                kb_ids_list.append(str(meta_payload["org_id"]))
             if "kb_id" in meta_payload and meta_payload["kb_id"]:
-                if meta_payload["kb_id"] not in kb_ids_list:
-                    kb_ids_list.append(meta_payload["kb_id"])
+                kb_ids_list.append(str(meta_payload["kb_id"]))
             if "kb_ids" in meta_payload and isinstance(meta_payload["kb_ids"], list):
-                kb_ids_list.extend(meta_payload["kb_ids"])
+                kb_ids_list.extend([str(k) for k in meta_payload["kb_ids"]])
             if "kb_tags" in meta_payload and isinstance(meta_payload["kb_tags"], list):
-                kb_tags_list.extend(meta_payload["kb_tags"])
-            kb_ids_list = list(set(kb_ids_list))
-            kb_tags_list = list(set(kb_tags_list))
+                kb_tags_list.extend([str(t) for t in meta_payload["kb_tags"]])
+            kb_ids_list = list(set([str(k) for k in kb_ids_list if k]))
+            kb_tags_list = list(set([str(t) for t in kb_tags_list if t]))
         except Exception as e:
             logger.error(f"Failed to parse/resolve metadata: {e}")
 
@@ -995,12 +995,12 @@ Follow these specific instructions:
     session = AgentSession(
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(
-                unlikely_threshold=0.35,  # Lower threshold from default 0.56 so turn finishes faster when user pauses
+                unlikely_threshold=0.35,  # Calibrated for prompt conversational turn completion
             ),
             endpointing={
                 "mode": "dynamic",
-                "min_delay": 0.12,
-                "max_delay": 0.5,
+                "min_delay": 0.20,
+                "max_delay": 0.50,
             },
             interruption={
                 "mode": "adaptive",
@@ -1011,7 +1011,7 @@ Follow these specific instructions:
             },
         ),
         vad=silero.VAD.load(
-            min_speech_duration=0.12,
+            min_speech_duration=0.10,
             min_silence_duration=0.25,
         ),
         stt=stt_engine,
@@ -1023,7 +1023,54 @@ Follow these specific instructions:
 
     agent_tools = [fnc_ctx.end_call, fnc_ctx.search_knowledge_base]
 
-    agent = Agent(
+    class MantraMultilingualAgent(Agent):
+        async def llm_node(
+            self,
+            chat_ctx: llm.ChatContext,
+            tools: list[llm.Tool],
+            model_settings: ModelSettings,
+        ):
+            # Synchronously align language before LLM generates text
+            try:
+                msgs = list(chat_ctx.messages()) if callable(getattr(chat_ctx, "messages", None)) else (chat_ctx.messages if isinstance(getattr(chat_ctx, "messages", None), list) else [])
+                if msgs:
+                    user_msgs = [m for m in msgs if hasattr(m, 'role') and str(m.role).lower() in ('user', 'caller')]
+                    if user_msgs:
+                        last_user_msg = user_msgs[-1]
+                        content = " ".join([str(c) for c in last_user_msg.content]) if isinstance(last_user_msg.content, list) else str(last_user_msg.content)
+                        if content and not content.startswith("[System:"):
+                            new_lang, switched = language_mgr.process_user_utterance(content)
+                            if switched:
+                                old_lang = call_state.get("current_language", "en")
+                                call_state["current_language"] = new_lang
+                                logger.info(f"[LANG] Immediate llm_node switch: {old_lang} -> {new_lang}")
+                                try:
+                                    tts_engine.update_options(language=new_lang, voice=voice_id)
+                                    logger.info(f"[LANG] TTS updated to language='{new_lang}' (voice={voice_id})")
+                                except Exception as tts_err:
+                                    logger.error(f"[LANG] Failed to update TTS options: {tts_err}")
+                                try:
+                                    stt_engine.update_options(language=new_lang)
+                                except Exception as stt_err:
+                                    logger.error(f"[LANG] Failed to update STT options: {stt_err}")
+
+                            # Synchronously update the language directive in the system message inside chat_ctx
+                            directive = language_mgr.get_prompt_directive()
+                            for m in msgs:
+                                if hasattr(m, 'role') and str(m.role).lower() in ('system',):
+                                    sys_text = " ".join([str(c) for c in m.content]) if isinstance(m.content, list) else str(m.content)
+                                    if "<!-- LANGUAGE_DIRECTIVE_START -->" in sys_text and "<!-- LANGUAGE_DIRECTIVE_END -->" in sys_text:
+                                        pref = sys_text.split("<!-- LANGUAGE_DIRECTIVE_START -->")[0]
+                                        suff = sys_text.split("<!-- LANGUAGE_DIRECTIVE_END -->")[1]
+                                        new_sys_content = f"{pref}<!-- LANGUAGE_DIRECTIVE_START -->\n{directive}\n<!-- LANGUAGE_DIRECTIVE_END -->{suff}"
+                                        m.content = [new_sys_content] if isinstance(m.content, list) else new_sys_content
+            except Exception as align_err:
+                logger.error(f"[LANG] Error aligning language in llm_node: {align_err}")
+
+            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+                yield chunk
+
+    agent = MantraMultilingualAgent(
         instructions=initial_instructions,
         tools=agent_tools
     )
