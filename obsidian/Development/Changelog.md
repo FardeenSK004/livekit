@@ -7,7 +7,8 @@
 - **fix:** Fixed issue where HTTP `POST /api/v1/kb/ingest` failed with `400 Bad Request: org_id is required` when sending text KB payloads with `Content-Type: application/json`.
 - **feat:** Updated `ingest_kb_data` in [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py#L952-L985) to inspect request content type and seamlessly parse both `application/json` and `multipart/form-data` / `application/x-www-form-urlencoded` payloads.
 - **feat:** Updated `parse_list` helper to handle list data types directly when passed in JSON body payloads.
-- Files: [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py)
+- **fix:** Fixed `asyncpg.exceptions.UndefinedColumnError: column "embedding" of relation "kb_pages" does not exist` during KB ingestion (`POST /api/v1/kb/ingest`). `PostgresKnowledgeBase.add_page()` in [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py#L270-L310) now checks `self._supports_embeddings(conn)` before attempting to insert into the `embedding` column, with automatic exception fallback to standard FTS insertion if the pgvector `embedding` column does not exist in the database.
+- Files: [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py), [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py)
 
 ## 2026-08-14
 

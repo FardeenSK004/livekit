@@ -270,22 +270,40 @@ class PostgresKnowledgeBase(KnowledgeBase):
         embedding = page.embedding
 
         async with pool.acquire() as conn:
-            if embedding is not None:
-                row = await conn.fetchrow(
-                    """
-                    INSERT INTO kb_pages (id, kb_id, title, content, source_type, page_meta, content_in_text, embedding)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
-                    RETURNING id
-                """,
-                    uuid.UUID(page.id),
-                    kb_id,
-                    title,
-                    content,
-                    source_type,
-                    json.dumps(page_meta),
-                    content_in_text,
-                    _embedding_to_text(embedding),
-                )
+            supports_emb = await self._supports_embeddings(conn)
+            if embedding is not None and supports_emb:
+                try:
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO kb_pages (id, kb_id, title, content, source_type, page_meta, content_in_text, embedding)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
+                        RETURNING id
+                    """,
+                        uuid.UUID(page.id),
+                        kb_id,
+                        title,
+                        content,
+                        source_type,
+                        json.dumps(page_meta),
+                        content_in_text,
+                        _embedding_to_text(embedding),
+                    )
+                except asyncpg.exceptions.UndefinedColumnError:
+                    self._use_embeddings = False
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO kb_pages (id, kb_id, title, content, source_type, page_meta, content_in_text)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        RETURNING id
+                    """,
+                        uuid.UUID(page.id),
+                        kb_id,
+                        title,
+                        content,
+                        source_type,
+                        json.dumps(page_meta),
+                        content_in_text,
+                    )
             else:
                 row = await conn.fetchrow(
                     """
