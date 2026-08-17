@@ -5,6 +5,7 @@ import os
 import datetime
 import aiohttp
 from mantra.email_alerts import send_crash_email
+from mantra.language_manager import LanguageManager, MultilingualParallelSTT
 import sys
 
 # ── Suppress OpenTelemetry 429 errors ──────────────────────────────────
@@ -726,13 +727,8 @@ CORE BEHAVIOR:
 - This is a PHONE CALL. Speak naturally.
 - Keep responses SHORT (1-2 sentences).
 - Use natural fillers that match the caller's language (English: "Got it", "Sure"; Hindi: "Theek hai", "Haan").
-- LANGUAGE MATCHING (CRITICAL):
-  * Start in English (or the language specified in call parameters).
-  * MATCH the caller's language every turn. English → English. Hindi → Hindi (Devanagari script). Kannada → Kannada (Kannada script). Telugu → Telugu (Telugu script). Marathi → Marathi (Devanagari script).
-  * INSTANT LANGUAGE SWITCH RULE (ZERO LAG): When the caller speaks in or asks to switch to another language (e.g. "Kannada dalli mathadi", "Nimage Kannada gothaa", "Kannada me bolo", "Can you speak Telugu?", "Marathi madhe bola", "Hindi me baat karo"), switch IMMEDIATELY in your VERY FIRST word of the reply. Do NOT output meta-explanations like "Sure, I can speak Kannada". Reply instantly in the requested language (e.g. "ಹೌದು! ನಾನು ಮಂತ್ರಾಕೇರ್ ನಿಂದ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ...").
-  * SCRIPT RULE: Write responses in the natural native script of that language — Hindi in Devanagari (e.g. "हाँ बिल्कुल, मैं मंत्राकेयर से रिया बोल रही हूँ..."), Kannada in Kannada script (e.g. "ನಮಸ್ಕಾರ, ನಾನು ಮಂತ್ರಾಕೇರ್ ನಿಂದ ರಿಯಾ ಮಾತನಾಡುತ್ತಿದ್ದೇನೆ..."), Telugu in Telugu script (e.g. "నమస్కారం, నేను మంత్రకేర్ నుండి రియా మాట్లాడుతున్నాను..."), and Marathi in Devanagari (e.g. "नमस्कार, मी मंत्राकेअरमधून रिया बोलतेय...").
-  * If the caller speaks in Kannada, Telugu, Marathi, or Hindi, switch to match them immediately in their language and native script.
-  * If the caller switches back to English, switch back immediately. Never stay stuck in one language if the caller changes.
+<!-- LANGUAGE_DIRECTIVE_START -->
+<!-- LANGUAGE_DIRECTIVE_END -->
 - Sound like a helpful human friend, not a robot.
 - Do NOT use markdown, bullet points, or special characters.
 - If the user pauses, wait patiently for them to finish.
@@ -871,7 +867,7 @@ Follow these specific instructions:
             initial_instructions += "2. DO NOT push for an appointment if the user hasn't explicitly agreed or if they are asking about other things. Let the conversation flow naturally.\n"
             initial_instructions += "3. Answer user's questions DIRECTLY without appending a sales pitch or appointment request at the end of every turn.\n"
             initial_instructions += "4. If the user asks to speak to a human or asks to be transferred — apologize and explain that human transfer is currently unavailable. Do not promise transfer, and if they insist, politely end the call.\n"
-            initial_instructions += "5. DYNAMIC MULTILINGUAL SWITCHING: You MUST dynamically switch language to match the caller ANY time they speak in Kannada, Telugu, Marathi, Hindi, or English — even if the prompt specifies English or only mentions Hindi. If the caller speaks Kannada (e.g. 'Kannada dalli mathadi', 'Nimage Kannada barutha', or any Kannada phrases), switch IMMEDIATELY in your very first word to Kannada in native Kannada script (ಕನ್ನಡ). If the caller speaks Telugu, switch to Telugu (తెలుగు). If Marathi, switch to Marathi in Devanagari (मराठी). If Hindi, switch to Hindi in Devanagari (हिन्दी). If English, switch to English. Match the caller's language naturally and instantly on every turn.\n"
+            initial_instructions += "5. LANGUAGE CONSISTENCY: Always respond in the caller's current conversational language as specified in the CURRENT CONVERSATIONAL LANGUAGE directive.\n"
 
 
             if is_inbound:
@@ -956,7 +952,8 @@ Follow these specific instructions:
         logger.info("Using OpenAI LLM")
         llm_engine = openai.LLM(model="gpt-4o-mini")
     # TTS via LiveKit Inference — Cartesia provider
-    language = "en"
+    # Language Manager & TTS via LiveKit Inference — Cartesia provider
+    raw_lang = None
     if "payload" in locals() and isinstance(payload, dict):
         ai_p = payload.get("ai_payload") if isinstance(payload.get("ai_payload"), dict) else {}
         raw_lang = (
@@ -965,24 +962,21 @@ Follow these specific instructions:
             or ai_p.get("language")
             or ai_p.get("lang")
         )
-        if raw_lang:
-            raw_lang_str = str(raw_lang).lower().strip()
-            if raw_lang_str in ["kn", "kannada", "kn-in"]:
-                language = "kn"
-            elif raw_lang_str in ["te", "telugu", "te-in"]:
-                language = "te"
-            elif raw_lang_str in ["mr", "marathi", "mr-in"]:
-                language = "mr"
-            elif raw_lang_str in ["hi", "hindi", "hi-in"]:
-                language = "hi"
-            else:
-                language = raw_lang_str
 
-    if language:
-        language = str(language).lower()
+    language_mgr = LanguageManager(initial_language=raw_lang)
+    language = language_mgr.get_current_language()
+    call_state["current_language"] = language
 
-    logger.info(f"TTS Language resolved to: '{language}' (None means auto-detect)")
-    logger.info(f"TTS Voice: {voice_id} | Speed: {voice_speed}")
+    # Insert dynamic language directive into initial prompt instructions
+    directive_block = f"<!-- LANGUAGE_DIRECTIVE_START -->\n{language_mgr.get_prompt_directive()}\n<!-- LANGUAGE_DIRECTIVE_END -->"
+    if "<!-- LANGUAGE_DIRECTIVE_START -->" in initial_instructions and "<!-- LANGUAGE_DIRECTIVE_END -->" in initial_instructions:
+        pref = initial_instructions.split("<!-- LANGUAGE_DIRECTIVE_START -->")[0]
+        suff = initial_instructions.split("<!-- LANGUAGE_DIRECTIVE_END -->")[1]
+        initial_instructions = f"{pref}{directive_block}{suff}"
+    else:
+        initial_instructions += f"\n\n{directive_block}"
+
+    logger.info(f"[LANG] Initialized language state: '{language}' (Voice: {voice_id} | Speed: {voice_speed})")
 
     tts_engine = inference.TTS(
         model="cartesia/sonic-3",
@@ -993,15 +987,9 @@ Follow these specific instructions:
         }
     )
 
-    # Multilingual STT with code-switching support (endpointing=100ms for stable multilingual recognition)
-    stt_lang = language if language in ["kn", "te", "mr"] else "multi"
-    stt_engine = deepgram.STT(
-        model="nova-3",
-        language=stt_lang,
-        smart_format=True,
-        numerals=True,
-        endpointing_ms=100,
-        utterance_end_ms=1000,
+    # All-Ears Multilingual STT engine listening across en, mr, kn, te, hi in parallel
+    stt_engine = MultilingualParallelSTT(
+        languages=[language, "en", "mr", "kn", "te", "hi"]
     )
 
     session = AgentSession(
@@ -1042,12 +1030,12 @@ Follow these specific instructions:
     fnc_ctx.agent = agent
     fnc_ctx.session = session
 
-    # ── Transcript logging task ──────────────────────────────────────────
+    # ── Transcript logging & dynamic language switching task ─────────────
     _last_logged_history_size = 0
 
     async def transcript_logger():
         nonlocal _last_logged_history_size
-        await asyncio.sleep(5.0)  # let the conversation start
+        await asyncio.sleep(2.0)  # brief startup delay
         while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
             try:
                 if session and hasattr(session, 'history') and session.history:
@@ -1061,9 +1049,45 @@ Follow these specific instructions:
                             if content and not content.startswith("[System:"):
                                 content_preview = content[:200] + ("..." if len(content) > 200 else "")
                                 logger.info(f"[DIAG] TRANSCRIPT | {role}: {content_preview}")
+
+                                # Intercept caller/user utterances for dynamic language switching
+                                if str(role).lower() in ["user", "caller"]:
+                                    new_lang, switched = language_mgr.process_user_utterance(content)
+                                    if switched:
+                                        old_lang = call_state.get("current_language", "en")
+                                        call_state["current_language"] = new_lang
+                                        logger.info(f"[LANG] Language switch triggered: {old_lang} -> {new_lang}")
+
+                                        # 1. Dynamically update STT language options
+                                        try:
+                                            stt_engine.update_options(language=new_lang)
+                                            logger.info(f"[LANG] STT updated to language='{new_lang}'")
+                                        except Exception as stt_err:
+                                            logger.error(f"[LANG] Failed to update STT language: {stt_err}")
+
+                                        # 2. Dynamically update TTS language options (preserving voice & speed)
+                                        try:
+                                            tts_engine.update_options(language=new_lang, voice=voice_id)
+                                            logger.info(f"[LANG] TTS updated to language='{new_lang}' (voice={voice_id})")
+                                        except Exception as tts_err:
+                                            logger.error(f"[LANG] Failed to update TTS language: {tts_err}")
+
+                                        # 3. Dynamically update agent system instructions
+                                        try:
+                                            cur_inst = agent.instructions
+                                            if "<!-- LANGUAGE_DIRECTIVE_START -->" in cur_inst and "<!-- LANGUAGE_DIRECTIVE_END -->" in cur_inst:
+                                                pref = cur_inst.split("<!-- LANGUAGE_DIRECTIVE_START -->")[0]
+                                                suff = cur_inst.split("<!-- LANGUAGE_DIRECTIVE_END -->")[1]
+                                                new_directive = language_mgr.get_prompt_directive()
+                                                updated_inst = f"{pref}<!-- LANGUAGE_DIRECTIVE_START -->\n{new_directive}\n<!-- LANGUAGE_DIRECTIVE_END -->{suff}"
+                                                await agent.update_instructions(updated_inst)
+                                                logger.info(f"[LANG] Agent instructions updated to language='{new_lang}'")
+                                        except Exception as inst_err:
+                                            logger.error(f"[LANG] Failed to update agent prompt instructions: {inst_err}")
+
             except Exception as e:
                 logger.info(f"[DIAG] Transcript logger error: {e}")
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(0.4)
 
     transcript_task = asyncio.create_task(transcript_logger())
 

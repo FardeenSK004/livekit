@@ -219,10 +219,14 @@ async function loadCallHistory() {
             : '—';
         const phone = c.caller_number || c.client_phone || c.client_name || '—';
         const trunk = c.trunk_id || '—';
+        const attemptsCount = c.attempts_count || (Array.isArray(c.attempts) ? c.attempts.length : 1);
+        const attemptBadge = attemptsCount > 1
+            ? `<span class="badge-count" style="margin-left:6px; font-size:10px; padding:2px 6px; background:var(--accent); color:white; border-radius:10px;" title="${attemptsCount} attempts recorded">Attempt #${attemptsCount} (${attemptsCount - 1} Retries)</span>`
+            : '';
 
         return `
             <tr>
-                <td><span class="status-dot-sm ${statusClass}"></span>${c.status || 'Unknown'}</td>
+                <td><span class="status-dot-sm ${statusClass}"></span>${c.status || 'Unknown'}${attemptBadge}</td>
                 <td class="cell-mono" style="font-weight:600;">${c.call_id || '—'}</td>
                 <td>${phone}</td>
                 <td class="cell-mono">${trunk}</td>
@@ -275,6 +279,54 @@ function openCallModalByIndex(index) {
 
     const rawTranscript = call.transcript || call.call_log_raw?.call_transcript || call.call_log_raw?.transcript || call.call_log_raw?.conversation;
     renderTranscriptInModal(rawTranscript);
+
+    // Render Attempt History & Retries Timeline
+    const attempts = Array.isArray(call.attempts) && call.attempts.length > 0
+        ? call.attempts
+        : [{
+            attempted_at: call.created_at,
+            status: call.status,
+            ai_call_id: aiCallId,
+            duration: call.duration,
+            recording_url: call.recording_url,
+            summary: call.summary,
+        }];
+
+    const attemptsCountElem = document.getElementById('modal-attempts-count');
+    if (attemptsCountElem) {
+        attemptsCountElem.textContent = `${attempts.length} ${attempts.length > 1 ? 'Attempts' : 'Attempt'}`;
+    }
+
+    const timelineContainer = document.getElementById('modal-attempts-timeline');
+    if (timelineContainer) {
+        timelineContainer.innerHTML = attempts.map((att, attIdx) => {
+            const attNum = attIdx + 1;
+            const attTime = att.attempted_at ? new Date(att.attempted_at).toLocaleString() : 'N/A';
+            const attStatus = att.status || 'Unknown';
+            const attStatusClass = `status-${attStatus.toLowerCase().replace(/\s+/g, '-')}`;
+            const attDur = att.duration ? `${Math.floor(att.duration / 60)}m ${att.duration % 60}s` : '0s';
+            const attAiId = att.ai_call_id ? escapeHtml(att.ai_call_id) : '—';
+            const isLatest = attIdx === attempts.length - 1;
+
+            return `
+                <div style="background:var(--bg-surface); border:1px solid var(--border-default); border-radius:6px; padding:10px 12px; font-size:var(--text-xs); display:flex; flex-direction:column; gap:4px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-weight:700; color:var(--accent);">Attempt #${attNum} ${attNum > 1 ? '(Retry)' : ''}</span>
+                            <span class="status-badge ${attStatusClass}" style="font-size:10px; padding:2px 8px;">${escapeHtml(attStatus)}</span>
+                            ${isLatest ? '<span style="font-size:9px; background:#22c55e; color:white; padding:1px 6px; border-radius:4px; font-weight:600;">LATEST</span>' : ''}
+                        </div>
+                        <span style="font-family:var(--font-mono); color:var(--text-tertiary); font-size:11px;">⏰ ${escapeHtml(attTime)}</span>
+                    </div>
+                    <div style="display:flex; gap:16px; color:var(--text-secondary); font-size:11px; margin-top:2px;">
+                        <span>⏱️ Duration: <b style="color:var(--text-primary); font-family:var(--font-mono);">${attDur}</b></span>
+                        <span>🤖 AI Job ID: <b style="color:var(--accent); font-family:var(--font-mono);">${attAiId}</b></span>
+                    </div>
+                    ${att.summary ? `<div style="color:var(--text-secondary); font-size:11px; font-style:italic; margin-top:2px;">Summary: "${escapeHtml(att.summary)}"</div>` : ''}
+                </div>
+            `;
+        }).join('');
+    }
 
     document.getElementById('modal-raw-json').textContent = JSON.stringify(call.call_log_raw || {}, null, 2);
 

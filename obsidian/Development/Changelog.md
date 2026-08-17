@@ -2,6 +2,23 @@
 
 ## 2026-08-17
 
+### All-Ears Multilingual Parallel STT Architecture & Universal Speech Capture
+
+- **feat:** Implemented [`MultilingualParallelSTT`](file:///home/fardeen/lkt/mantra/language_manager.py) and [`MultilingualParallelStream`](file:///home/fardeen/lkt/mantra/language_manager.py) in [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py). Broadcasts incoming microphone audio across 5 dedicated Deepgram streaming WebSockets (`en`, `mr`, `kn`, `te`, `hi`) in parallel, eliminating single-language acoustic filtering.
+- **feat:** Integrated `MultilingualParallelSTT` into [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py#L990-L994). The agent is now "all ears" from the start of every call, capturing English, Marathi, Kannada, Telugu, or Hindi seamlessly without requiring initial language pre-configuration or explicit switch requests.
+- **feat:** Added real-time transcript arbitration between parallel streams: prioritizes native Indic scripts (`kn`, `te`, `devanagari`) over English hallucinations, eliminates duplicate turns, and synchronizes with `LanguageManager`.
+- **test:** Added [tests/test_multilingual_stt.py](file:///home/fardeen/lkt/tests/test_multilingual_stt.py) verifying parallel stream initialization, frame broadcasting, option updates, and clean teardown across all 5 streams.
+- Files: [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [tests/test_multilingual_stt.py](file:///home/fardeen/lkt/tests/test_multilingual_stt.py)
+
+
+
+### Multi-Attempt Call Retry Storage & Dashboard Timeline UI
+
+- **feat:** Updated `save_call_log_to_db()` in [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py#L48-L125) to auto-create and append retry attempt objects into the `attempts` `JSONB` column on `call_logs`. Preserves every attempt's timestamp (`attempted_at`), status, AI job ID, duration, summary, and payload without overwriting previous attempts.
+- **feat:** Updated `/api/v1/dashboard/calls` endpoint in [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py#L3673-L3755) to return `attempts` array and `attempts_count` for each call record.
+- **feat:** Updated Dashboard UI in [static/dashboard.html](file:///home/fardeen/lkt/static/dashboard.html) and [static/dashboard.js](file:///home/fardeen/lkt/static/dashboard.js): added attempt count badges on call history table rows and a detailed **Retry & Attempt History Timeline** modal section displaying exact attempt timestamps, status badges, durations, and AI summaries.
+- Files: [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py), [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py), [static/dashboard.html](file:///home/fardeen/lkt/static/dashboard.html), [static/dashboard.js](file:///home/fardeen/lkt/static/dashboard.js)
+
 ### KB Ingestion JSON & Form Payload Compatibility
 
 - **fix:** Fixed issue where HTTP `POST /api/v1/kb/ingest` failed with `400 Bad Request: org_id is required` when sending text KB payloads with `Content-Type: application/json`.

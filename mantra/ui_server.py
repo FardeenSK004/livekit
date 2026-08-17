@@ -3695,7 +3695,8 @@ async def dashboard_calls(request: Request, limit: int = 20, offset: int = 0, se
 
             query = f"""
                 SELECT call_id, status, recording_url, created_at, caller_number, called_number, trunk_id,
-                       call_log::json AS call_log
+                       call_log::json AS call_log,
+                       COALESCE(attempts, '[]'::jsonb) AS attempts
                 FROM call_logs
                 {where_clause}
                 ORDER BY created_at DESC
@@ -3722,6 +3723,18 @@ async def dashboard_calls(request: Request, limit: int = 20, offset: int = 0, se
                 cl = cl_raw
             else:
                 cl = {}
+
+            attempts_raw = row.get("attempts")
+            if isinstance(attempts_raw, str):
+                try:
+                    attempts_list = json.loads(attempts_raw)
+                except Exception:
+                    attempts_list = []
+            elif isinstance(attempts_raw, list):
+                attempts_list = attempts_raw
+            else:
+                attempts_list = []
+
             trunk_val = (
                 row["trunk_id"]
                 or cl.get("trunk_id")
@@ -3746,6 +3759,8 @@ async def dashboard_calls(request: Request, limit: int = 20, offset: int = 0, se
                     "summary": cl.get("ai_summary") or cl.get("summary") or "",
                     "transcript": cl.get("call_transcript") or cl.get("transcript") or cl.get("conversation") or None,
                     "purpose": (cl.get("prompt") or "")[:120],
+                    "attempts": attempts_list,
+                    "attempts_count": len(attempts_list),
                     "call_log_raw": cl,
                 }
             )

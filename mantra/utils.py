@@ -75,19 +75,49 @@ async def save_call_log_to_db(
             timeout=5.0,
         )
         logger.info(f"Successfully connected to PostgreSQL at {db_host}:{db_port}")
-        # Insert or update the call log
+
+        # Parse call_log to extract attempt metadata
+        log_data = {}
+        try:
+            log_data = json.loads(call_log) if isinstance(call_log, str) else call_log
+        except Exception:
+            pass
+
+        attempted_at = (
+            log_data.get("called_on")
+            or log_data.get("requested_at")
+            or datetime.now(tz=timezone.utc).isoformat()
+        )
+        ai_call_id = log_data.get("ai_call_id") or log_data.get("data", {}).get("ai_call_id") or ""
+        duration = log_data.get("call_duration") or log_data.get("call_duration_seconds") or 0
+
+        attempt_entry = {
+            "attempted_at": attempted_at,
+            "status": status,
+            "ai_call_id": ai_call_id,
+            "duration": duration,
+            "recording_url": recording_url or "",
+            "summary": log_data.get("ai_summary") or "",
+            "payload": log_data,
+        }
+
+        # Auto-ensure attempts column exists
+        await conn.execute("ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS attempts JSONB DEFAULT '[]'::jsonb;")
+
+        # Insert or update the call log, appending the attempt entry to attempts JSONB array
         query = """
-        INSERT INTO call_logs (call_id, call_log, status, recording_url, caller_number, called_number, trunk_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO call_logs (call_id, call_log, status, recording_url, caller_number, called_number, trunk_id, attempts)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, jsonb_build_array($8::jsonb))
         ON CONFLICT (call_id) DO UPDATE 
         SET call_log = EXCLUDED.call_log,
             status = EXCLUDED.status,
             recording_url = EXCLUDED.recording_url,
             caller_number = EXCLUDED.caller_number,
             called_number = EXCLUDED.called_number,
-            trunk_id = EXCLUDED.trunk_id;
+            trunk_id = EXCLUDED.trunk_id,
+            attempts = COALESCE(call_logs.attempts, '[]'::jsonb) || jsonb_build_array($8::jsonb)
         """
-        await conn.execute(query, call_id, call_log, status, recording_url, caller_number, called_number, trunk_id)
+        await conn.execute(query, call_id, call_log, status, recording_url, caller_number, called_number, trunk_id, json.dumps(attempt_entry))
         logger.info(f"Successfully saved call log to DB for call_id: {call_id}")
     except Exception as e:
         logger.error(f"Failed to save call log to DB: {e}")
