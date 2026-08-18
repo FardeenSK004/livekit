@@ -76,7 +76,17 @@ from livekit.agents.voice.agent import ModelSettings
 
 from livekit.plugins import openai, google, silero, deepgram
 
-from mantra.utils import SessionRecorder, upload_to_s3, send_to_backend, normalize_datetime, save_call_log_to_db, save_call_event, report_telemetry, format_e164_phone_number
+from mantra.utils import (
+    SessionRecorder,
+    upload_to_s3,
+    send_to_backend,
+    normalize_datetime,
+    save_call_log_to_db,
+    save_call_event,
+    report_telemetry,
+    format_e164_phone_number,
+    reconcile_process_and_stage_id,
+)
 from mantra.amd import detect_voicemail
 
 # Import knowledge base
@@ -389,6 +399,18 @@ class AssistantFunctions:
                             if sid is not None and str(sid) not in seen:
                                 seen.add(str(sid))
                                 result.append(str(sid))
+            psd = meta.get("process_stage_data")
+            if isinstance(psd, list):
+                for entry in psd:
+                    if isinstance(entry, dict):
+                        stages = entry.get("stages") or entry.get("stageDetails")
+                        if isinstance(stages, list):
+                            for stg in stages:
+                                if isinstance(stg, dict):
+                                    sid = stg.get("stage_id") or stg.get("id")
+                                    if sid is not None and str(sid) not in seen:
+                                        seen.add(str(sid))
+                                        result.append(str(sid))
         return result
 
     @property
@@ -1588,19 +1610,19 @@ Follow these specific instructions:
                 except Exception as e:
                     logger.error(f"[DIAG] finalize(): Failed to parse call metadata: {e}")
 
-                # For inbound calls, get process_id and stage_id from KB document used during call
+                # For inbound calls, store KB tracked process_id and stage_id hints
                 if call_payload.get("direction") == "inbound":
                     try:
                         if fnc_ctx and hasattr(fnc_ctx, "used_kb_process_ids"):
                             used_pids = fnc_ctx.used_kb_process_ids
                             if used_pids:
-                                call_payload["process_id"] = used_pids[0]
-                                logger.info(f"Using KB-tracked process_id for inbound: {used_pids[0]}")
+                                call_payload["kb_tracked_process_id"] = used_pids[0]
+                                logger.info(f"KB-tracked process_id hint for inbound: {used_pids[0]}")
                         if fnc_ctx and hasattr(fnc_ctx, "used_kb_stage_ids"):
                             used_sids = fnc_ctx.used_kb_stage_ids
                             if used_sids:
-                                call_payload["stage_id"] = used_sids[0]
-                                logger.info(f"Using KB-tracked stage_id for inbound: {used_sids[0]}")
+                                call_payload["kb_tracked_stage_id"] = used_sids[0]
+                                logger.info(f"KB-tracked stage_id hint for inbound: {used_sids[0]}")
                     except Exception as e:
                         logger.error(f"Failed to extract KB usage metadata: {e}")
 
@@ -1685,18 +1707,18 @@ Follow these specific instructions:
                     try:
                         if fnc_ctx and hasattr(fnc_ctx, "used_kb_process_ids"):
                             used_pids = fnc_ctx.used_kb_process_ids
-                            if used_pids and not call_payload.get("process_id"):
-                                call_payload["process_id"] = used_pids[0]
-                                logger.info(f"Using KB-tracked process_id for inbound before analysis: {used_pids[0]}")
+                            if used_pids and not call_payload.get("kb_tracked_process_id"):
+                                call_payload["kb_tracked_process_id"] = used_pids[0]
+                                logger.info(f"Using KB-tracked process_id hint for inbound before analysis: {used_pids[0]}")
                         if fnc_ctx and hasattr(fnc_ctx, "used_kb_stage_ids"):
                             used_sids = fnc_ctx.used_kb_stage_ids
-                            if used_sids and not call_payload.get("stage_id"):
-                                call_payload["stage_id"] = used_sids[0]
-                                logger.info(f"Using KB-tracked stage_id for inbound before analysis: {used_sids[0]}")
+                            if used_sids and not call_payload.get("kb_tracked_stage_id"):
+                                call_payload["kb_tracked_stage_id"] = used_sids[0]
+                                logger.info(f"Using KB-tracked stage_id hint for inbound before analysis: {used_sids[0]}")
                     except Exception as e:
                         logger.error(f"Failed to extract KB usage metadata before analysis: {e}")
 
-                current_stage_id = call_payload.get("stage_id")
+                current_stage_id = call_payload.get("stage_id") or call_payload.get("kb_tracked_stage_id")
                 stage_details = call_payload.get("stageDetails", [])
                 kb_process_stage_data = (
                     fnc_ctx.used_process_stage_data 
@@ -1715,6 +1737,7 @@ Follow these specific instructions:
                 summary_text = None
                 new_stage_id = current_stage_id
                 llm_analysis_ran = False
+                derived_process_id = None
                 derived_user_intent = None
                 client_custom_fields = call_payload.get("client_custom_fields", {})
                 if not isinstance(client_custom_fields, dict):
@@ -1761,8 +1784,11 @@ Follow these specific instructions:
                             llm_analysis_ran = True
                             derived_process_id = analysis.get("process_id")
                             derived_user_intent = analysis.get("user_intent")
-                            if derived_process_id and not call_payload.get("process_id"):
+                            if derived_process_id:
                                 call_payload["process_id"] = derived_process_id
+                            elif not call_payload.get("process_id") and call_payload.get("kb_tracked_process_id"):
+                                call_payload["process_id"] = call_payload.get("kb_tracked_process_id")
+
                             next_call_on = normalize_datetime(analysis["next_call_on"])
 
                             if analysis.get("appointment_date_time"):
@@ -1793,13 +1819,13 @@ Follow these specific instructions:
             # 6. Build webhook payload — separate structures for inbound vs outbound
             resolved_call_id = call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")
 
-            kb_referred = bool(direction == "inbound" and (call_payload.get("process_id") or call_payload.get("stage_id")))
+            kb_referred = bool(direction == "inbound" and (call_payload.get("process_id") or call_payload.get("stage_id") or call_payload.get("kb_tracked_process_id") or derived_process_id))
             if direction == "inbound":
-                effective_process_id = _as_int(call_payload.get("process_id")) if kb_referred else None
+                effective_process_id = _as_int(derived_process_id or call_payload.get("process_id") or call_payload.get("kb_tracked_process_id")) if kb_referred else None
             else:
-                effective_process_id = _as_int(call_payload.get("process_id") or derived_process_id)
+                effective_process_id = _as_int(derived_process_id or call_payload.get("process_id") or call_payload.get("kb_tracked_process_id"))
 
-            initial_stage_id = _as_int(current_stage_id if current_stage_id is not None else call_payload.get("stage_id"))
+            initial_stage_id = _as_int(current_stage_id if current_stage_id is not None else call_payload.get("stage_id") or call_payload.get("kb_tracked_stage_id"))
             analysis_stage_id = _as_int(new_stage_id) if new_stage_id is not None else None
 
             payload_stage_id = initial_stage_id
@@ -1807,6 +1833,15 @@ Follow these specific instructions:
                 payload_new_stage_id = analysis_stage_id
             else:
                 payload_new_stage_id = initial_stage_id
+
+            # Reconcile effective_process_id and payload_new_stage_id against kb_process_stage_data
+            if kb_process_stage_data:
+                effective_process_id, payload_new_stage_id = reconcile_process_and_stage_id(
+                    process_id=effective_process_id,
+                    stage_id=payload_new_stage_id,
+                    process_stage_data=kb_process_stage_data,
+                )
+
 
             # Enforce stage-based call status rule:
             # If payload_new_stage_id == initial_stage_id (not updated) -> Incomplete

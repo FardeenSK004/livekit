@@ -712,21 +712,52 @@ class PostgresKnowledgeBase(KnowledgeBase):
                     for c in cols:
                         proc_desc = c.get("process_description", "") if hasattr(c, "get") else ""
                         stage_desc = c.get("stage_description", "") if hasattr(c, "get") else ""
-                        pid = c.get("process_id") or c["document_id"]
-                        sid = c.get("stage_id") or c["document_id"]
-                        result.append({
-                            "id": pid,
-                            "process_id": pid,
-                            "name": c["name"] or "Process",
-                            "description": proc_desc or "",
-                            "stages": [
-                                {
-                                    "stage_id": sid,
-                                    "name": c["name"] or "Stage",
-                                    "description": stage_desc or "",
-                                }
-                            ]
-                        })
+                        pa_raw = c.get("process_assignments") if hasattr(c, "get") else None
+                        if pa_raw:
+                            if isinstance(pa_raw, str):
+                                try:
+                                    pa_raw = json.loads(pa_raw)
+                                except Exception:
+                                    pass
+                            if isinstance(pa_raw, list):
+                                for entry in pa_raw:
+                                    if isinstance(entry, dict):
+                                        pid = entry.get("process_id")
+                                        s_ids = entry.get("stage_ids") or []
+                                        if pid is not None and pid not in seen_ids:
+                                            seen_ids.add(pid)
+                                            result.append({
+                                                "id": pid,
+                                                "process_id": pid,
+                                                "name": c["name"] or "Process",
+                                                "description": proc_desc or "",
+                                                "stages": [
+                                                    {
+                                                        "stage_id": sid,
+                                                        "name": c["name"] or "Stage",
+                                                        "description": stage_desc or "",
+                                                    }
+                                                    for sid in s_ids
+                                                ]
+                                            })
+                        if not result:
+                            pid = c.get("process_id") or c["document_id"]
+                            sid = c.get("stage_id") or c["document_id"]
+                            if pid not in seen_ids:
+                                seen_ids.add(pid)
+                                result.append({
+                                    "id": pid,
+                                    "process_id": pid,
+                                    "name": c["name"] or "Process",
+                                    "description": proc_desc or "",
+                                    "stages": [
+                                        {
+                                            "stage_id": sid,
+                                            "name": c["name"] or "Stage",
+                                            "description": stage_desc or "",
+                                        }
+                                    ]
+                                })
                 except Exception:
                     pass
 

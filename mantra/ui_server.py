@@ -635,7 +635,7 @@ async def _run_dependency_checks() -> tuple[bool, dict[str, bool | str]]:
         _check_postgres(),
         _check_stt(),
         _check_mantraassist_backend(),
-        # _check_s3(),
+        _check_s3(),
         return_exceptions=True
     )
 
@@ -1077,43 +1077,60 @@ async def ingest_kb_data(request: Request):
             try:
                 psd = json.loads(process_stage_data) if isinstance(process_stage_data, str) else process_stage_data
                 if isinstance(psd, list) and len(psd) > 0:
-                    first_p = psd[0]
-                    if isinstance(first_p, dict):
-                        if parsed_process_id is None:
-                            pid = first_p.get("id") or first_p.get("process_id")
+                    extracted_assignments = []
+                    extracted_sids_all = []
+                    proc_descs = []
+                    stage_descs = []
+
+                    for proc in psd:
+                        if isinstance(proc, dict):
+                            pid = proc.get("id") or proc.get("process_id")
+                            p_name = proc.get("name") or proc.get("description") or ""
+                            if p_name:
+                                proc_descs.append(p_name)
+
+                            stages = proc.get("stages") or proc.get("stageDetails") or []
+                            proc_sids = []
+                            if isinstance(stages, list):
+                                for stg in stages:
+                                    if isinstance(stg, dict):
+                                        sid = stg.get("id") or stg.get("stage_id")
+                                        s_desc = stg.get("desc") or stg.get("description") or stg.get("name") or ""
+                                        if s_desc:
+                                            stage_descs.append(s_desc)
+                                        if sid is not None:
+                                            try:
+                                                sid_int = int(sid)
+                                                proc_sids.append(sid_int)
+                                                extracted_sids_all.append(sid_int)
+                                            except (TypeError, ValueError):
+                                                pass
+
                             if pid is not None:
                                 try:
-                                    parsed_process_id = int(pid)
+                                    pid_int = int(pid)
+                                    if parsed_process_id is None:
+                                        parsed_process_id = pid_int
+                                    extracted_assignments.append({
+                                        "process_id": pid_int,
+                                        "stage_ids": proc_sids
+                                    })
                                 except (TypeError, ValueError):
                                     pass
 
-                        proc_desc = first_p.get("description") or first_p.get("name") or ""
+                    if extracted_assignments and not parsed_process_assignments:
+                        parsed_process_assignments = extracted_assignments
 
-                        stages = first_p.get("stages") or first_p.get("stageDetails")
-                        if isinstance(stages, list) and len(stages) > 0:
-                            extracted_sids = []
-                            for stg in stages:
-                                if isinstance(stg, dict):
-                                    sid = stg.get("id") or stg.get("stage_id")
-                                    if sid is not None:
-                                        try:
-                                            extracted_sids.append(int(sid))
-                                        except (TypeError, ValueError):
-                                            pass
-                            if extracted_sids:
-                                if not parsed_stage_ids:
-                                    parsed_stage_ids = extracted_sids
-                                if parsed_stage_id is None:
-                                    parsed_stage_id = extracted_sids[0]
+                    if extracted_sids_all:
+                        if not parsed_stage_ids:
+                            parsed_stage_ids = extracted_sids_all
+                        if parsed_stage_id is None:
+                            parsed_stage_id = extracted_sids_all[0]
 
-                            first_stg = stages[0]
-                            if isinstance(first_stg, dict):
-                                stage_desc = (
-                                    first_stg.get("description")
-                                    or first_stg.get("desc")
-                                    or first_stg.get("name")
-                                    or ""
-                                )
+                    if proc_descs:
+                        proc_desc = ", ".join(proc_descs)
+                    if stage_descs:
+                        stage_desc = ", ".join(stage_descs)
             except Exception as e:
                 logger.warning(f"Failed to parse process_stage_data: {e}")
 

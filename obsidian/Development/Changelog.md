@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-08-18
+
+### Process ID & Stage ID Reconciliation Guard for KB Inbound Calls
+
+- **fix:** Fixed critical process ID and stage ID unmapping bug on inbound calls where `used_kb_process_ids` forcefully set `call_payload["process_id"]` to the first accessed KB page process ID before post-call LLM analysis ran, ignoring `derived_process_id` returned by the LLM and causing unmapped `process_id` and `stage_id`/`new_stage_id` pairs (reported in org_id 124).
+- **feat:** Implemented `reconcile_process_and_stage_id(process_id, stage_id, process_stage_data)` helper in [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py):
+  - Cross-references `stage_id` against `process_stage_data` (supporting both `stages` and `stageDetails` formats, string/int IDs).
+  - Automatically overrides and aligns `process_id` to match the exact process owning `stage_id`.
+  - Safely coerces process and stage IDs to clean integers.
+- **fix:** Updated `used_kb_stage_ids` in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py) to parse `process_stage_data` arrays in accessed KB page metadata.
+- **fix:** Updated `finalize()` in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py): stores KB tracking hints as `kb_tracked_process_id`/`kb_tracked_stage_id` hints without locking `call_payload["process_id"]`, prioritizes `derived_process_id` from LLM analysis, and executes `reconcile_process_and_stage_id` before constructing the `CALL_DATA_INBOUND_UPDATE` webhook payload.
+- **fix:** Fixed multi-process KB ingestion bug in [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py): previously `psd[0]` only parsed the first process in `process_stage_data`, discarding subsequent processes and their stages. Updated to iterate across all processes in `process_stage_data` and construct complete `process_assignments` (containing all processes & stage IDs).
+- **fix:** Updated `get_process_stage_data_for_kb_ids` in [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py) fallback to parse multi-process `process_assignments` from `kb_collections`.
+- Files: [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py), [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py)
+
 ## 2026-08-17
 
 ### Instant Language Mirroring & Synchronous Turn Alignment
