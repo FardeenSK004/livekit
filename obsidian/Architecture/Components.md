@@ -8,7 +8,7 @@ The core real-time voice AI agent. ~1,629 lines.
 - Connect to LiveKit rooms via `AgentServer`
 - Orchestrate STT (Deepgram Nova-3) → LLM (OpenAI/Gemini/DeepSeek) → TTS (LiveKit native sonic-3, no Cartesia dependency)
 - Bilingual English/Hindi support (detected from user speech)
-- Dynamic voice selection from `VOICE_MAPPING` dict (8 voices)
+- Dynamic voice selection from `VOICE_MAPPING` dict (13 voices)
 - Call lifecycle: join → converse → goodbye → disconnect
 - Inactivity monitoring (5s prompt, 10s timeout)
 - Farewell safety net (auto-disconnect on goodbye without `end_call`)

@@ -104,6 +104,11 @@ VOICE_MAPPING = {
     "camila": "bef2ba57-5c10-433b-b215-3bef35110a81",
     "renata": "d3793b7b-4996-409c-9d59-96dd09f47717",
     "arushi": "95d51f79-c397-46f9-b49a-23763d3eaa2d",
+    "sia": "4459a9a5-69d6-4680-b970-e13dc51845b6",
+    "sneha": "6b02ffe5-e3cb-48c0-a023-c72f85953375",
+    "kavita": "56e35e2d-6eb6-4226-ab8b-9776515a7094",
+    "katie": "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+    "cathy": "e8e5fffb-252c-436d-b842-8879b84445b6",
 }
 
 # Load environment variables
@@ -900,7 +905,7 @@ Follow these specific instructions:
                 initial_instructions += "- TURN 2 (Name Request): When the caller states their reason for calling or intent, briefly acknowledge it, and politely ask for their name BEFORE proceeding to address their request (e.g. 'Sure, I can help with that! May I know your name, please?' or 'Got it. Who am I speaking with?').\n"
                 initial_instructions += "- TURN 3+ (Addressing Request): Once the caller gives their name, address their request or answer their questions directly, using their name naturally.\n"
                 initial_instructions += "- Do not assume the caller's name unless they state it or your prompt explicitly specifies it.\n"
-                initial_instructions += "- Identify yourself strictly as instructed in your prompt or as Arushi. NEVER write 'Mantra Care' with a space.\n"
+                initial_instructions += "- Identify yourself strictly as instructed in your prompt\n"
                 initial_instructions += "- If the caller seems confused, help them understand who you are.\n"
                 
             logger.info(f"Loaded full context for {client_name} (inbound: {is_inbound})")
@@ -1887,6 +1892,7 @@ Follow these specific instructions:
                         "client_phone_number": formatted_caller_phone,
                         "call_duration": duration,
                         "call_transcript": transcript_data or "",
+                        "ai_summary": summary_text,
                         "next_call_on": normalize_datetime(next_call_on) or "",
                         "called_on": call_state.get("call_initiated_at") or call_state.get("agent_joined_at") or "",
                         "user_intent": derived_user_intent,

@@ -2,6 +2,17 @@
 
 ## 2026-08-18
 
+### New TTS Voices Integration (Sia, Sneha, Kavita, Katie, Cathy)
+
+- **feat:** Added 5 new TTS voices to `VOICE_MAPPING` in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), bringing total selectable voices to 13:
+  - `sia` → `4459a9a5-69d6-4680-b970-e13dc51845b6`
+  - `sneha` → `6b02ffe5-e3cb-48c0-a023-c72f85953375`
+  - `kavita` → `56e35e2d-6eb6-4226-ab8b-9776515a7094`
+  - `katie` → `f786b574-daa5-4673-aa0c-cbe3e8534c02`
+  - `cathy` → `e8e5fffb-252c-436d-b842-8879b84445b6`
+- **docs:** Updated voice table in [obsidian/Features/Voice Agent.md](file:///home/fardeen/lkt/obsidian/Features/Voice%20Agent.md) and [obsidian/Architecture/Components.md](file:///home/fardeen/lkt/obsidian/Architecture/Components.md).
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
+
 ### English & Hindi Only Restriction (Preserved Regional Stubs)
 
 - **feat:** Restricted active language operations strictly to English and Hindi (`SUPPORTED_LANGUAGES = {"en", "hi"}`):
