@@ -79,7 +79,7 @@ async def save_call_log_to_db(
         # Parse call_log to extract attempt metadata
         log_data = {}
         try:
-            log_data = json.loads(call_log) if isinstance(call_log, str) else call_log
+            log_data = json.loads(call_log) if isinstance(call_log, str) else (call_log or {})
         except Exception:
             pass
 
@@ -88,10 +88,35 @@ async def save_call_log_to_db(
             or log_data.get("requested_at")
             or datetime.now(tz=timezone.utc).isoformat()
         )
-        ai_call_id = log_data.get("ai_call_id") or log_data.get("data", {}).get("ai_call_id") or ""
+        ai_call_id = log_data.get("ai_call_id") or (log_data.get("data", {}) if isinstance(log_data, dict) else {}).get("ai_call_id") or ""
         duration = log_data.get("call_duration") or log_data.get("call_duration_seconds") or 0
 
+        # Fetch existing attempts from call_logs to accurately count attempt index & preserve phone numbers
+        existing_row = await conn.fetchrow(
+            "SELECT caller_number, called_number, attempts FROM call_logs WHERE call_id = $1;",
+            str(call_id)
+        )
+
+        existing_attempts = []
+        db_caller = ""
+        db_called = ""
+        if existing_row:
+            db_caller = existing_row["caller_number"] or ""
+            db_called = existing_row["called_number"] or ""
+            raw_att = existing_row["attempts"]
+            if isinstance(raw_att, str):
+                try:
+                    existing_attempts = json.loads(raw_att)
+                except Exception:
+                    existing_attempts = []
+            elif isinstance(raw_att, list):
+                existing_attempts = raw_att
+
+        attempt_number = len(existing_attempts) + 1
+
         attempt_entry = {
+            "attempt_number": attempt_number,
+            "retry_count": max(0, attempt_number - 1),
             "attempted_at": attempted_at,
             "status": status,
             "ai_call_id": ai_call_id,
@@ -100,6 +125,18 @@ async def save_call_log_to_db(
             "summary": log_data.get("ai_summary") or "",
             "payload": log_data,
         }
+
+        # Merge call_log JSON metadata with DB tracking fields
+        if isinstance(log_data, dict):
+            log_data["attempt_number"] = attempt_number
+            log_data["retry_count"] = max(0, attempt_number - 1)
+            log_data["last_attempted_at"] = attempted_at
+            call_log_final = json.dumps(log_data, indent=2)
+        else:
+            call_log_final = call_log
+
+        final_caller = caller_number or db_caller or ""
+        final_called = called_number or db_called or ""
 
         # Auto-ensure attempts column exists
         await conn.execute("ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS attempts JSONB DEFAULT '[]'::jsonb;")
@@ -111,14 +148,14 @@ async def save_call_log_to_db(
         ON CONFLICT (call_id) DO UPDATE 
         SET call_log = EXCLUDED.call_log,
             status = EXCLUDED.status,
-            recording_url = EXCLUDED.recording_url,
-            caller_number = EXCLUDED.caller_number,
-            called_number = EXCLUDED.called_number,
-            trunk_id = EXCLUDED.trunk_id,
+            recording_url = COALESCE(NULLIF(EXCLUDED.recording_url, ''), call_logs.recording_url),
+            caller_number = COALESCE(NULLIF(EXCLUDED.caller_number, ''), call_logs.caller_number),
+            called_number = COALESCE(NULLIF(EXCLUDED.called_number, ''), call_logs.called_number),
+            trunk_id = COALESCE(NULLIF(EXCLUDED.trunk_id, ''), call_logs.trunk_id),
             attempts = COALESCE(call_logs.attempts, '[]'::jsonb) || jsonb_build_array($8::jsonb)
         """
-        await conn.execute(query, call_id, call_log, status, recording_url, caller_number, called_number, trunk_id, json.dumps(attempt_entry))
-        logger.info(f"Successfully saved call log to DB for call_id: {call_id}")
+        await conn.execute(query, str(call_id), call_log_final, status, recording_url or "", final_caller, final_called, trunk_id or "", json.dumps(attempt_entry))
+        logger.info(f"Successfully saved call log (attempt #{attempt_number}, retry_at={attempted_at}) to DB for call_id: {call_id}")
     except Exception as e:
         logger.error(f"Failed to save call log to DB: {e}")
     finally:
@@ -751,6 +788,12 @@ Client Country Code: {client_country_code}
      * Select `process_id` and `new_stage_id` from `AVAILABLE PROCESSES` based on the matching process and stage descriptions.
    - If neither is provided or no stage transition occurred, set `new_stage_id` to {current_stage_id}.
 3. Extract additional metadata:
+   - `client_name`: Extract ONLY the caller's/user's/patient's own name (the person speaking as "User" in the transcript).
+     CRITICAL RULES FOR CLIENT NAME:
+     * Do NOT extract the AI Assistant/Agent's name (e.g. if the assistant introduces itself as "Hi, this is Vikas" or "this is Arushi", "Vikas" or "Arushi" is the AGENT, NOT the client).
+     * Do NOT extract doctor names mentioned in the call (e.g. "Dr. Jaideep Tyagi", "Dr. Babita Rajput" are doctors, NOT the client).
+     * ONLY extract the name given by the caller when identifying themselves (e.g. "my name is John", "I am Ramesh", "this is John", etc.).
+     * Capitalize properly (e.g. "John"). If the caller did not state their own name, return null.
    - `next_call_on`: If a follow-up or callback is requested or scheduled (e.g. "call me back in 10 minutes", "call back in 1 hour", "call tomorrow at 3 PM"), calculate the EXACT future timestamp by adding that offset/duration to Current Date and Time ({current_time_str}) and return it in "YYYY-MM-DD HH:MM:SS" format. If the stage description specifies adding 24 hours, add 24 hours to {current_time_str}. If no follow-up is needed, use null.
    - `appointment_date_time`: If the patient booked/confirmed/rescheduled an appointment, extract the date/time and convert to the server's local timezone (e.g., "2026-06-05 11:30:00"). Otherwise, use null.
    - `doctor`: Extract any mentioned doctor's name. Otherwise, use null.
@@ -765,6 +808,7 @@ Client Country Code: {client_country_code}
 You MUST return your response as a valid JSON object with the following schema:
 {{
   "summary": "string (a single paragraph call summary)",
+  "client_name": "string or null (caller/user full name if stated by the caller, otherwise null)",
   "process_id": integer or null (the selected process ID from AVAILABLE PROCESSES, or null if no processes available),
   "new_stage_id": integer (the selected stage ID from the list),
   "next_call_on": "string or null",
@@ -818,6 +862,22 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                 res_dict = json.loads(candidate)
 
             summary = res_dict.get("summary") or ""
+            doctor = res_dict.get("doctor")
+            extracted_client_name = res_dict.get("client_name")
+            if extracted_client_name:
+                c_name_str = str(extracted_client_name).strip()
+                c_name_lower = c_name_str.lower()
+                doc_name_lower = str(doctor or "").strip().lower()
+                if (
+                    c_name_lower in ["user", "unknown", "n/a", "none", "null", "assistant", "ai assistant", "agent", "mantra"]
+                    or (doc_name_lower and c_name_lower in doc_name_lower)
+                ):
+                    extracted_client_name = None
+                else:
+                    extracted_client_name = c_name_str
+            else:
+                extracted_client_name = None
+
             process_id = res_dict.get("process_id")
             new_stage_id = res_dict.get("new_stage_id")
             next_call_on = res_dict.get("next_call_on")
@@ -868,6 +928,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                 f"analyze_call failed: {e}. Falling back to default heuristics."
             )
             summary = await SessionRecorder.generate_summary(llm_engine, history)
+            extracted_client_name = None
             new_stage_id = fallback_stage_id
             process_id = None
             next_call_on = None
@@ -879,6 +940,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
 
         return {
             "summary": summary,
+            "client_name": extracted_client_name,
             "process_id": process_id,
             "new_stage_id": new_stage_id,
             "next_call_on": next_call_on,

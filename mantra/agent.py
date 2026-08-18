@@ -1784,6 +1784,16 @@ Follow these specific instructions:
                             llm_analysis_ran = True
                             derived_process_id = analysis.get("process_id")
                             derived_user_intent = analysis.get("user_intent")
+                            extracted_client_name = analysis.get("client_name")
+
+                            if extracted_client_name:
+                                clean_name = str(extracted_client_name).strip()
+                                if clean_name and clean_name.lower() not in ["user", "unknown", "n/a", "none", "null", ""]:
+                                    curr_name = str(call_payload.get("client_name") or "").strip()
+                                    if not curr_name or curr_name.lower() in ["user", "unknown", "n/a"]:
+                                        call_payload["client_name"] = clean_name
+                                        logger.info(f"[DIAG] finalize(): Extracted client_name from call analysis: {clean_name}")
+
                             if derived_process_id:
                                 call_payload["process_id"] = derived_process_id
                             elif not call_payload.get("process_id") and call_payload.get("kb_tracked_process_id"):
@@ -1799,7 +1809,7 @@ Follow these specific instructions:
                                 client_custom_fields["hospital_location"] = analysis["hospital_location"]
 
                             logger.info(
-                                f"Analysis completed. Process: {derived_process_id}, New Stage ID: {new_stage_id}, Next Call On: {next_call_on}, User Intent: {derived_user_intent}"
+                                f"Analysis completed. Process: {derived_process_id}, New Stage ID: {new_stage_id}, Next Call On: {next_call_on}, User Intent: {derived_user_intent}, Client Name: {call_payload.get('client_name')}"
                             )
                         else:
                             logger.warning(
@@ -1929,8 +1939,8 @@ Follow these specific instructions:
                 # Save to local Postgres DB
                 try:
                     c_id = webhook_payload.get("data", {}).get("call_id", (ctx.job.id if ctx.job else ""))
-                    caller_number = call_payload.get("call_from") or ""
-                    called_number = call_payload.get("client_phone") or ""
+                    caller_number = call_payload.get("call_from") or call_payload.get("caller_number") or call_state.get("caller_phone_number") or ""
+                    called_number = call_payload.get("client_phone") or call_payload.get("client_phone_number") or call_payload.get("called_number") or ""
                     call_trunk_id = call_payload.get("call_from_id") or call_payload.get("trunk_id") or ""
                     await save_call_log_to_db(
                         call_id=str(c_id),
