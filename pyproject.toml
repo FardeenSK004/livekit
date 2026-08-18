@@ -28,6 +28,7 @@ dependencies = [
     "pypdf>=3.17.0",
     "trafilatura>=1.8.0",
     "prometheus-fastapi-instrumentator>=8.0.2",
+    "langdetect>=1.0.9",
 ]
 
 [tool.setuptools.packages.find]
