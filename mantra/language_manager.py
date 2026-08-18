@@ -20,22 +20,22 @@ from livekit.plugins import deepgram
 
 logger = logging.getLogger("mantra.language_manager")
 
-SUPPORTED_LANGUAGES: Set[str] = {"en", "hi", "kn", "te", "mr"}
+SUPPORTED_LANGUAGES: Set[str] = {"en", "hi"}
 
 LANGUAGE_NAMES: Dict[str, str] = {
     "en": "English",
     "hi": "Hindi",
-    "kn": "Kannada",
-    "te": "Telugu",
-    "mr": "Marathi",
+    # "kn": "Kannada",
+    # "te": "Telugu",
+    # "mr": "Marathi",
 }
 
 NATIVE_SCRIPTS: Dict[str, str] = {
     "en": "Latin",
     "hi": "Devanagari (हिन्दी)",
-    "kn": "Kannada (ಕನ್ನಡ)",
-    "te": "Telugu (తెలుగు)",
-    "mr": "Devanagari (मराठी)",
+    # "kn": "Kannada (ಕನ್ನಡ)",
+    # "te": "Telugu (తెలుగు)",
+    # "mr": "Devanagari (मराठी)",
 }
 
 
@@ -65,24 +65,24 @@ class NativeLanguageDetector:
         if total == 0:
             return None, 0.0
 
-        # 1. Kannada Unicode script block
-        if counts["kannada"] > 0 and counts["kannada"] >= max(counts["devanagari"], counts["telugu"], counts["latin"]):
-            return "kn", counts["kannada"] / total
+        # 1. Kannada Unicode script block (commented out for now)
+        # if counts["kannada"] > 0 and counts["kannada"] >= max(counts["devanagari"], counts["telugu"], counts["latin"]):
+        #     return "kn", counts["kannada"] / total
 
-        # 2. Telugu Unicode script block
-        if counts["telugu"] > 0 and counts["telugu"] >= max(counts["devanagari"], counts["kannada"], counts["latin"]):
-            return "te", counts["telugu"] / total
+        # 2. Telugu Unicode script block (commented out for now)
+        # if counts["telugu"] > 0 and counts["telugu"] >= max(counts["devanagari"], counts["kannada"], counts["latin"]):
+        #     return "te", counts["telugu"] / total
 
-        # 3. Devanagari script block -> ML classification between Marathi and Hindi
+        # 3. Devanagari script block -> Hindi
         if counts["devanagari"] > 0 and counts["devanagari"] >= counts["latin"]:
             ratio = counts["devanagari"] / total
-            try:
-                detected = langdetect.detect(text)
-                if detected in ["mr", "hi"]:
-                    return detected, max(ratio, 0.9)
-            except Exception:
-                pass
-            return current_lang if current_lang in ["hi", "mr"] else "hi", ratio
+            # try:
+            #     detected = langdetect.detect(text)
+            #     if detected in ["mr", "hi"]:
+            #         return detected, max(ratio, 0.9)
+            # except Exception:
+            #     pass
+            return "hi", max(ratio, 0.9)
 
         # 4. Latin script block -> Statistical ML detection
         if counts["latin"] > 0:
@@ -116,7 +116,7 @@ class LanguageHysteresisTracker:
         confidence: float,
     ) -> Tuple[str, bool]:
         """Evaluates state transition based on confidence and hysteresis."""
-        if not detected_lang or detected_lang == self.current_language:
+        if not detected_lang or detected_lang not in SUPPORTED_LANGUAGES or detected_lang == self.current_language:
             self._reset()
             return self.current_language, False
 
@@ -166,14 +166,14 @@ class LanguageManager:
         if not code:
             return "en"
         raw = str(code).lower().strip()
-        if raw in ["kn", "kannada", "kn-in"]:
-            return "kn"
-        elif raw in ["hi", "hindi", "hi-in"]:
+        # if raw in ["kn", "kannada", "kn-in"]:
+        #     return "kn"
+        if raw in ["hi", "hindi", "hi-in"]:
             return "hi"
-        elif raw in ["te", "telugu", "te-in"]:
-            return "te"
-        elif raw in ["mr", "marathi", "mr-in"]:
-            return "mr"
+        # elif raw in ["te", "telugu", "te-in"]:
+        #     return "te"
+        # elif raw in ["mr", "marathi", "mr-in"]:
+        #     return "mr"
         elif raw in ["en", "english", "en-us", "en-in", "en-gb"]:
             return "en"
         return "en"
@@ -185,7 +185,7 @@ class LanguageManager:
             return self.tracker.current_language, False
 
         detected_lang, confidence = self.detector.detect(cleaned, self.tracker.current_language)
-        if not detected_lang:
+        if not detected_lang or detected_lang not in SUPPORTED_LANGUAGES:
             detected_lang = self.tracker.current_language
             confidence = 0.5
 
@@ -212,7 +212,9 @@ class LanguageManager:
         return (
             f"CURRENT CONVERSATIONAL LANGUAGE: {lang_name} ({lang_code}).\n"
             f"- Always respond in {lang_name} using its natural script: {native_script}.\n"
-            f"- The application dynamically tracks and updates the conversational language state based on the caller's speech.\n"
+            f"- STRICT LANGUAGE CONSTRAINT: ONLY speak in English or Hindi. Never speak in any other language.\n"
+            f"- If the caller speaks any language other than English or Hindi, politely inform them in {lang_name} that you only support English and Hindi.\n"
+            f"- The application dynamically tracks and updates the conversational language state between English and Hindi based on the caller's speech.\n"
             f"- Follow the current language state without hesitation or preambles.\n"
             f"- Never output meta-explanations like 'Sure, I can speak {lang_name}' or 'I detected you are speaking {lang_name}'.\n"
             f"- Speak naturally like a native multilingual human speaker."
@@ -231,15 +233,16 @@ def _score_transcript(lang: str, text: str, confidence: float) -> float:
     word_count = len(text.split())
     length_bonus = min(word_count * 0.05, 0.3)
 
-    has_kannada = any(0x0C80 <= ord(c) <= 0x0CFF for c in text)
-    has_telugu = any(0x0C00 <= ord(c) <= 0x0C7F for c in text)
+    # has_kannada = any(0x0C80 <= ord(c) <= 0x0CFF for c in text)
+    # has_telugu = any(0x0C00 <= ord(c) <= 0x0C7F for c in text)
     has_devanagari = any(0x0900 <= ord(c) <= 0x097F for c in text)
 
-    if lang == "kn" and has_kannada:
-        score += 0.5 + length_bonus
-    elif lang == "te" and has_telugu:
-        score += 0.5 + length_bonus
-    elif lang in ("mr", "hi") and has_devanagari:
+    # if lang == "kn" and has_kannada:
+    #     score += 0.5 + length_bonus
+    # elif lang == "te" and has_telugu:
+    #     score += 0.5 + length_bonus
+    # elif lang in ("mr", "hi") and has_devanagari:
+    if lang == "hi" and has_devanagari:
         score += 0.5 + length_bonus
         try:
             detected = langdetect.detect(text)
@@ -247,7 +250,7 @@ def _score_transcript(lang: str, text: str, confidence: float) -> float:
                 score += 0.2
         except Exception:
             pass
-    elif lang == "en" and not (has_kannada or has_telugu or has_devanagari):
+    elif lang == "en" and not has_devanagari:
         score += 0.4 + length_bonus
 
     return score
@@ -267,7 +270,8 @@ class MultilingualParallelStream(stt.RecognizeStream):
         conn_options: APIConnectOptions,
     ):
         super().__init__(stt=stt_instance, conn_options=conn_options)
-        self._languages: List[str] = list(dict.fromkeys(languages))
+        valid_langs = [l for l in dict.fromkeys(languages) if l in SUPPORTED_LANGUAGES]
+        self._languages: List[str] = valid_langs if valid_langs else ["en", "hi"]
         self._child_streams: Dict[str, stt.RecognizeStream] = {}
         self._child_tasks: List[asyncio.Task] = []
         self._pending_finals: List[Tuple[str, stt.SpeechEvent]] = []
@@ -381,8 +385,8 @@ class MultilingualParallelStream(stt.RecognizeStream):
 class MultilingualParallelSTT(stt.STT):
     """
     All-Ears Multilingual STT engine.
-    Runs parallel Deepgram STT streams across English, Marathi, Kannada, Telugu, and Hindi
-    simultaneously so the agent captures any language the caller speaks in real time.
+    Runs parallel Deepgram STT streams across English and Hindi
+    simultaneously so the agent captures either language the caller speaks in real time.
     """
 
     def __init__(self, languages: Optional[List[str]] = None):
@@ -392,7 +396,9 @@ class MultilingualParallelSTT(stt.STT):
                 interim_results=True,
             )
         )
-        self._languages: List[str] = languages or ["en", "mr", "kn", "te", "hi"]
+        filtered = [l for l in (languages or ["en", "hi"]) if l in SUPPORTED_LANGUAGES]
+        # Default active: en, hi (commented regional: mr, kn, te)
+        self._languages: List[str] = filtered if filtered else ["en", "hi"]  # ["en", "mr", "kn", "te", "hi"]
 
     @property
     def model(self) -> str:
@@ -404,10 +410,11 @@ class MultilingualParallelSTT(stt.STT):
 
     def update_options(self, **kwargs) -> None:
         if "languages" in kwargs and kwargs["languages"]:
-            self._languages = list(kwargs["languages"])
+            filtered = [l for l in kwargs["languages"] if l in SUPPORTED_LANGUAGES]
+            self._languages = filtered if filtered else ["en", "hi"]
         elif "language" in kwargs and kwargs["language"]:
             lang = kwargs["language"]
-            if lang not in self._languages:
+            if lang in SUPPORTED_LANGUAGES and lang not in self._languages:
                 self._languages.insert(0, lang)
 
     def stream(
@@ -416,8 +423,10 @@ class MultilingualParallelSTT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.RecognizeStream:
-        langs = list(self._languages)
-        if language is not NOT_GIVEN and language and language not in langs:
+        langs = [l for l in self._languages if l in SUPPORTED_LANGUAGES]
+        if not langs:
+            langs = ["en", "hi"]
+        if language is not NOT_GIVEN and language and language in SUPPORTED_LANGUAGES and language not in langs:
             langs.insert(0, language)
         return MultilingualParallelStream(
             stt_instance=self,

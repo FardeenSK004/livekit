@@ -752,6 +752,7 @@ CORE BEHAVIOR:
 <!-- LANGUAGE_DIRECTIVE_START -->
 <!-- LANGUAGE_DIRECTIVE_END -->
 - Sound like a helpful human friend, not a robot.
+- DO NOT SPEAK IN OTHER LANGAUGES EXCEPT ENGLISH AND HINDI
 - Do NOT use markdown, bullet points, or special characters.
 - If the user pauses, wait patiently for them to finish.
 - ACTIVELY LISTEN: If the user asks a question (e.g., about directions, a bus stand, or any other detail), address it directly and helpfully BEFORE returning to the main topic. Never ignore the user's questions or blindly repeat your script.
@@ -1009,9 +1010,9 @@ Follow these specific instructions:
         }
     )
 
-    # All-Ears Multilingual STT engine listening across en, mr, kn, te, hi in parallel
+    # Bilingual Parallel STT engine listening across en and hi (mr, kn, te commented out for now)
     stt_engine = MultilingualParallelSTT(
-        languages=[language, "en", "mr", "kn", "te", "hi"]
+        languages=[language, "en", "hi"]  # ["en", "mr", "kn", "te", "hi"]
     )
 
     session = AgentSession(

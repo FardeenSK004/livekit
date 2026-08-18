@@ -2,6 +2,15 @@
 
 ## 2026-08-18
 
+### English & Hindi Only Restriction (Preserved Regional Stubs)
+
+- **feat:** Restricted active language operations strictly to English and Hindi (`SUPPORTED_LANGUAGES = {"en", "hi"}`):
+  - Preserved and cleanly commented out Kannada (`kn`), Telugu (`te`), and Marathi (`mr`) in [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py) and [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py) for effortless future re-enablement.
+  - Guarded `LanguageHysteresisTracker.evaluate_transition()` to reject any transition candidate not in `SUPPORTED_LANGUAGES`.
+  - Streamlined `MultilingualParallelSTT` and [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py) to open only 2 parallel Deepgram WebSockets (`en`, `hi`) instead of 5, reducing network bandwidth and Deepgram API socket overhead.
+  - Updated prompt directives in [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py) with strict English/Hindi enforcement.
+- Files: [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
+
 ### Process ID & Stage ID Reconciliation Guard for KB Inbound Calls
 
 - **fix:** Fixed critical process ID and stage ID unmapping bug on inbound calls where `used_kb_process_ids` forcefully set `call_payload["process_id"]` to the first accessed KB page process ID before post-call LLM analysis ran, ignoring `derived_process_id` returned by the LLM and causing unmapped `process_id` and `stage_id`/`new_stage_id` pairs (reported in org_id 124).
@@ -14,7 +23,7 @@
 - **fix:** Fixed multi-process KB ingestion bug in [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py): previously `psd[0]` only parsed the first process in `process_stage_data`, discarding subsequent processes and their stages. Updated to iterate across all processes in `process_stage_data` and construct complete `process_assignments` (containing all processes & stage IDs).
 - **fix:** Added `client_name` extraction to `SessionRecorder.analyze_call()` in [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py) and `finalize()` in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py). Automatically extracts caller's name from spoken conversation transcript for inbound calls and updates `call_payload["client_name"]` in the outgoing `CALL_DATA_INBOUND_UPDATE` webhook payload.
 - **fix:** Added `"langdetect>=1.0.9"` dependency to [pyproject.toml](file:///home/fardeen/lkt/pyproject.toml) and updated [uv.lock](file:///home/fardeen/lkt/uv.lock) to fix Docker build failure (`ModuleNotFoundError: No module named 'langdetect'`).
-- **fix:** Preserved strict contract for `CALL_RETRY` payload in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py) and [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py). Restored exact original structure (`call_id`, `called_on`, `call_status`, `ai_call_id`) without altering external payload schema contracts.
+- **feat:** Implemented local PostgreSQL DB call retry tracking in `save_call_log_to_db` in [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py): automatically tracks attempt count (`attempt_number`), retry count (`retry_count`), and exact timestamps (`attempted_at`) in the `attempts` JSONB array column of `call_logs` without modifying external outgoing webhook payload contracts.
 - Files: [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/ui_server.py](file:///home/fardeen/lkt/mantra/ui_server.py), [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py), [pyproject.toml](file:///home/fardeen/lkt/pyproject.toml)
 
 ## 2026-08-17
