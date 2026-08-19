@@ -1915,7 +1915,7 @@ Follow these specific instructions:
                     }
                 }
             else:
-                event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Incomplete", "Failed"] else "CALL_DATA_UPDATE"
+                event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Failed"] else "CALL_DATA_UPDATE"
                 if event_name == "CALL_RETRY":
                     webhook_payload = {
                         "event": event_name,
