@@ -289,8 +289,8 @@ class MultilingualParallelStream(stt.RecognizeStream):
                     language=lang,
                     smart_format=True,
                     numerals=True,
-                    endpointing_ms=250,
-                    utterance_end_ms=1000,
+                    endpointing_ms=150,
+                    utterance_end_ms=600,
                 )
                 stream = child_stt.stream()
                 self._child_streams[lang] = stream

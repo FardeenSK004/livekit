@@ -259,10 +259,13 @@ Captured before the session cleans up, used for transcript building and LLM anal
 
 | Condition                                 | Status      |
 | ----------------------------------------- | ----------- |
-| Participant never joined, elapsed >= 25s  | `No Answer` |
-| Participant never joined, elapsed < 25s   | `Busy`      |
-| Joined but no user messages in transcript | `No Answer` |
-| User spoke at least once                  | `Completed` |
+| Participant never joined, ring_time >= 30s | `No Answer` |
+| Participant never joined, 3s <= ring < 30s | `Busy`      |
+| Participant never joined, ring_time < 3s   | `Failed`    |
+| Joined but no user messages (outbound only) | `No Answer` |
+| User spoke at least once (or inbound call)  | `Completed` |
+
+> Inbound calls (`direction == "inbound"`) are always treated as `user_joined = True`, so they resolve to `Completed` and run post-call LLM analysis even when no user utterance was captured.
 
 ### 5d. Recording → S3
 
@@ -290,11 +293,11 @@ Filters out system messages. Labels roles as `bot` / `user`.
 
 ### 5f. LLM Analysis
 
-Only runs if `call_status == "Completed"` and transcript exists:
+Runs when `call_status == "Completed"` and a transcript (snapshot) exists. Because inbound calls are always treated as joined, this runs for every connected inbound call; for outbound calls it is skipped when `user_spoke` is false. The engine is selected as `target_llm = post_call_llm or llm_engine` — the dedicated post-call model (`build_post_call_llm()`, default `deepseek-v4-pro`, fallback `gpt-4o-mini`) is preferred over the live-call engine for more reliable transcript analysis.
 
 ```python
 analysis = await SessionRecorder.analyze_call(
-    llm_engine=llm_engine,
+    llm_engine=target_llm,
     history=list(history_snapshot),
     current_stage_id=current_stage_id,
     stage_details=stage_details,
@@ -304,7 +307,7 @@ analysis = await SessionRecorder.analyze_call(
 )
 ```
 
-The LLM (same engine used during the call) receives:
+The LLM receives:
 
 1. **Stage details** / **Process stage data** from the payload
 2. **Full transcript**
@@ -318,15 +321,17 @@ Returns a JSON object with:
 - `appointment_date_time`, `doctor`, `hospital_location`: Extracted entities
 - `sentiment_score`: 0.0-1.0
 
+If analysis times out or fails, `ai_summary` is still guaranteed non-empty: `summary_text` falls back to a transcript snippet (`"Call completed ({duration}s). Transcript snippet: ..."`) or `"Call completed."`.
+
 ### 5g. Build & Send Webhook
 
 ```python
-event_name = "CALL_RETRY" if call_status == "No Answer" else "CALL_DATA_UPDATE"
+event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Incomplete", "Failed"] else "CALL_DATA_UPDATE"
 webhook_payload = {
     "event": event_name,
     "data": {
         "call_transcript": transcript_data,
-        "ai_summary": summary_text,
+        "ai_summary": summary_text or "",
         "recording_url": recording_url,
         "call_duration_seconds": duration,
         "next_call_on": ...,

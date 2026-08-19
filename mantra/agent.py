@@ -1027,8 +1027,8 @@ Follow these specific instructions:
             ),
             endpointing={
                 "mode": "dynamic",
-                "min_delay": 0.20,
-                "max_delay": 0.50,
+                "min_delay": 0.10,
+                "max_delay": 0.35,
             },
             interruption={
                 "mode": "adaptive",
@@ -1643,7 +1643,10 @@ Follow these specific instructions:
                 call_id = call_payload.get("call_id") or call_payload.get("voice_id") or (ctx.job.id if ctx.job else "")
                 logger.info(f"[DIAG] finalize(): user_joined={call_state.get('user_joined')} user_spoke={user_spoke} history_size={len(history_snapshot)}")
 
-                if not call_state.get("user_joined"):
+                is_inbound = (call_payload.get("direction") == "inbound")
+                is_user_joined = bool(call_state.get("user_joined") or is_inbound)
+
+                if not is_user_joined:
                     initiated_str = call_state.get("call_initiated_at") or (call_payload.get("metadata", {}) or {}).get("call_initiated_at")
                     ring_time = 0
                     if initiated_str:
@@ -1659,11 +1662,11 @@ Follow these specific instructions:
                         call_status = "Busy"
                     else:
                         call_status = "Failed"
-                elif not user_spoke:
+                elif not user_spoke and not is_inbound:
                     call_status = "No Answer"
                 else:
                     call_status = "Completed"
-                logger.info(f"[DIAG] finalize(): call_status determined as '{call_status}'")
+                logger.info(f"[DIAG] finalize(): call_status determined as '{call_status}' (is_inbound={is_inbound}, user_spoke={user_spoke})")
 
                 # 2. Flush recording tasks and upload to S3 (bounded by 10s timeout)
                 logger.info(f"[DIAG] finalize(): Step 2 — Stopping recording...")
@@ -1769,13 +1772,14 @@ Follow these specific instructions:
                     new_stage_id = not_answering_id
                 else:
                     try:
-                        if post_call_llm and history_snapshot:
+                        target_llm = post_call_llm or llm_engine
+                        if target_llm and history_snapshot:
                             logger.info(f"[DIAG] finalize(): Step 5 — Running analyze_call with {len(list(history_snapshot))} messages...")
                             client_country_code = call_payload.get("client_country_code") or call_payload.get("country_code", "")
                             
                             analysis = await asyncio.wait_for(
                                 SessionRecorder.analyze_call(
-                                    llm_engine=post_call_llm,
+                                    llm_engine=target_llm,
                                     history=list(history_snapshot),
                                     current_stage_id=current_stage_id,
                                     stage_details=stage_details,
@@ -1822,12 +1826,19 @@ Follow these specific instructions:
                                 "Skipping analysis: LLM or history unavailable after session close"
                             )
                     except asyncio.TimeoutError:
-                        logger.warning("[DIAG] finalize(): analyze_call timed out after 30s — using fallback summary")
+                        logger.warning("[DIAG] finalize(): analyze_call timed out — using fallback summary")
                         summary_text = "Call completed. Summary timed out during processing."
                     except Exception as e:
                         logger.error(
                             f"Analysis or summary generation failed: {e}", exc_info=True
                         )
+
+                # Final fallback guarantee for summary_text if missing or empty
+                if not summary_text or not str(summary_text).strip():
+                    if transcript_data and transcript_data.strip():
+                        summary_text = f"Call completed ({duration}s). Transcript snippet: {transcript_data[:180]}..."
+                    else:
+                        summary_text = "Call completed."
 
             except Exception as e:
                 logger.error(f"[DIAG] finalize(): Pipeline error in finalize: {e}", exc_info=True)
@@ -1892,7 +1903,7 @@ Follow these specific instructions:
                         "client_phone_number": formatted_caller_phone,
                         "call_duration": duration,
                         "call_transcript": transcript_data or "",
-                        "ai_summary": summary_text,
+                        "ai_summary": summary_text or "",
                         "next_call_on": normalize_datetime(next_call_on) or "",
                         "called_on": call_state.get("call_initiated_at") or call_state.get("agent_joined_at") or "",
                         "user_intent": derived_user_intent,
@@ -1904,7 +1915,7 @@ Follow these specific instructions:
                     }
                 }
             else:
-                event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Failed"] else "CALL_DATA_UPDATE"
+                event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Incomplete", "Failed"] else "CALL_DATA_UPDATE"
                 if event_name == "CALL_RETRY":
                     webhook_payload = {
                         "event": event_name,

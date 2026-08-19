@@ -11,6 +11,10 @@
   - `katie` → `f786b574-daa5-4673-aa0c-cbe3e8534c02`
   - `cathy` → `e8e5fffb-252c-436d-b842-8879b84445b6`
 - **docs:** Updated voice table in [obsidian/Features/Voice Agent.md](file:///home/fardeen/lkt/obsidian/Features/Voice%20Agent.md) and [obsidian/Architecture/Components.md](file:///home/fardeen/lkt/obsidian/Architecture/Components.md).
+- **fix:** Fixed inbound call missing summary bug in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py):
+  - Updated `call_status` determination for inbound calls: treats inbound calls as `user_joined = True` so `analyze_call()` runs and generates the summary.
+  - Used `target_llm = post_call_llm or llm_engine` with guaranteed transcript snippet fallback so summary generation never returns empty or `None`.
+  - Preserved strict schema contract for `ai_summary` as the sole summary key in `CALL_DATA_INBOUND_UPDATE` and `CALL_DATA_UPDATE` webhook payloads.
 - Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
 
 ### English & Hindi Only Restriction (Preserved Regional Stubs)
