@@ -11,17 +11,41 @@
             "id": "ba89d0ebd22c5ea3",
             "type": "leaf",
             "state": {
-              "type": "markdown",
+              "type": "canvas",
               "state": {
-                "file": "Context/External Services.md",
-                "mode": "source",
-                "source": false
+                "file": "Outbound Call Walkthrough.canvas",
+                "viewState": {
+                  "x": 973.0835478175783,
+                  "y": 119.12022237646275,
+                  "zoom": -0.40000000000000013
+                }
               },
-              "icon": "lucide-file",
-              "title": "External Services"
+              "icon": "lucide-layout-dashboard",
+              "title": "Outbound Call Walkthrough"
+            }
+          },
+          {
+            "id": "c9dc742e6327312d",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "Graph view"
+            }
+          },
+          {
+            "id": "9af13f4ff76f13d6",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "Graph view"
             }
           }
-        ]
+        ],
+        "currentTab": 2
       }
     ],
     "direction": "vertical"
@@ -41,7 +65,9 @@
               "type": "file-explorer",
               "state": {
                 "sortOrder": "alphabetical",
-                "autoReveal": false
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
               },
               "icon": "lucide-folder-closed",
               "title": "Files"
@@ -180,23 +206,34 @@
       "bases:Create new base": false
     }
   },
-  "active": "ba89d0ebd22c5ea3",
+  "active": "9af13f4ff76f13d6",
   "lastOpenFiles": [
-    "Architecture/Design Decisions.md",
-    "Features/Dashboard.md",
+    "Outbound Call Walkthrough.canvas",
+    "Untitled.canvas",
+    "Features/API Server.md",
     "Features/Dispatcher.md",
+    "Features/Dashboard.md",
     "Features/Crash Alerts.md",
-    "Architecture/Database.md",
-    "Agents/DevOps Agent.md",
-    "Context.md",
-    "Features/Telephony Integration.md",
-    "Knowledge/Conventions.md",
+    "Context/Stack.md",
+    "Context/Repository Map.md",
     "Context/Project Summary.md",
+    "Architecture/Overview.md",
+    "Architecture/Infrastructure.md",
+    "Architecture/Design Decisions.md",
+    "Architecture/Dependencies.md",
+    "Architecture/Data Flow.md",
+    "Architecture/Components.md",
     "Architecture/APIs.md",
-    "Knowledge.md",
-    "Features/Feature Index.md",
+    "Agents/QA Agent.md",
+    "Agents/Frontend Agent.md",
+    "Agents/Documentation Agent.md",
+    "Development/TODO.md",
+    "Development/Roadmap.md",
+    "Development/Current Sprint.md",
+    "Development/Release Notes.md",
     "Development/Changelog.md",
-    "Knowledge/Coding Standards.md",
-    "Home.md"
+    "Development/Bugs.md",
+    "Development/Backlog.md",
+    "Context/External Services.md"
   ]
 }

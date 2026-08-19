@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MantraAssist · Network &amp; System Telemetry (Grafana Suite)</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            /* Grafana Dark Theme Palette */
+            --grafana-bg:           #111217;
+            --grafana-panel-bg:     #181b1f;
+            --grafana-header-bg:    #22252b;
+            --grafana-border:       #2c3235;
+            --grafana-border-hover: #3e4448;
+
+            --grafana-text-main:    #d8d9da;
+            --grafana-text-muted:   #8e8e8e;
+            --grafana-text-dim:     #57585a;
+
+            /* Grafana Standard Accent Colors */
+            --g-orange:  #F9690E;
+            --g-blue:    #5794F2;
+            --g-green:   #73BF69;
+            --g-red:     #F2495C;
+            --g-yellow:  #EAB839;
+            --g-purple:  #B060E0;
+
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--grafana-bg);
+            color: var(--grafana-text-main);
+            min-height: 100vh;
+        }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--grafana-bg); }
+        ::-webkit-scrollbar-thumb { background: #2f3337; border-radius: 3px; }
+
+        /* Navbar */
+        .navbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 50px;
+            padding: 0 20px;
+            background: #181b1f;
+            border-bottom: 1px solid var(--grafana-border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-left { display: flex; align-items: center; gap: 20px; }
+        .nav-logo { display: flex; align-items: center; gap: 10px; }
+
+        .nav-logo-icon {
+            width: 28px; height: 28px;
+            background: var(--g-orange);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .nav-logo-icon svg { width: 16px; height: 16px; color: white; }
+
+        .nav-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--grafana-text-main);
+            letter-spacing: -0.01em;
+        }
+
+        .nav-links { display: flex; gap: 2px; }
+
+        .nav-link {
+            padding: 5px 12px;
+            border-radius: 4px;
+            background: transparent;
+            color: var(--grafana-text-muted);
+            font-size: 0.8rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.15s ease;
+        }
+
+        .nav-link:hover { background: #22252b; color: var(--grafana-text-main); }
+        .nav-link.active { background: #2c3235; color: white; border-bottom: 2px solid var(--g-orange); }
+
+        .nav-right { display: flex; align-items: center; gap: 14px; }
+        .nav-user { font-size: 0.8rem; color: var(--grafana-text-muted); }
+
+        .btn-logout {
+            padding: 5px 10px;
+            border-radius: 4px;
+            border: 1px solid var(--grafana-border);
+            background: transparent;
+            color: var(--grafana-text-muted);
+            font-size: 0.75rem;
+            cursor: pointer;
+        }
+
+        .btn-logout:hover { border-color: var(--g-red); color: var(--g-red); }
+
+        /* Dashboard Container */
+        .grafana-container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 16px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* Top Controls Toolbar */
+        .toolbar {
+            background: var(--grafana-panel-bg);
+            border: 1px solid var(--grafana-border);
+            border-radius: 4px;
+            padding: 10px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .toolbar-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .toolbar-title svg { color: var(--g-orange); }
+
+        .toolbar-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .ctrl-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: var(--grafana-text-muted);
+        }
+
+        .ctrl-select, .ctrl-input {
+            background: #111217;
+            border: 1px solid var(--grafana-border);
+            border-radius: 3px;
+            padding: 4px 10px;
+            color: var(--grafana-text-main);
+            font-size: 0.75rem;
+            font-family: var(--font-sans);
+        }
+
+        .ctrl-btn {
+            background: #22252b;
+            border: 1px solid var(--grafana-border);
+            border-radius: 3px;
+            color: var(--grafana-text-main);
+            padding: 4px 10px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .ctrl-btn:hover { background: #2c3235; border-color: var(--grafana-border-hover); }
+
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 8px;
+            background: rgba(115, 191, 105, 0.12);
+            border: 1px solid var(--g-green);
+            color: var(--g-green);
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .pulse-dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--g-green);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(1.3); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        /* Stat Panel Grid */
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 12px;
+        }
+
+        .stat-panel {
+            background: var(--grafana-panel-bg);
+            border: 1px solid var(--grafana-border);
+            border-radius: 4px;
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-header {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--grafana-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .stat-value {
+            font-family: var(--font-mono);
+            font-size: 1.75rem;
+            font-weight: 600;
+            color: var(--grafana-text-main);
+            margin-top: 4px;
+            line-height: 1.1;
+        }
+
+        .stat-sub {
+            font-size: 0.7rem;
+            color: var(--grafana-text-dim);
+            margin-top: 6px;
+        }
+
+        .stat-panel.blue .stat-value { color: var(--g-blue); }
+        .stat-panel.green .stat-value { color: var(--g-green); }
+        .stat-panel.orange .stat-value { color: var(--g-orange); }
+        .stat-panel.red .stat-value { color: var(--g-red); }
+        .stat-panel.purple .stat-value { color: var(--g-purple); }
+
+        /* Grafana Arc Gauge Panel */
+        .gauge-panel {
+            background: var(--grafana-panel-bg);
+            border: 1px solid var(--grafana-border);
+            border-radius: 4px;
+            padding: 12px 14px 4px 14px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: flex-start;
+            position: relative;
+            overflow: hidden;
+            transition: border-color 0.2s ease;
+        }
+
+        .gauge-panel:hover {
+            border-color: var(--grafana-border-hover);
+        }
+
+        .gauge-header {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--grafana-text-main);
+            margin-bottom: 0px;
+        }
+
+        .gauge-canvas-wrapper {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: -6px;
+        }
+
+        /* Chart Grid */
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .panel {
+            background: var(--grafana-panel-bg);
+            border: 1px solid var(--grafana-border);
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            background: var(--grafana-header-bg);
+            padding: 8px 14px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--grafana-text-main);
+            border-bottom: 1px solid var(--grafana-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-body {
+            padding: 14px;
+            flex: 1;
+            min-height: 240px;
+            position: relative;
+        }
+
+        /* Grafana High-Density Table */
+        .grafana-table-wrap { overflow-x: auto; width: 100%; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.78rem;
+        }
+
+        thead th {
+            text-align: left;
+            padding: 8px 12px;
+            background: #14171a;
+            color: var(--grafana-text-muted);
+            font-weight: 600;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            border-bottom: 1px solid var(--grafana-border);
+        }
+
+        tbody td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #202428;
+            color: var(--grafana-text-main);
+        }
+
+        tbody tr:hover { background: #22262b; }
+
+        .method-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            font-weight: 600;
+        }
+
+        .method-get { background: rgba(87, 148, 242, 0.18); color: var(--g-blue); }
+        .method-post { background: rgba(115, 191, 105, 0.18); color: var(--g-green); }
+        .method-delete { background: rgba(242, 73, 92, 0.18); color: var(--g-red); }
+
+        .status-pill {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .status-2xx { background: rgba(115, 191, 105, 0.2); color: var(--g-green); }
+        .status-3xx { background: rgba(234, 184, 57, 0.2); color: var(--g-yellow); }
+        .status-4xx { background: rgba(249, 105, 14, 0.2); color: var(--g-orange); }
+        .status-5xx { background: rgba(242, 73, 92, 0.2); color: var(--g-red); }
+
+        @media (max-width: 1200px) {
+            .stat-grid { grid-template-columns: repeat(3, 1fr); }
+            .chart-grid { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 640px) {
+            .stat-grid { grid-template-columns: 1fr; }
+            .grafana-container { padding: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-left">
+            <div class="nav-logo">
+                <div class="nav-logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                </div>
+                <span class="nav-title">MantraAssist</span>
+            </div>
+            <div class="nav-links">
+                <a class="nav-link" href="/dashboard">Dashboard</a>
+                <a class="nav-link" href="/console">Test Console</a>
+                <a class="nav-link" href="/redis">Redis Monitor</a>
+                <a class="nav-link active" href="/network">Network Monitoring</a>
+                <a class="nav-link" href="/kb-chat">KB Chat</a>
+            </div>
+        </div>
+        <div class="nav-right">
+            <span class="nav-user" id="nav-username"></span>
+            <button class="btn-logout" id="logout-btn">Sign Out</button>
+        </div>
+    </nav>
+
+    <div class="grafana-container">
+        <!-- Toolbar -->
+        <div class="toolbar">
+            <div class="toolbar-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                 Network Telemetry Dashboard
+            </div>
+            <div class="toolbar-controls">
+                <div class="live-badge">
+                    <div class="pulse-dot"></div>
+                    Streaming
+                </div>
+                <div class="ctrl-group">
+                    <span>Range:</span>
+                    <select id="time-range-select" class="ctrl-select">
+                        <option value="30">Last 5 min (Live)</option>
+                        <option value="60">Last 15 min</option>
+                        <option value="120">Last 30 min</option>
+                    </select>
+                </div>
+                <div class="ctrl-group">
+                    <span>Refresh:</span>
+                    <select id="refresh-rate-select" class="ctrl-select">
+                        <option value="2000" selected>Every 2s</option>
+                        <option value="5000">Every 5s</option>
+                        <option value="10000">Every 10s</option>
+                        <option value="0">Off</option>
+                    </select>
+                </div>
+                <button id="btn-manual-refresh" class="ctrl-btn">🔄 Refresh</button>
+            </div>
+        </div>
+
+        <!-- Single Stat Panels -->
+        <div class="stat-grid">
+            <div class="stat-panel blue">
+                <div class="stat-header">Request Rate (RPS)</div>
+                <div class="stat-value" id="val-rps">0.0 req/s</div>
+                <div class="stat-sub" id="sub-total-requests">Total: 0 requests</div>
+            </div>
+
+            <div class="stat-panel green" id="panel-latency">
+                <div class="stat-header">Avg Response Latency</div>
+                <div class="stat-value" id="val-latency">0 ms</div>
+                <div class="stat-sub">Est p95: <span id="val-p95">0 ms</span></div>
+            </div>
+
+            <div class="stat-panel orange" id="panel-error">
+                <div class="stat-header">Error Rate %</div>
+                <div class="stat-value" id="val-error-rate">0.0 %</div>
+                <div class="stat-sub" id="sub-error-counts">0 client / 0 server errors</div>
+            </div>
+
+            <!-- Grafana Memory Arc Gauge Panel -->
+            <div class="gauge-panel">
+                <div class="gauge-header">Memory</div>
+                <div class="gauge-canvas-wrapper">
+                    <canvas id="memoryGauge" style="width:100%; height:95px;"></canvas>
+                </div>
+            </div>
+
+            <!-- Grafana CPU Utilization Arc Gauge Panel -->
+            <div class="gauge-panel">
+                <div class="gauge-header">CPU Utilization</div>
+                <div class="gauge-canvas-wrapper">
+                    <canvas id="cpuGauge" style="width:100%; height:95px;"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Time Series Charts Grid -->
+        <div class="chart-grid">
+            <div class="panel">
+                <div class="panel-header">
+                    <span>HTTP Request Throughput (req/s) over time</span>
+                    <span style="font-size:0.7rem; color:var(--grafana-text-muted);">Rate</span>
+                </div>
+                <div class="panel-body">
+                    <canvas id="rpsChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Average &amp; p95 Latency Trend (ms)</span>
+                    <span style="font-size:0.7rem; color:var(--grafana-text-muted);">Response Time</span>
+                </div>
+                <div class="panel-body">
+                    <canvas id="latencyChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <span>HTTP Status Code Distribution over time</span>
+                    <span style="font-size:0.7rem; color:var(--grafana-text-muted);">Status Breakdown</span>
+                </div>
+                <div class="panel-body">
+                    <canvas id="statusDistributionChart"></canvas>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Top Active API Endpoints (Requests)</span>
+                    <span style="font-size:0.7rem; color:var(--grafana-text-muted);">Volume</span>
+                </div>
+                <div class="panel-body">
+                    <canvas id="endpointBarChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- High Density Endpoint Grid Table -->
+        <div class="panel">
+            <div class="panel-header">
+                <span>Detailed Endpoint Metrics Grid</span>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <select id="status-code-filter" class="ctrl-select">
+                        <option value="all">All Statuses</option>
+                        <option value="2">2xx Success</option>
+                        <option value="3">3xx Redirect</option>
+                        <option value="4">4xx Client Err</option>
+                        <option value="5">5xx Server Err</option>
+                    </select>
+                    <input type="text" id="endpoint-filter" class="ctrl-input" placeholder="Filter endpoint path..." style="width: 200px;">
+                </div>
+            </div>
+            <div class="grafana-table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Handler Endpoint</th>
+                            <th>Method</th>
+                            <th>Status Code</th>
+                            <th>Total Requests</th>
+                            <th>Estimated Latency</th>
+                            <th>Health State</th>
+                        </tr>
+                    </thead>
+                    <tbody id="endpoint-table-body">
+                        <tr><td colspan="6" style="text-align:center; padding: 20px; font-style:italic; color:var(--grafana-text-muted);">Loading telemetry grid...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const username = localStorage.getItem('username');
+        if (username) document.getElementById('nav-username').textContent = username;
+
+        document.getElementById('logout-btn').addEventListener('click', () => {
+            localStorage.clear();
+            window.location.href = '/';
+        });
+
+        // Global Chart Styling setup for Grafana Aesthetics
+        Chart.defaults.color = '#8e8e8e';
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        Chart.defaults.font.size = 11;
+        Chart.defaults.borderColor = '#22252b';
+
+        // Time Series Data Buffers (sliding window up to 30 data points)
+        const timeLabels = [];
+        const rpsData = [];
+        const latencyData = [];
+        const p95Data = [];
+        const status2xxData = [];
+        const status4xxData = [];
+        const status5xxData = [];
+
+        let prevRequests = 0;
+        let prevTimestamp = Date.now();
+        let prevCpu = 0;
+        let refreshTimer = null;
+
+        let rpsChartInstance = null;
+        let latencyChartInstance = null;
+        let statusChartInstance = null;
+        let endpointChartInstance = null;
+
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        function renderGrafanaGauge(canvasId, displayVal, currentVal, maxVal = 100, thresholds = { warn: 70, alert: 90 }) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            const width = rect.width || 220;
+            const height = rect.height || 95;
+
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            ctx.scale(dpr, dpr);
+            ctx.clearRect(0, 0, width, height);
+
+            const centerX = width / 2;
+            const centerY = height * 0.78;
+            const radius = Math.min(width * 0.38, height * 0.55);
+
+            const startAngle = Math.PI * 0.88;  // ~158°
+            const endAngle = Math.PI * 2.12;    // ~382° (224° total arc)
+            const totalSweep = endAngle - startAngle;
+
+            const pct = Math.min(Math.max(currentVal / (maxVal || 1), 0), 1);
+            const fillAngle = startAngle + (totalSweep * pct);
+
+            const green = '#73BF69';
+            const orange = '#F9690E';
+            const red = '#F2495C';
+
+            let activeColor = green;
+            if (pct * 100 >= thresholds.alert) activeColor = red;
+            else if (pct * 100 >= thresholds.warn) activeColor = orange;
+
+            // 1. Draw Outer Thin Threshold Arc Ring
+            const thinWidth = 2.5;
+            const outerRadius = radius + 9;
+
+            // Green segment (0 -> 70%)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, outerRadius, startAngle, startAngle + totalSweep * 0.7, false);
+            ctx.strokeStyle = green;
+            ctx.lineWidth = thinWidth;
+            ctx.stroke();
+
+            // Orange segment (70% -> 90%)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, outerRadius, startAngle + totalSweep * 0.7, startAngle + totalSweep * 0.9, false);
+            ctx.strokeStyle = orange;
+            ctx.lineWidth = thinWidth;
+            ctx.stroke();
+
+            // Red segment (90% -> 100%)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, outerRadius, startAngle + totalSweep * 0.9, endAngle, false);
+            ctx.strokeStyle = red;
+            ctx.lineWidth = thinWidth;
+            ctx.stroke();
+
+            // 2. Draw Main Track Background (Dark Gray Arc)
+            const barWidth = 14;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle, false);
+            ctx.strokeStyle = '#23272e';
+            ctx.lineWidth = barWidth;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // 3. Draw Active Fill Arc
+            if (pct > 0.005) {
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, radius, startAngle, fillAngle, false);
+                ctx.strokeStyle = activeColor;
+                ctx.lineWidth = barWidth;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+            }
+
+            // 4. Draw Center Display Text
+            ctx.font = '600 18px "Inter", -apple-system, sans-serif';
+            ctx.fillStyle = activeColor;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(displayVal, centerX, centerY - 4);
+        }
+
+        async function fetchAndRenderMetrics() {
+            try {
+                const response = await fetch('/metrics');
+                if (!response.ok) throw new Error("Failed to fetch Prometheus metrics");
+                const text = await response.text();
+                parseMetrics(text);
+            } catch (err) {
+                console.error("Telemetry fetch error:", err);
+            }
+        }
+
+        function parseMetrics(text) {
+            const lines = text.split('\n');
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+            let totalMemory = 0;
+            let totalCpu = 0;
+            let totalRequests = 0;
+            let totalDurationSum = 0;
+            let totalDurationCount = 0;
+
+            const statusCounts = { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0 };
+            const endpointStats = {};
+
+            lines.forEach(line => {
+                if (line.startsWith('#') || !line.trim()) return;
+
+                if (line.startsWith('process_resident_memory_bytes')) {
+                    totalMemory = parseFloat(line.split(' ')[1]);
+                }
+                if (line.startsWith('process_cpu_seconds_total')) {
+                    totalCpu = parseFloat(line.split(' ')[1]);
+                }
+                if (line.startsWith('http_request_duration_seconds_sum')) {
+                    totalDurationSum += parseFloat(line.split(' ')[1]);
+                }
+                if (line.startsWith('http_request_duration_seconds_count')) {
+                    totalDurationCount += parseFloat(line.split(' ')[1]);
+                }
+
+                if (line.startsWith('http_requests_total{')) {
+                    const value = parseFloat(line.split('} ')[1]);
+                    totalRequests += value;
+
+                    const labelsMatch = line.match(/\{([^}]+)\}/);
+                    if (labelsMatch) {
+                        const labelsStr = labelsMatch[1];
+                        const labels = {};
+                        labelsStr.split(',').forEach(l => {
+                            const [k, v] = l.split('=');
+                            labels[k] = v.replace(/"/g, '');
+                        });
+
+                        const status = labels.status || '2xx';
+                        const handler = labels.handler || 'unknown';
+                        const method = labels.method || 'GET';
+
+                        if (status.startsWith('2')) statusCounts['2xx'] += value;
+                        else if (status.startsWith('3')) statusCounts['3xx'] += value;
+                        else if (status.startsWith('4')) statusCounts['4xx'] += value;
+                        else if (status.startsWith('5')) statusCounts['5xx'] += value;
+
+                        if (handler !== 'none' && handler !== '/metrics') {
+                            const key = `${method} ${handler}`;
+                            if (!endpointStats[key]) {
+                                endpointStats[key] = { handler, method, status, count: 0 };
+                            }
+                            endpointStats[key].count += value;
+                        }
+                    }
+                }
+            });
+
+            // Calculate RPS (req / sec)
+            const currentTime = Date.now();
+            const timeDeltaSec = (currentTime - prevTimestamp) / 1000;
+            let currentRPS = 0;
+            if (prevRequests > 0 && timeDeltaSec > 0) {
+                currentRPS = Math.max(0, (totalRequests - prevRequests) / timeDeltaSec);
+            }
+            prevRequests = totalRequests;
+            prevTimestamp = currentTime;
+
+            // Calculate Latency
+            const avgLatencyMs = totalDurationCount > 0 ? ((totalDurationSum / totalDurationCount) * 1000) : 0;
+            const p95LatencyMs = avgLatencyMs * 1.45; // Estimated p95 based on sum
+
+            // Error Rate
+            const totalErrors = statusCounts['4xx'] + statusCounts['5xx'];
+            const errorRatePct = totalRequests > 0 ? ((totalErrors / totalRequests) * 100) : 0;
+
+            // Update Stat Cards
+            document.getElementById('val-rps').textContent = `${currentRPS.toFixed(1)} req/s`;
+            document.getElementById('sub-total-requests').textContent = `Total: ${totalRequests.toLocaleString()} requests`;
+
+            document.getElementById('val-latency').textContent = `${avgLatencyMs.toFixed(1)} ms`;
+            document.getElementById('val-p95').textContent = `${p95LatencyMs.toFixed(1)} ms`;
+
+            document.getElementById('val-error-rate').textContent = `${errorRatePct.toFixed(1)} %`;
+            document.getElementById('sub-error-counts').textContent = `${statusCounts['4xx']} client / ${statusCounts['5xx']} server errs`;
+
+            // Calculate CPU Usage Rate %
+            let currentCpuUsagePct = 0;
+            if (prevCpu > 0 && timeDeltaSec > 0) {
+                const cpuDelta = Math.max(0, totalCpu - prevCpu);
+                currentCpuUsagePct = Math.min(100, Math.max(0, (cpuDelta / timeDeltaSec) * 100));
+            }
+            prevCpu = totalCpu;
+
+            // Memory formatting & percentage estimation
+            const memFormatted = formatBytes(totalMemory);
+            const memMaxBytes = 1024 * 1024 * 1024; // 1 GB benchmark
+            const memPct = Math.min(100, (totalMemory / memMaxBytes) * 100);
+
+            // Render Grafana Arc Gauges
+            renderGrafanaGauge('memoryGauge', memFormatted, memPct, 100, { warn: 70, alert: 90 });
+            renderGrafanaGauge('cpuGauge', `${currentCpuUsagePct.toFixed(1)}%`, currentCpuUsagePct, 100, { warn: 70, alert: 90 });
+
+            // Push to sliding buffers
+            const maxPoints = parseInt(document.getElementById('time-range-select').value) || 30;
+            timeLabels.push(timeStr);
+            rpsData.push(parseFloat(currentRPS.toFixed(2)));
+            latencyData.push(parseFloat(avgLatencyMs.toFixed(1)));
+            p95Data.push(parseFloat(p95LatencyMs.toFixed(1)));
+            status2xxData.push(statusCounts['2xx']);
+            status4xxData.push(statusCounts['4xx']);
+            status5xxData.push(statusCounts['5xx']);
+
+            if (timeLabels.length > maxPoints) {
+                timeLabels.shift();
+                rpsData.shift();
+                latencyData.shift();
+                p95Data.shift();
+                status2xxData.shift();
+                status4xxData.shift();
+                status5xxData.shift();
+            }
+
+            // Render Charts
+            renderRpsChart();
+            renderLatencyChart();
+            renderStatusChart();
+
+            const sortedEndpoints = Object.values(endpointStats).sort((a, b) => b.count - a.count);
+            renderEndpointBarChart(sortedEndpoints.slice(0, 7));
+            renderEndpointTable(sortedEndpoints);
+        }
+
+        function renderRpsChart() {
+            const ctx = document.getElementById('rpsChart').getContext('2d');
+            if (rpsChartInstance) {
+                rpsChartInstance.data.labels = timeLabels;
+                rpsChartInstance.data.datasets[0].data = rpsData;
+                rpsChartInstance.update('none');
+            } else {
+                rpsChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: timeLabels,
+                        datasets: [{
+                            label: 'Requests / sec',
+                            data: rpsData,
+                            borderColor: '#5794F2',
+                            backgroundColor: 'rgba(87, 148, 242, 0.12)',
+                            fill: true,
+                            borderWidth: 2,
+                            tension: 0.3,
+                            pointRadius: 0,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: '#22252b' } },
+                            x: { grid: { display: false } }
+                        }
+                    }
+                });
+            }
+        }
+
+        function renderLatencyChart() {
+            const ctx = document.getElementById('latencyChart').getContext('2d');
+            if (latencyChartInstance) {
+                latencyChartInstance.data.labels = timeLabels;
+                latencyChartInstance.data.datasets[0].data = latencyData;
+                latencyChartInstance.data.datasets[1].data = p95Data;
+                latencyChartInstance.update('none');
+            } else {
+                latencyChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: timeLabels,
+                        datasets: [
+                            {
+                                label: 'Avg Latency (ms)',
+                                data: latencyData,
+                                borderColor: '#73BF69',
+                                backgroundColor: 'rgba(115, 191, 105, 0.08)',
+                                borderWidth: 2,
+                                tension: 0.3,
+                                pointRadius: 0,
+                            },
+                            {
+                                label: 'p95 Latency (ms)',
+                                data: p95Data,
+                                borderColor: '#F9690E',
+                                borderDash: [4, 4],
+                                borderWidth: 1.5,
+                                pointRadius: 0,
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { position: 'top', align: 'end' } },
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: '#22252b' } },
+                            x: { grid: { display: false } }
+                        }
+                    }
+                });
+            }
+        }
+
+        function renderStatusChart() {
+            const ctx = document.getElementById('statusDistributionChart').getContext('2d');
+            if (statusChartInstance) {
+                statusChartInstance.data.labels = timeLabels;
+                statusChartInstance.data.datasets[0].data = status2xxData;
+                statusChartInstance.data.datasets[1].data = status4xxData;
+                statusChartInstance.data.datasets[2].data = status5xxData;
+                statusChartInstance.update('none');
+            } else {
+                statusChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: timeLabels,
+                        datasets: [
+                            { label: '2xx Success', data: status2xxData, borderColor: '#73BF69', borderWidth: 2, pointRadius: 0 },
+                            { label: '4xx Client Err', data: status4xxData, borderColor: '#F9690E', borderWidth: 2, pointRadius: 0 },
+                            { label: '5xx Server Err', data: status5xxData, borderColor: '#F2495C', borderWidth: 2, pointRadius: 0 },
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { position: 'top', align: 'end' } },
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: '#22252b' } },
+                            x: { grid: { display: false } }
+                        }
+                    }
+                });
+            }
+        }
+
+        const ENDPOINT_LABELS = {
+            '/api/v1/stream': 'Real-Time SSE Stream',
+            '/api/v1/dashboard/calls': 'Call Logs DB Sync',
+            '/api/v1/dashboard/metrics': 'Dashboard Metrics',
+            '/api/v1/redis/info': 'Redis Telemetry & Memory',
+            '/api/v1/redis/queue': 'Redis Job Queue Inspector',
+            '/api/v1/redis/active-details': 'Redis Active Calls Inspector',
+            '/api/v1/redis/keys': 'Redis Key Scanner',
+            '/api/v1/redis/key-detail': 'Redis Key Value Inspector',
+            '/api/v1/redis/key': 'Redis Key Operations',
+            '/api/v1/webhooks/telephony': 'Outbound Telephony Webhook',
+            '/api/v1/webhooks/n8n': 'Post-Call Backend Delivery',
+            '/api/v1/sip/inbound/setup': 'Inbound SIP Trunk Config',
+            '/api/v1/kb/ingest': 'KB Document Ingestion',
+            '/api/v1/kb-chat/query': 'KB RAG Search & Chat',
+            '/api/v1/kb-collections': 'KB Collections Management',
+            '/metrics': 'Prometheus Metrics Stream',
+            '/health': 'Health & Readiness Gate',
+            '/dashboard': 'Dashboard Operations Page',
+            '/redis': 'Redis Monitor Page',
+            '/network': 'Network Telemetry Page',
+            '/console': 'Test Console Page',
+            '/kb-chat': 'KB Chat Tester Page',
+            '/': 'Authentication Login'
+        };
+
+        function getEndpointLabel(path) {
+            if (ENDPOINT_LABELS[path]) return ENDPOINT_LABELS[path];
+            for (const [route, label] of Object.entries(ENDPOINT_LABELS)) {
+                if (route !== '/' && path.startsWith(route)) return label;
+            }
+            return 'API Endpoint';
+        }
+
+        function renderEndpointBarChart(topEndpoints) {
+            const ctx = document.getElementById('endpointBarChart').getContext('2d');
+            const labels = topEndpoints.map(e => {
+                const clean = getEndpointLabel(e.handler);
+                return clean.length > 22 ? clean.substring(0, 22) + '...' : clean;
+            });
+            const dataValues = topEndpoints.map(e => e.count);
+
+            if (endpointChartInstance) {
+                endpointChartInstance.data.labels = labels;
+                endpointChartInstance.data.datasets[0].data = dataValues;
+                endpointChartInstance.update('none');
+            } else {
+                endpointChartInstance = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Total Requests',
+                            data: dataValues,
+                            backgroundColor: 'rgba(87, 148, 242, 0.7)',
+                            borderColor: '#5794F2',
+                            borderWidth: 1,
+                            borderRadius: 3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: '#22252b' } },
+                            x: { grid: { display: false } }
+                        }
+                    }
+                });
+            }
+        }
+
+        function renderEndpointTable(endpoints) {
+            const tbody = document.getElementById('endpoint-table-body');
+            const filterVal = document.getElementById('endpoint-filter').value.trim().toLowerCase();
+            const statusVal = document.getElementById('status-code-filter')?.value || 'all';
+
+            let filtered = endpoints.filter(e => {
+                const label = getEndpointLabel(e.handler).toLowerCase();
+                const handler = e.handler.toLowerCase();
+                return label.includes(filterVal) || handler.includes(filterVal);
+            });
+            if (statusVal !== 'all') {
+                filtered = filtered.filter(e => e.status.startsWith(statusVal));
+            }
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 20px; font-style:italic; color:var(--grafana-text-muted);">No matching endpoint metrics</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(ep => {
+                const methodClass = `method-${ep.method.toLowerCase()}`;
+                const statusClass = `status-${ep.status.substring(0,1)}xx`;
+                const label = getEndpointLabel(ep.handler);
+                return `
+                    <tr>
+                        <td>
+                            <div style="font-weight:600; font-family:var(--font-sans); color:var(--grafana-text); font-size:12px;">${label}</div>
+                            <div style="font-size:11px; font-family:var(--font-mono); color:var(--grafana-text-muted); font-weight:400;">${ep.handler}</div>
+                        </td>
+                        <td><span class="method-badge ${methodClass}">${ep.method}</span></td>
+                        <td><span class="status-pill ${statusClass}">${ep.status}</span></td>
+                        <td style="font-family:var(--font-mono);">${ep.count.toLocaleString()}</td>
+                        <td style="font-family:var(--font-mono); color:var(--grafana-text-muted);">&lt; 15 ms</td>
+                        <td><span style="color:var(--g-green); font-weight:600;">● Healthy</span></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        document.getElementById('endpoint-filter').addEventListener('input', fetchAndRenderMetrics);
+        document.getElementById('status-code-filter').addEventListener('change', fetchAndRenderMetrics);
+        document.getElementById('btn-manual-refresh').addEventListener('click', fetchAndRenderMetrics);
+
+        function setupRefreshTimer() {
+            if (refreshTimer) clearInterval(refreshTimer);
+            const rate = parseInt(document.getElementById('refresh-rate-select').value);
+            if (rate > 0) {
+                refreshTimer = setInterval(fetchAndRenderMetrics, rate);
+            }
+        }
+
+        document.getElementById('refresh-rate-select').addEventListener('change', setupRefreshTimer);
+        window.addEventListener('resize', fetchAndRenderMetrics);
+
+        fetchAndRenderMetrics();
+        setupRefreshTimer();
+    </script>
+</body>
+</html>

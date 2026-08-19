@@ -49,6 +49,7 @@ Primary endpoint to trigger outbound calls.
 ### POST /api/v1/sip/trunks/outbound/zadarma
 ### POST /api/v1/sip/trunks/outbound/twilio
 ### POST /api/v1/sip/trunks/outbound/plivo
+### POST /api/v1/sip/trunks/outbound/voice_link
 
 ```json
 {
@@ -67,6 +68,18 @@ List all trunks.
 ### DELETE /api/v1/sip/trunks/outbound/{trunk_id}
 
 Delete a trunk.
+
+### POST /api/v1/sip/trunks/inbound / GET / DELETE / PATCH
+
+Inbound trunk CRUD — create, list, delete, and update inbound SIP trunks. The Voicelink variant (`/api/v1/sip/trunks/inbound/voicelink`) auto-creates a dispatch rule.
+
+### POST /api/v1/sip/inbound/setup
+
+End-to-end inbound SIP setup: creates LiveKit inbound trunk + dispatch rule + configures provider SIP forwarding (Zadarma, Twilio, Plivo Zentrunk, VoiceLink). Accepts `org_id`, `provider`, `number`, `prompt`, `voice`, `model`, `kb_tags`, `transfer_numbers`, `client_name`, `process_id`. Stores config in `org_configs` only after provider forwarding succeeds.
+
+### POST /api/v1/sip/dispatch-rules / GET / DELETE / PATCH
+
+SIP dispatch rule CRUD for inbound call routing.
 
 ---
 
@@ -104,13 +117,36 @@ Manually dispatch agent to a test room.
 { "client_name": "Test", "call_id": "99999", "prompt": "Hello", "lead_id": "12345" }
 ```
 
+### POST /api/v1/test/inbound-call
+
+Simulate an inbound call — dispatches agent with `direction: inbound` metadata and triggers a SIP outbound call.
+
+### KB Endpoints
+
+- `POST /api/v1/kb/ingest` — File/text/URL ingestion with `org_id` + optional `document_id`
+- `POST /api/v1/kb/chat` — Text chat test against KB
+- `DELETE /api/v1/kb/document` — Delete by `org_id` + `document_id`
+- `POST /api/v1/knowledge/upload` — Upload file to KB
+- `POST /api/v1/knowledge/text` — Ingest raw text
+- `POST /api/v1/knowledge/url` — Fetch and ingest URL
+- `GET /api/v1/knowledge/list` — List distinct KB IDs
+
+### Organization Configs
+
+- `GET /api/v1/org-configs?org_id=X` — List configs
+- `GET /api/v1/org-configs/{phone_number}` — Get specific config
+- `PUT /api/v1/org-configs/{phone_number}` — Update config
+- `DELETE /api/v1/org-configs/{phone_number}` — Soft delete (deactivate)
+
 ### GET /config
 
 Returns `{ "url": "wss://..." }` — LiveKit server URL for frontend.
 
 ### GET /health
 
-Returns `{ "status": "ok", "service": "ui_server" }`.
+Readiness endpoint. Returns `{ "healthy": true|false }` — `false` when any infrastructure dependency fails OR any provider is at its concurrency limit OR the global agent pool (`MAX_CALL_CONCURRENCY`, default 5) is saturated.
+
+Checks: LiveKit, Redis, PostgreSQL, Deepgram STT, MantraAssist backend, S3, `provider_capacity_{plivo,zadarma,voice_link,twilio}`, `capacity_max_concurrency`.
 
 ---
 

@@ -51,6 +51,10 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# Install pgvector client support (if running pgvector-enabled queries)
+# Note: The PostgreSQL SERVER must have pgvector extension installed separately
+# RUN apt-get update && apt-get install -y postgresql-client && rm -rf /var/lib/apt/lists/*
+
 # Copy the application and virtualenv from the build stage
 COPY --from=build --chown=appuser:appuser /app /app
 WORKDIR /app
@@ -63,6 +67,7 @@ USER appuser
 # Download required models so they are cached in the image
 # We run this as appuser so the cache is correctly owned and located
 RUN uv run python -m mantra.agent download-files
+RUN uv run python -m livekit.agents download-files
 
 # Copy and setup entrypoint
 COPY --chown=appuser:appuser entrypoint.sh /app/entrypoint.sh

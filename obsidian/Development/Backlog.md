@@ -4,17 +4,21 @@
 
 | Item | Priority | Notes |
 |------|----------|-------|
-| `agent.py` is 995 lines, monolithic | High | Extract tools, prompts, config |
+| `agent.py` is 1,629 lines, monolithic | High | Extract tools, prompts, config |
 | No automated tests | High | Regression risk on refactors |
 | Dispatcher uses 0.5s polling | Medium | Replace with Redis Pub/Sub |
 | Post-call webhook reliability | Medium | No retry after 3 attempts |
-| Duplicate `agent_dispatch` creation in dispatcher + webhook | Medium | Two paths do similar work |
+| MCP server broken (upstream API change) | Blocker | `CstdioServerParameters` attribute missing |
+| S3 bucket not configured | High | Recordings silently dropped |
+| Handoff TTS glitch | High | Race condition with tool return |
 
 ## Feature Requests
 
 | Feature | Priority | Notes |
 |---------|----------|-------|
-| Call transfer to human | Medium | Code exists but commented out in agent.py |
+| Re-enable call transfer to human | Medium | Code exists but commented out; needs TTS glitch fix |
+| KB vector/embedding search | High | Add pgvector, generate embeddings, hybrid search |
+| KB upfront prompt injection | High | For small KBs, inject content into system prompt |
 | WebSocket transcript streaming | Low | Would reduce SSE reliance |
 | Multiple admin users | Low | Currently single user |
 | Call recording download from dashboard | Low | S3 URL already stored |

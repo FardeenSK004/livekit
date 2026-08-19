@@ -1,6 +1,6 @@
 # Voice Agent
 
-**File:** `mantra/agent.py` (995 lines)
+**File:** `mantra/agent.py` (1,629 lines)
 
 ## Overview
 
@@ -8,14 +8,22 @@ The core real-time voice AI agent. Connects to LiveKit rooms, handles the full S
 
 ## Voice Pipeline
 
-1. **STT:** Deepgram Nova-3 (configured with `language="hi"` for Hinglish)
+1. **STT:** Deepgram Nova-3 (`language="multi"` — English + Hindi/Hinglish)
 2. **LLM:** Selectable via metadata:
    - `openai` → GPT-4o-mini (default)
    - `gemini` → Gemini 2.5 Flash
    - `deepseek` → DeepSeek v4 Flash (via OpenAI-compatible API)
-3. **TTS:** Cartesia Sonic-3 with FallbackAdapter (multiple API keys for rate limit cycling)
+3. **TTS:** LiveKit native sonic-3 (no Cartesia dependency)
 4. **VAD:** Silero (`min_speech_duration=0.08`, `min_silence_duration=0.15`)
 5. **Turn Detection:** MultilingualModel
+
+## Language Matching
+
+Agent instructions require turn-by-turn language matching:
+- Default/open in English
+- Reply in the caller's language each turn (English → English, Hindi → Hindi)
+- One Hindi filler (`arre`, `yaar`, `ji`) in mostly-English speech does **not** switch the agent to Hindi
+- If the caller switches back to English, agent switches back immediately
 
 ## Voice Mapping
 
@@ -29,13 +37,32 @@ The core real-time voice AI agent. Connects to LiveKit rooms, handles the full S
 | vikas | `adf97b9d-905c-41de-9fe9-afb387116d06` |
 | camila | `bef2ba57-5c10-433b-b215-3bef35110a81` |
 | renata | `d3793b7b-4996-409c-9d59-96dd09f47717` |
+| sia | `4459a9a5-69d6-4680-b970-e13dc51845b6` |
+| sneha | `6b02ffe5-e3cb-48c0-a023-c72f85953375` |
+| kavita | `56e35e2d-6eb6-4226-ab8b-9776515a7094` |
+| katie | `f786b574-daa5-4673-aa0c-cbe3e8534c02` |
+| cathy | `e8e5fffb-252c-436d-b842-8879b84445b6` |
 
 ## Safety Systems
 
-- **Inactivity Monitor:** 10s no-response timeout → force disconnect
-- **Farewell Safety Net:** Detects goodbye without `end_call` → force disconnect after 10s warmup, 3s poll
+- **Inactivity Monitor:** 5s prompt → 10s no-response timeout → force disconnect
+- **Farewell Safety Net:** Detects goodbye without `end_call` → force disconnect after 10s warmup, 3s poll (directional — different phrases for inbound vs outbound)
 - **Call Limiter:** 2m30s → farewell instructions; 3m → hard kill
 - **Crash Email:** `send_crash_email()` on entrypoint exceptions
+
+## Agent Tools
+
+### `search_knowledge_base(query, specific_tag?)`
+Function tool for RAG. Searches PostgreSQL FTS across all kb_collections for the org + legacy fallback. Returns formatted results to LLM. Tracks accessed pages for post-call metadata extraction.
+
+### `end_call()`
+Graceful disconnect. Triggers a 3s delay then force-disconnects the room. Required for LLM to end calls — safety net catches cases where LLM says goodbye without calling this.
+
+## Handoff to Human (`transfer_to_human`)
+
+**Status: DISABLED** — Code preserved but commented out in `agent.py` (lines ~279-422).
+
+The full implementation (when re-enabled): department-based transfer number resolution via `TRANSFER_NUMBERS` dict, SIP participant creation in same room, webhook notification, agent silence enforcement via `update_instructions()`, speech interruption via `session.interrupt()`. Known issue: race condition with tool return producing residual `"..."` utterance.
 
 ## Configuration via Metadata Payload
 

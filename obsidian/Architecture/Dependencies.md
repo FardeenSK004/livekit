@@ -11,7 +11,6 @@
 | `livekit-plugins-google` | LLM (Gemini 2.5 Flash) |
 | `livekit-plugins-deepgram` | STT (Nova-3) |
 | `livekit-plugins-assemblyai` | Alternative STT |
-| `livekit-plugins-cartesia` | TTS (Sonic-3) |
 | `livekit-plugins-ai-coustics` | Audio enhancement |
 | `livekit-plugins-noise-cancellation~=0.2` | Background noise removal |
 
@@ -28,6 +27,7 @@
 | `redis>=8.0.0` | Async Redis client |
 | `boto3>=1.35.0` | AWS SDK (S3 uploads) |
 | `mcp[cli]` | Model Context Protocol server |
+| `prometheus-fastapi-instrumentator>=8.0.2` | Prometheus metrics |
 
 ### AI & Data Processing
 | Package | Purpose |
