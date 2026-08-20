@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-20
+
+### Native Deepgram Nova-3 Multi & TurnDetector UX Calibration
+
+- **fix:** Resolved conversational latency, dropped user transcripts, and false interruption loops in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py):
+  - **Native STT Engine:** Switched `stt_engine` to native `deepgram.STT(model="nova-3", language="multi", endpointing_ms=25, no_delay=True)`, supporting both English and Hindi with full native support for streaming, `aligned_transcript="word"`, and `interim_results` without custom socket multiplexing overhead.
+  - **Fixed Endpointing Delay:** Switched `endpointing` mode from `"dynamic"` to `"fixed"` with `min_delay: 0.25s` (`max_delay: 1.50s`), preventing `DynamicEndpointing` delay spikes and shaving ~150ms off turn latency.
+  - **Turn Detection:** Removed premature `unlikely_threshold=0.35` override from `inference.TurnDetector()`, returning to server-calibrated defaults.
+  - **Interruption Calibration:** Updated `min_words` from `1` → `2`, set `min_duration: 0.40s`, enabled `resume_false_interruption: True`, and set `false_interruption_timeout: 1.5s` with `backchannel_boundary: (1.0, 1.0)`.
+  - **Silero VAD:** Tuned `min_speech_duration: 0.10s`, `min_silence_duration: 0.25s`, `prefix_padding_duration: 0.20s` for snappy turn transitions.
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
+
 ## 2026-08-18
 
 ### New TTS Voices Integration (Sia, Sneha, Kavita, Katie, Cathy)

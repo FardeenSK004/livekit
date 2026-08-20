@@ -14,8 +14,8 @@ The core real-time voice AI agent. Connects to LiveKit rooms, handles the full S
    - `gemini` → Gemini 2.5 Flash
    - `deepseek` → DeepSeek v4 Flash (via OpenAI-compatible API)
 3. **TTS:** LiveKit native sonic-3 (no Cartesia dependency)
-4. **VAD:** Silero (`min_speech_duration=0.08`, `min_silence_duration=0.15`)
-5. **Turn Detection:** MultilingualModel
+4. **VAD:** Silero (`min_speech_duration=0.10s`, `min_silence_duration=0.25s`, `prefix_padding_duration=0.20s`)
+5. **Turn Detection:** LiveKit `inference.TurnDetector` with fixed endpointing (`min_delay: 0.25s`, `max_delay: 1.50s`) and adaptive interruptions (`min_words: 2`, `min_duration: 0.40s`, `resume_false_interruption: True`)
 
 ## Language Matching
 

@@ -1015,24 +1015,29 @@ Follow these specific instructions:
         }
     )
 
-    # Bilingual Parallel STT engine listening across en and hi (mr, kn, te commented out for now)
-    stt_engine = MultilingualParallelSTT(
-        languages=[language, "en", "hi"]  # ["en", "mr", "kn", "te", "hi"]
+    # Native Deepgram Nova-3 Multilingual STT engine (supports English & Hindi)
+    stt_engine = deepgram.STT(
+        model="nova-3",
+        language="multi",
+        endpointing_ms=25,
+        no_delay=True,
     )
 
     session = AgentSession(
         turn_handling=TurnHandlingOptions(
-            turn_detection=inference.TurnDetector(
-                unlikely_threshold=0.35,  # Calibrated for prompt conversational turn completion
-            ),
+            turn_detection=inference.TurnDetector(),
             endpointing={
-                "mode": "dynamic",
-                "min_delay": 0.10,
-                "max_delay": 0.35,
+                "mode": "fixed",
+                "min_delay": 0.25,
+                "max_delay": 1.50,
             },
             interruption={
                 "mode": "adaptive",
-                "min_words": 1,
+                "min_words": 2,
+                "min_duration": 0.40,
+                "resume_false_interruption": True,
+                "false_interruption_timeout": 1.5,
+                "backchannel_boundary": (1.0, 1.0),
             },
             preemptive_generation={
                 "preemptive_tts": True,
@@ -1041,6 +1046,7 @@ Follow these specific instructions:
         vad=silero.VAD.load(
             min_speech_duration=0.10,
             min_silence_duration=0.25,
+            prefix_padding_duration=0.20,
         ),
         stt=stt_engine,
         llm=llm_engine,
