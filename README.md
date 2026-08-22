@@ -1,26 +1,28 @@
-# LKT Workspace
+# LKT Workspace — Mantra Voice Agent & Telephony Engine
 
 [![Built with LiveKit](https://img.shields.io/badge/Built%20with-LiveKit-blue)](https://livekit.io/)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![MCP 2.0](https://img.shields.io/badge/MCP-2.0%20Integrated-orange)](https://modelcontextprotocol.io/)
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-black?logo=github)](https://github.com/Mantracare-Org/livekit)
 
-Welcome to the [Mantracare-Org](https://github.com/Mantracare-Org/livekit) workspace, a collection of advanced voice AI agents and real-time communication tools optimized for high-performance telephony.
+Welcome to the [Mantracare-Org](https://github.com/Mantracare-Org/livekit) workspace, a collection of advanced voice AI agents, telephony orchestrators, and real-time communication tools optimized for high-performance telephony.
 
 ---
 
 ## 🤖 Projects
 
-### Mantra Voice Agent (Bilingual)
+### Mantra Voice Agent (Bilingual & MCP-Enabled)
 
-A low-latency, human-like voice agent designed for professional care support and outbound follow-up calls.
+A low-latency, human-like voice agent designed for professional healthcare support, inbound triage, and outbound follow-up calls.
 
 #### 🛠 Optimized Tech Stack
 
 - **STT:** [Deepgram Nova-3](https://www.deepgram.com/) (Configured for `hi` Multilingual support)
-- **LLM:** [OpenAI GPT-4o-Mini](https://openai.com/) (Fast reasoning & process-driven responses)
+- **LLM:** [OpenAI GPT-4o-Mini](https://openai.com/) / [DeepSeek V4](https://deepseek.com/) (Fast reasoning & process-driven responses)
 - **TTS:** [Cartesia Sonic-3](https://cartesia.ai/) (Multilingual Native English/Hindi synthesis)
 - **VAD & Turn Detection:** Silero VAD + Multilingual Turn Detection (Optimized with PyTorch)
 - **Knowledge Base:** PostgreSQL + pgvector + OpenAI text-embedding-3-small (Semantic search, multi-KB isolation)
+- **MCP Integration:** Connected with `livekit-mcp` on port `8000` for dynamic doctor availability and international timezone resolution
 
 ---
 
@@ -64,26 +66,47 @@ This project relies on an isolated database environment to store call logs, tran
 
 ---
 
-### Environment Variables (Knowledge Base)
+## 👨‍⚕️ LiveKit MCP & Doctor Availability Tool
+
+The voice agent is equipped with the `check_doctor_availability` function tool in `mantra/agent.py`.
+
+### Mid-Call Dynamic Execution Flow:
+1. **Caller asks:** *"Is Dr. Sharma available next Tuesday?"* or *"Who can I see tomorrow afternoon?"*
+2. **LLM invokes:** `check_doctor_availability(date="2026-08-25", doctor_name="Sharma")`
+3. **Agent queries:** `http://localhost:8000/api/tools/call` on `livekit-mcp` with JWT Bearer authentication.
+4. **`livekit-mcp` resolves timezone:** Automatically detects the caller's country/timezone from their phone number (`+1` US ➔ EDT, `+44` UK ➔ GMT, `+91` India ➔ IST) and converts UTC slots to local time.
+5. **Agent speaks:** Communicates the available open slots naturally to the caller.
+
+### Environment Configuration:
+```env
+LIVEKIT_MCP_URL=http://localhost:8000
+LIVEKIT_MCP_JWT_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+---
+
+### Environment Variables (Knowledge Base & Services)
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+|---|---|---|
 | `EMBEDDING_MODEL` | OpenAI embedding model | `text-embedding-3-small` |
 | `EMBEDDING_API_KEY` | API key for embeddings (falls back to OPENAI_API_KEY) | — |
 | `KB_SIMILARITY_THRESHOLD` | Minimum cosine similarity for KB results | `0.7` |
 | `KB_MAX_CHUNK_TOKENS` | Max tokens per chunk before sub-chunking | `2000` |
-| `OPENAI_API_KEY` | Required for embeddings if EMBEDDING_API_KEY not set | — |
+| `LIVEKIT_MCP_URL` | Base URL of LiveKit MCP Server | `http://localhost:8000` |
+| `LIVEKIT_MCP_JWT_TOKEN` | Bearer JWT token for livekit-mcp | — |
 
 ---
 
 ### ✨ Key Features
 
 - **Native Bilingual Intelligence:** Flawlessly switches between English and Hindi based on the caller's preference.
+- **Dynamic MCP Scheduling:** Real-time doctor working hours and slot lookup mid-conversation.
 - **Telephony-First VAD:** Tuned thresholds to filter background noise and cellular interference.
 - **Romanized Stability:** Optimized for high-quality Cartesia synthesis using transliterated Hinglish.
 - **Modern UI:** Premium glassmorphism dashboard with real-time transcript synchronization.
 - **Dynamic Context:** Automatically ingests JSON metadata from SIP triggers to provide personalized care.
-- **Vector Knowledge Base (New):** 
+- **Vector Knowledge Base:** 
   - **Multi-KB Isolation:** Each agency gets its own `kb_id` — zero cross-KB leakage.
   - **Semantic Search:** OpenAI embeddings + pgvector for intent-based retrieval.
   - **3-Way Ingestion:** Upload PDF/TXT/MD, paste raw text, or fetch from URL — all via dashboard.
@@ -125,19 +148,6 @@ docker run --env-file .env.local lkt-mantra agent
 docker run --env-file .env.local -p 8081:8081 lkt-mantra ui
 ```
 
-### Required on PostgreSQL Server
-
-The container connects to an external PostgreSQL. Ensure the server has:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-Then run the migration:
-```bash
-docker run --env-file .env.local lkt-mantra python mantra/migrations/001_kb_pages.py
-```
-
 ---
 
 ## 📁 Project Structure
@@ -145,7 +155,7 @@ docker run --env-file .env.local lkt-mantra python mantra/migrations/001_kb_page
 ```
 lkt/
 ├── mantra/
-│   ├── agent.py              # Voice agent (STT→LLM→TTS + KB tool)
+│   ├── agent.py              # Voice agent (STT→LLM→TTS + KB + Doctor Availability tools)
 │   ├── ui_server.py          # FastAPI dashboard + KB endpoints
 │   ├── knowledge_base.py     # KB core: chunking, embeddings, vector search
 │   ├── utils.py              # Recording, S3, DB logging, analysis
@@ -159,7 +169,8 @@ lkt/
 │   ├── index.html            # Test console
 │   └── login.html            # Auth page
 ├── mcp/
-│   └── server.py             # MCP Postgres server
+│   └── server.py             # Internal MCP Postgres server
+├── obsidian/                 # Permanent Agentic Knowledge Base
 ├── pyproject.toml            # Python deps (uv)
 ├── uv.lock
 ├── Dockerfile

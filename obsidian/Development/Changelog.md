@@ -12,6 +12,19 @@
   - **Silero VAD:** Tuned `min_speech_duration: 0.10s`, `min_silence_duration: 0.25s`, `prefix_padding_duration: 0.20s` for snappy turn transitions.
 - Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
 
+## 2026-08-22
+
+### Doctor & Healthcare Provider Availability Tool Integration
+
+- **feat:** Added `check_doctor_availability` function tool to `AssistantFunctions` in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py):
+  - Allows LLM voice agent to dynamically check real-time doctor working hours, open consultation times, and scheduling mid-call for both inbound and outbound calls.
+  - Automatically queries `livekit-mcp` HTTP endpoint (`/api/tools/call`) with caller's phone number, organization ID, requested date, and optional doctor name.
+  - Returns localized open appointment slots tailored to the caller's timezone (EDT, GMT, IST, GST).
+- **feat:** Registered `fnc_ctx.check_doctor_availability` in `agent_tools` in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py).
+- **feat:** Added `LIVEKIT_MCP_URL` and `LIVEKIT_MCP_JWT_TOKEN` configuration to [.env](file:///home/fardeen/lkt/.env).
+- **docs:** Created [obsidian/Features/Doctor Availability Tool.md](file:///home/fardeen/lkt/obsidian/Features/Doctor%20Availability%20Tool.md) and updated [obsidian/Features/Feature Index.md](file:///home/fardeen/lkt/obsidian/Features/Feature%20Index.md).
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [.env](file:///home/fardeen/lkt/.env), [obsidian/Features/Doctor Availability Tool.md](file:///home/fardeen/lkt/obsidian/Features/Doctor%20Availability%20Tool.md), [obsidian/Features/Feature Index.md](file:///home/fardeen/lkt/obsidian/Features/Feature%20Index.md)
+
 ## 2026-08-18
 
 ### New TTS Voices Integration (Sia, Sneha, Kavita, Katie, Cathy)
@@ -73,8 +86,6 @@
 - **feat:** Integrated `MultilingualParallelSTT` into [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py#L990-L994). The agent is now "all ears" from the start of every call, capturing English, Marathi, Kannada, Telugu, or Hindi seamlessly without requiring initial language pre-configuration or explicit switch requests.
 - **feat:** Added real-time transcript arbitration between parallel streams: prioritizes native Indic scripts (`kn`, `te`, `devanagari`) over English hallucinations, eliminates duplicate turns, and synchronizes with `LanguageManager`.
 - Files: [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
-
-
 
 ### Multi-Attempt Call Retry Storage & Dashboard Timeline UI
 
