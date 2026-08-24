@@ -1,6 +1,14 @@
 # Changelog
 
-## 2026-08-20
+## 2026-08-24
+
+### Official Model Context Protocol (MCP 2.0) Architecture & SSE JSON-RPC Client
+
+- **feat:** Implemented official Model Context Protocol (MCP) JSON-RPC 2.0 client and server architecture across `lkt` and `livekit-mcp`:
+  - **`mantra/mcp_client.py`:** Built `MantraMCPClient` using Anthropic's official `mcp` SDK (`mcp.client.sse.sse_client` and `mcp.ClientSession`), querying `tools/list` and executing `tools/call` over SSE transport.
+  - **`mantra/agent.py`:** Integrated `MantraMCPClient` into `AssistantFunctions.check_doctor_availability`, replacing legacy REST endpoints with native MCP JSON-RPC 2.0 frames over SSE.
+  - **`livekit-mcp`:** Upgraded server application to use official `FastMCP` and `SseServerTransport` with mounted `/sse` and `/messages/` endpoints.
+- Files: [mantra/mcp_client.py](file:///home/fardeen/lkt/mantra/mcp_client.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), `livekit-mcp/src/livekit_mcp/server.py`.
 
 ### Native Deepgram Nova-3 Multi & TurnDetector UX Calibration
 

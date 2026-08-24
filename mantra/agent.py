@@ -593,46 +593,21 @@ class AssistantFunctions:
         if not caller_phone and self.call_state:
             caller_phone = self.call_state.get("caller_phone") or self.call_state.get("phone_number")
 
-        logger.info(f"Agent requested doctor availability: org_id={org_id}, date={date}, doctor={doctor_name}, phone={caller_phone}")
+        logger.info(f"Agent requesting doctor availability via MCP JSON-RPC: org_id={org_id}, date={date}, doctor={doctor_name}, phone={caller_phone}")
 
-        mcp_url = os.getenv("LIVEKIT_MCP_URL", "http://localhost:8000")
-        mcp_jwt = os.getenv("LIVEKIT_MCP_JWT_TOKEN", "")
+        from mantra.mcp_client import get_mcp_client
 
-        headers = {}
-        if mcp_jwt:
-            headers["Authorization"] = f"Bearer {mcp_jwt}"
-
-        mcp_payload = {
-            "name": "search_provider_availability",
-            "arguments": {
+        mcp_client = get_mcp_client()
+        result = await mcp_client.call_tool(
+            "search_provider_availability",
+            {
                 "org_id": int(org_id),
                 "query_date": str(date).strip(),
                 "query": str(doctor_name).strip() if doctor_name else None,
                 "caller_phone": caller_phone,
             },
-        }
-
-        try:
-            async with aiohttp.ClientSession() as http_sess:
-                async with http_sess.post(
-                    f"{mcp_url}/api/tools/call",
-                    json=mcp_payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=5.0),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        result = data.get("result")
-                        if result:
-                            return result
-                        return "No active doctor schedules found for this date."
-                    else:
-                        error_text = await resp.text()
-                        logger.error(f"LiveKit MCP returned status {resp.status}: {error_text}")
-                        return "Unable to retrieve doctor schedule at the moment."
-        except Exception as e:
-            logger.error(f"Failed to query livekit-mcp server: {e}")
-            return "Unable to reach the scheduling service right now. Please offer to take a callback request."
+        )
+        return result
 
     # Removed query_knowledge_base tool as per user request to inject KB directly into the main job
 
