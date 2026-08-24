@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-08-24
+
+### Knowledge Base Search Filler Elimination & Proactive Retrieval
+
+- **feat / prompt:** Eliminated vocal filler interruptions ("Let me check that for you", "Let me look that up") when the agent queries the knowledge base:
+  - Updated `search_knowledge_base` tool description and prompt directives to strictly enforce silent background execution.
+  - Added overriding prompt rules forbidding search narration phrases so the agent directly delivers the retrieved factual answer to the caller.
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
+
+### Single-Turn Tool Calling & Sequential Search Prevention
+
+- **perf:** Prevented multi-turn sequential tool chaining latency spikes where DeepSeek executed consecutive search tool retries (`search_knowledge_base` -> no match -> `search_knowledge_base` retry), which caused 8+ second round-trip stalls on live calls:
+  - Updated `search_knowledge_base` tool description and system prompt directives to enforce executing at most one search tool per turn.
+  - Instructed the LLM to synthesize its spoken response immediately after the initial search rather than launching sequential retries over the network.
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
+
+
+### Deepgram Nova-3 Telephony STT Configuration & Dynamic Locale Routing
+
+- **fix:** Resolved Deepgram STT misrecognizing Indian names (such as "Jaideep" -> "Debbie", "Navodaya" -> "Noodle"):
+  - **Removed Krisp Filter:** Removed external audio isolation filter on SIP audio so un-attenuated speech frequencies pass directly to Deepgram's native neural acoustic denoising.
+  - **Deepgram `smart_format=True` & `punctuate=True`:** Enabled Inverse Text Normalization (ITN), Named Entity Recognition (NER), proper noun capitalization, and punctuation per Deepgram streaming documentation.
+  - **`numerals=True`:** Enables digit formatting for numbers, dates, times, and phone numbers.
+  - **Dynamic Locale Routing (`resolve_stt_language`):** Automatically provisions `en-IN` for Indian callers (+91), `en-US` for US/Canada (+1), `en-GB` for UK (+44), `en-AU` for Australia (+61), while supporting explicit language overrides (`hi`, `es`, `fr`).
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py)
+
+
+### Pipeline Error Alerting (LLM/STT/TTS Provider Failures)
+
+- **feat:** Added `session.on("error")` handler (`on_session_error`) in `mantra/agent.py` to send crash email alerts for pipeline errors that LiveKit's `AgentSession` swallows internally (e.g., LLM 402 "Insufficient Balance", STT/TTS provider failures) — previously only entrypoint-level exceptions triggered `send_crash_email`.
+- **feat:** Rate-limited alerts to one email per call per 300s cooldown window, with cumulative error count included in the email context.
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
+
+### Hybrid KB Search Concurrency, Org Pre-fetch Caching & Fast-Race Latency Optimization
+
+- **perf:** Optimized Knowledge Base hybrid retrieval latency without altering search quality or removing semantic vector capabilities:
+  - **Org KB Pages Pre-fetch Caching:** Added `prefetch_org_pages()` to `PostgresKnowledgeBase` and `prefetch()` to `KnowledgeRetriever`. When a call connects, the worker pre-fetches all KB pages for the session's `kb_ids` and stores them in memory (`_org_pages_cache`), eliminating DB queries on repeated turns and `list_available()` fallbacks.
+  - **Fast-Race Embedding Timeout (350ms Cap):** In `mantra/knowledge_base.py`, wrapped `_embed_query` in `_raced_embed` with a strict 350ms timeout. If Google Gemini API returns vector embeddings in <350ms, full hybrid RRF fusion executes; if external API lags, it automatically falls back to instant PostgreSQL FTS instead of stalling the live call.
+  - **In-Memory Query Embedding Cache:** Added `_query_cache` in `mantra/gemini_embeddings.py` to return embeddings in 0.0ms for identical or repeated questions during a call.
+  - **Concurrent Hybrid Execution (`asyncio.gather`):** In `mantra/knowledge_base.py`, executes PostgreSQL FTS and query embedding concurrently.
+  - **Pre-Warmed Database Connection Pool & Schemas:** Added `warmup()` method to `PostgresKnowledgeBase` and `AssistantFunctions` to pre-allocate asyncpg pools, cache schema flags, and pre-initialize clients.
+- Files: [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py), [mantra/retriever.py](file:///home/fardeen/lkt/mantra/retriever.py), [mantra/gemini_embeddings.py](file:///home/fardeen/lkt/mantra/gemini_embeddings.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
+
 ## 2026-08-20
 
 ### Native Deepgram Nova-3 Multi & TurnDetector UX Calibration

@@ -39,6 +39,65 @@ NATIVE_SCRIPTS: Dict[str, str] = {
 }
 
 
+def resolve_stt_language(
+    language: Optional[str] = None,
+    phone_number: Optional[str] = None,
+    country_code: Optional[str] = None,
+) -> str:
+    """
+    Resolve the optimal Deepgram STT language/locale model.
+
+    - Explicit regional locales (e.g. 'en-IN', 'en-US', 'en-GB', 'en-AU', 'hi') are respected directly.
+    - If language is generic 'en', it inspects country_code or E.164 phone prefix:
+        * +91 (India) -> 'en-IN' (calibrated for Indian accents & proper nouns)
+        * +1 (USA/Canada) -> 'en-US'
+        * +44 (UK) -> 'en-GB'
+        * +61 (Australia) -> 'en-AU'
+        * +64 (New Zealand) -> 'en-NZ'
+        * Default / international -> 'en-US'
+    - Non-English languages ('hi', 'es', 'fr', etc.) map directly.
+    """
+    lang = (language or "en").strip()
+
+    # If it's already a full regional locale (e.g. 'en-IN', 'en-US') or non-English, use it
+    if "-" in lang or lang != "en":
+        return lang
+
+    # Check country code if provided
+    cc = (country_code or "").strip().upper()
+    if cc in ("IN", "IND", "INDIA"):
+        return "en-IN"
+    elif cc in ("US", "USA", "CA", "CAN", "UNITED STATES", "CANADA"):
+        return "en-US"
+    elif cc in ("GB", "GBR", "UK", "UNITED KINGDOM"):
+        return "en-GB"
+    elif cc in ("AU", "AUS", "AUSTRALIA"):
+        return "en-AU"
+    elif cc in ("NZ", "NZL", "NEW ZEALAND"):
+        return "en-NZ"
+
+    # Infer from E.164 phone number prefix
+    phone = (phone_number or "").strip()
+    if phone.startswith("sip_"):
+        phone = phone[4:]
+    if phone.startswith("+"):
+        phone = phone[1:]
+
+    if phone.startswith("91") and len(phone) >= 12:
+        return "en-IN"
+    elif phone.startswith("1") and len(phone) >= 11:
+        return "en-US"
+    elif phone.startswith("44") and len(phone) >= 11:
+        return "en-GB"
+    elif phone.startswith("61") and len(phone) >= 10:
+        return "en-AU"
+    elif phone.startswith("64") and len(phone) >= 10:
+        return "en-NZ"
+
+    # Default international English
+    return "en-US"
+
+
 # ── 1. Unicode Script & Statistical ML Language Detector ─────────────────
 
 class NativeLanguageDetector:
