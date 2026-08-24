@@ -242,11 +242,57 @@ class PostgresKnowledgeBase(KnowledgeBase):
         self._pool: Optional[asyncpg.Pool] = None
         self._use_generated_text_search: Optional[bool] = None
         self._use_embeddings: Optional[bool] = None
+        self._org_pages_cache: dict[tuple, list[KnowledgePage]] = {}
 
     async def _get_pool(self) -> asyncpg.Pool:
         if self._pool is None:
             self._pool = await asyncpg.create_pool(self.dsn, min_size=1, max_size=5)
         return self._pool
+
+    async def prefetch_org_pages(self, kb_ids: list[str]) -> list[KnowledgePage]:
+        """Fetch and cache all KB pages for the given org/kb_ids into memory."""
+        if not kb_ids:
+            return []
+        kb_ids = [str(k) for k in kb_ids]
+        cache_key = tuple(sorted(kb_ids))
+        if cache_key in self._org_pages_cache:
+            return self._org_pages_cache[cache_key]
+
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, kb_id, title, content, source_type, page_meta, content_in_text, created_at
+                FROM kb_pages
+                WHERE kb_id = ANY($1)
+                ORDER BY created_at ASC
+                """,
+                kb_ids,
+            )
+            pages = [self._row_to_page(r) for r in rows]
+            self._org_pages_cache[cache_key] = pages
+            logger.info(f"[KB] Pre-fetched and cached {len(pages)} KB pages for kb_ids={kb_ids}")
+            return pages
+
+    async def warmup(self, kb_ids: Optional[list[str]] = None):
+        """Pre-warm asyncpg connection pool, schema column detection, embedding client, and pre-fetch org KB pages."""
+        try:
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                await self._supports_generated_text_search(conn)
+                await self._supports_embeddings(conn)
+                await conn.fetchval("SELECT 1")
+            try:
+                from mantra.gemini_embeddings import embedding_enabled, _get_client
+                if embedding_enabled():
+                    _get_client()
+            except Exception:
+                pass
+            if kb_ids:
+                await self.prefetch_org_pages(kb_ids)
+            logger.info("[KB] PostgresKnowledgeBase warmed up (pool, schema, embeddings client ready, org KB cached)")
+        except Exception as e:
+            logger.warning(f"[KB] Warmup encountered error (non-fatal): {e}")
 
     async def add_page(self, page: KnowledgePage) -> str:
         pool = await self._get_pool()
@@ -373,8 +419,9 @@ class PostgresKnowledgeBase(KnowledgeBase):
         tags: Optional[list[str]] = None,
     ) -> list[KnowledgePage]:
         """
-        Tiered retrieval:
-          Tier A: strict FTS (AND) + optional semantic (pgvector) blended.
+        Tiered hybrid retrieval:
+          Tier A: strict FTS (AND) + semantic (pgvector) blended via RRF.
+                  FTS query and query embedding are executed concurrently.
           Tier B: loose FTS (OR) if A returns nothing.
           Tier C: tag-only match if B returns nothing and tags are present.
           Tier D: list available docs if all above return nothing.
@@ -387,15 +434,42 @@ class PostgresKnowledgeBase(KnowledgeBase):
             use_generated_column = await self._supports_generated_text_search(conn)
             supports_embeddings = await self._supports_embeddings(conn)
 
-            # Tier A — strict FTS
-            rows = await conn.fetch(
+            # Concurrent launch: FTS query + fast-raced Gemini query embedding API (950ms timeout cap)
+            fts_coro = conn.fetch(
                 build_search_query(use_generated_column=use_generated_column),
                 kb_ids,
                 query,
                 top_k,
                 tags,
             )
-            pages = [self._row_to_page(r) for r in rows]
+
+            async def _raced_embed(q: str, timeout_s: float = 0.35) -> Optional[list[float]]:
+                try:
+                    return await asyncio.wait_for(self._embed_query(q), timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    logger.info(f"[KB] Fast-race: Embedding exceeded {int(timeout_s*1000)}ms — proceeding immediately with FTS")
+                    return None
+                except Exception as err:
+                    logger.warning(f"[KB] Fast-race embedding error: {err}")
+                    return None
+
+            embed_coro = _raced_embed(query) if supports_embeddings else None
+
+            if embed_coro:
+                fts_rows, query_embedding = await asyncio.gather(
+                    fts_coro, embed_coro, return_exceptions=True
+                )
+                if isinstance(fts_rows, Exception):
+                    logger.error(f"[KB] FTS search error: {fts_rows}")
+                    fts_rows = []
+                if isinstance(query_embedding, Exception):
+                    logger.warning(f"[KB] Embedding query error: {query_embedding}")
+                    query_embedding = None
+            else:
+                fts_rows = await fts_coro
+                query_embedding = None
+
+            pages = [self._row_to_page(r) for r in fts_rows]
 
             # Soft tag filter: if tagged search missed, retry without tags
             if not pages and tags:
@@ -409,9 +483,8 @@ class PostgresKnowledgeBase(KnowledgeBase):
                 pages = [self._row_to_page(r) for r in rows]
 
             # Blend in semantic results (Tier A+)
-            if pages and supports_embeddings:
-                query_embedding = await self._embed_query(query)
-                if query_embedding:
+            if query_embedding:
+                try:
                     vec_rows = await conn.fetch(
                         build_vector_search_query(),
                         kb_ids,
@@ -422,6 +495,8 @@ class PostgresKnowledgeBase(KnowledgeBase):
                     vec_pages = [self._row_to_page(r) for r in vec_rows]
                     if vec_pages:
                         pages = _blend_results(pages, vec_pages, top_k)
+                except Exception as vec_err:
+                    logger.warning(f"[KB] Vector search fetch error: {vec_err}")
 
             if not pages:
                 # Tier B — loose FTS (OR)
@@ -456,6 +531,10 @@ class PostgresKnowledgeBase(KnowledgeBase):
         if not kb_ids:
             return []
         kb_ids = [str(k) for k in kb_ids]
+        cache_key = tuple(sorted(kb_ids))
+        if cache_key in self._org_pages_cache:
+            return self._org_pages_cache[cache_key][:top_k]
+
         pool = await self._get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(

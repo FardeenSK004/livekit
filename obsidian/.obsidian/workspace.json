@@ -25,17 +25,7 @@
             }
           },
           {
-            "id": "c9dc742e6327312d",
-            "type": "leaf",
-            "state": {
-              "type": "graph",
-              "state": {},
-              "icon": "lucide-git-fork",
-              "title": "Graph view"
-            }
-          },
-          {
-            "id": "9af13f4ff76f13d6",
+            "id": "d690e3ae9bac8b77",
             "type": "leaf",
             "state": {
               "type": "graph",
@@ -45,7 +35,7 @@
             }
           }
         ],
-        "currentTab": 2
+        "currentTab": 1
       }
     ],
     "direction": "vertical"
@@ -206,7 +196,7 @@
       "bases:Create new base": false
     }
   },
-  "active": "9af13f4ff76f13d6",
+  "active": "d690e3ae9bac8b77",
   "lastOpenFiles": [
     "Outbound Call Walkthrough.canvas",
     "Untitled.canvas",

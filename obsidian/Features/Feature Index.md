@@ -12,5 +12,6 @@
 | Crash Alerts | `mantra/email_alerts.py` | SMTP crash notifications with meme images for admin |
 | Test Console | `static/index.html` + `app.js` | Manual agent testing via WebRTC |
 | Knowledge Base | `mantra/knowledge_base.py` + `retriever.py` | PostgreSQL FTS with adaptive chunking, multi-KB collections per org |
+| Doctor Availability Tool | `mantra/agent.py` | Mid-call dynamic doctor availability lookup via `livekit-mcp` with international timezone detection |
 | KB Chat | `static/kb_chat.html` | Text-based KB testing UI |
 | Network Monitor | `static/network.html` | Network monitoring page |
