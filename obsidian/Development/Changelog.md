@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-08-25
+
+### Dynamic Department Parameter & Inbound Org ID Resolution for Doctor Availability
+
+- **feat:** Added `department` parameter extraction across `lkt` and `livekit-mcp`:
+  - **`mantra/agent.py`:** Updated `check_doctor_availability` tool to accept `department: Optional[str]` and dynamically extract medical specialty/department (e.g. `'Cardiology'`, `'Dermatology'`, `'Retina'`, `'Orthopedics'`) from caller transcripts.
+  - **`livekit-mcp`:** Updated `receive_doctor_availability` and `search_provider_availability` tools to accept `department` and query `GET /api/v1/providers/availability` with standard UTC params (`org_id`, `date`, `datetime`, `doc_name`, `department`).
+- **fix:** Fixed dynamic `org_id` resolution for inbound telephony calls in `mantra/agent.py`:
+  - Inbound calls now look up dialed DID in PostgreSQL `org_configs` and pass the registered `org_id` (e.g. `68`, `278`) directly into `call_state["org_id"]` and `AssistantFunctions`.
+  - Removed incorrect fallback to `kb_ids` vector collection UUIDs.
+- **fix:** Hardened `livekit-mcp` and `mantra/mcp_client.py`:
+  - Added seamless dev-mode anonymous auth in `livekit_mcp/auth/middleware.py`.
+  - Added relative date resolver (`resolve_date_string`) handling `'today'`, `'tomorrow'`, `'yesterday'`.
+  - Added resilient HTTP fallback (`POST /api/tools/call` via `httpx`) in `mantra/mcp_client.py` if SSE transport fails.
+  - Fixed logging format string `%d` → `%s` and normalized 10-digit Indian phone numbers.
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/mcp_client.py](file:///home/fardeen/lkt/mantra/mcp_client.py), `livekit-mcp/src/livekit_mcp/tools/doctor_availability.py`, `livekit-mcp/src/livekit_mcp/clients/backend_client.py`.
+
 ## 2026-08-24
 
 ### Official Model Context Protocol (MCP 2.0) Architecture & SSE JSON-RPC Client
