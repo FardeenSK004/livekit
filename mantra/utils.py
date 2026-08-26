@@ -804,6 +804,14 @@ Client Country Code: {client_country_code}
      - "APPOINTMENT_RESCHEDULED": If the user rescheduled an appointment/booking to a new date/time.
      - Otherwise, null.
    - `sentiment_score`: Rate the user's sentiment from 0.0 (very negative/angry) to 1.0 (very positive/happy), with 0.5 as neutral.
+   - `appointment_metadata`: If an appointment, visit, consultation, or live demo was booked or confirmed:
+      * `provider_name`: Name of doctor, provider, or host (e.g. "Anshul" or "Dr. Ananya Sharma"). If none, use null.
+      * `provider_user_id`: Integer provider user ID if mentioned or identifiable, otherwise null.
+      * `preferred_datetime`: Start date/time (e.g. "2026-08-28 10:00:00").
+      * `preferred_end_datetime`: End date/time (e.g. "2026-08-28 10:30:00").
+      * `appointment_title`: Concise title (e.g. "MantraAssist Demo - Multi-specialty Hospital").
+      * `appointment_notes`: Concise summary notes of the appointment.
+      If no appointment was booked/discussed, use null.
 
 You MUST return your response as a valid JSON object with the following schema:
 {{
@@ -816,7 +824,15 @@ You MUST return your response as a valid JSON object with the following schema:
   "doctor": "string or null",
   "hospital_location": "string or null",
   "user_intent": "APPOINTMENT_BOOKED" or "APPOINTMENT_CANCELLED" or "APPOINTMENT_RESCHEDULED" or null,
-  "sentiment_score": float
+  "sentiment_score": float,
+  "appointment_metadata": {{
+    "provider_user_id": integer or null,
+    "provider_name": "string or null",
+    "preferred_datetime": "string or null",
+    "preferred_end_datetime": "string or null",
+    "appointment_title": "string or null",
+    "appointment_notes": "string or null"
+  }} or null
 }}
 
 Provide ONLY the JSON object. Do not include markdown code block syntax or other text wrapper.
@@ -920,6 +936,10 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                     process_stage_data=process_stage_data,
                 )
 
+            appointment_metadata = res_dict.get("appointment_metadata")
+            if not isinstance(appointment_metadata, dict):
+                appointment_metadata = None
+
             if not summary:
                 summary = await SessionRecorder.generate_summary(llm_engine, history)
 
@@ -937,6 +957,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             hospital_location = ""
             sentiment_score = 0.5
             user_intent = None
+            appointment_metadata = None
 
         return {
             "summary": summary,
@@ -949,6 +970,7 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
             "hospital_location": hospital_location,
             "user_intent": user_intent,
             "sentiment_score": sentiment_score,
+            "appointment_metadata": appointment_metadata,
         }
 
     @staticmethod
