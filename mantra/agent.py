@@ -5,7 +5,7 @@ import os
 import datetime
 import aiohttp
 from mantra.email_alerts import send_crash_email
-from mantra.language_manager import LanguageManager, MultilingualParallelSTT
+from mantra.language_manager import LanguageManager, MultilingualParallelSTT, resolve_stt_language
 import sys
 
 # ── Suppress OpenTelemetry 429 errors ──────────────────────────────────
@@ -73,7 +73,6 @@ from livekit.agents import (
 )
 from livekit.agents import TurnHandlingOptions
 from livekit.agents.voice.agent import ModelSettings
-
 from livekit.plugins import openai, google, silero, deepgram
 
 from mantra.utils import (
@@ -333,6 +332,15 @@ class AssistantFunctions:
     async def _get_kb(self) -> PostgresKnowledgeBase:
         return get_global_kb()
 
+    async def warmup(self):
+        try:
+            kb = await self._get_kb()
+            await kb.warmup(self.kb_ids)
+            retriever = await self._get_retriever()
+            await retriever.prefetch(self.kb_ids)
+        except Exception as e:
+            logger.warning(f"[KB] AssistantFunctions warmup error: {e}")
+
     async def _get_retriever(self) -> KnowledgeRetriever:
         if self._retriever is None:
             kb = await self._get_kb()
@@ -536,7 +544,11 @@ class AssistantFunctions:
     #     return "TRANSFER_COMPLETE. Do not speak."
 
     @llm.function_tool(
-        description="Search the knowledge base for factual information relevant to the user's question. Use this tool to retrieve accurate information about products, services, policies, procedures, pricing, locations, schedules, people, organizations, documents, regulations, FAQs, or any domain-specific content stored in the knowledge base. ALWAYS use this tool before answering questions that require factual or organization-specific information. If the user switches topics to a specific category (like 'support' or 'pricing'), you can provide that category in 'specific_tag' to override the default search scope."
+        description=(
+            "Search the knowledge base for factual information, doctor profiles, availability, working hours, pricing, services, "
+            "policies, and any entity or topic asked by the caller. Call this tool silently without saying search fillers "
+            "(e.g., do NOT say 'Let me check' or 'Let me look that up'). Speak the retrieved answer directly."
+        )
     )
     async def search_knowledge_base(
         self, 
@@ -788,6 +800,7 @@ async def entrypoint(ctx: JobContext):
         kb_tags=kb_tags_list,
         call_state=call_state,
     )
+    create_bg_task(fnc_ctx.warmup())
 
     # Session ID for S3 key naming
     session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -844,8 +857,11 @@ CORE BEHAVIOR:
 - If the user pauses, wait patiently for them to finish.
 - ACTIVELY LISTEN: If the user asks a question (e.g., about directions, a bus stand, or any other detail), address it directly and helpfully BEFORE returning to the main topic. Never ignore the user's questions or blindly repeat your script.
 - RETAIN CONTEXT & AVOID REPETITION: Remember the user's previous answers. Do NOT repeatedly ask the same questions. If they say no or want to focus on something else, acknowledge it and move on. DO NOT be pushy.
-- KNOWLEDGE BASE USAGE: If the user asks a factual question or inquires about policies, services, or locations, you MUST use the `search_knowledge_base` tool to find the accurate answer.
-
+- KNOWLEDGE BASE & SEARCH DIRECTIVES:
+  * NEVER say search filler phrases like "Let me check that for you", "Let me look that up", "Let me check our records", "Let me see", or "One moment".
+  * Call the search tool SILENTLY in the background and respond directly with the actual answer.
+  * Call at most ONE search tool per turn. NEVER chain multiple consecutive search calls for the same user request.
+  * If a search returns no exact match, formulate your spoken response immediately using what is known, or politely ask the caller to clarify.
 # HUMAN HANDOFF (DISABLED):
 # - Handoff to human is currently disabled.
 # - If the user explicitly asks to speak to a human or a doctor/clinical agent, apologize and let them know:
@@ -983,6 +999,7 @@ Follow these specific instructions:
             initial_instructions += "3. Answer user's questions DIRECTLY without appending a sales pitch or appointment request at the end of every turn.\n"
             initial_instructions += "4. If the user asks to speak to a human or asks to be transferred — apologize and explain that human transfer is currently unavailable. Do not promise transfer, and if they insist, politely end the call.\n"
             initial_instructions += "5. LANGUAGE CONSISTENCY: Always respond in the caller's current conversational language as specified in the CURRENT CONVERSATIONAL LANGUAGE directive.\n"
+            initial_instructions += "6. NO SEARCH FILLERS: When retrieving information from the knowledge base, NEVER say 'Let me check that for you', 'Let me look that up', or any filler phrases. Execute the search silently and speak the final answer directly.\n"
 
 
             if is_inbound:
@@ -1102,10 +1119,34 @@ Follow these specific instructions:
         }
     )
 
-    # Native Deepgram Nova-3 Multilingual STT engine (supports English & Hindi)
+    # Deepgram Nova-3 STT engine with international locale resolution (en-IN, en-US, en-GB, en-AU, etc.)
+    # Fully compatible with both INBOUND and OUTBOUND calls
+    call_phone = (
+        call_state.get("caller_phone_number")
+        or (payload.get("phone_number") if "payload" in locals() and isinstance(payload, dict) else None)
+        or (payload.get("client_phone_number") if "payload" in locals() and isinstance(payload, dict) else None)
+        or (payload.get("client_phone") if "payload" in locals() and isinstance(payload, dict) else None)
+        or (payload.get("caller_phone") if "payload" in locals() and isinstance(payload, dict) else None)
+        or (payload.get("to_phone") if "payload" in locals() and isinstance(payload, dict) else None)
+        or (call_data.get("phone_number") if "call_data" in locals() and isinstance(call_data, dict) else None)
+        or (call_payload.get("client_phone_number") if "call_payload" in locals() and isinstance(call_payload, dict) else None)
+        or (getattr(participant, "identity", None) if "participant" in locals() and participant else None)
+    )
+    country_val = (
+        (payload.get("country") or payload.get("country_code") or payload.get("client_country"))
+        if "payload" in locals() and isinstance(payload, dict)
+        else None
+    )
+
+    stt_lang = resolve_stt_language(language=language, phone_number=call_phone, country_code=country_val)
+    logger.info(f"[STT] Deepgram Nova-3 configured with language/locale: '{stt_lang}' (Direction: {'inbound' if is_inbound else 'outbound'} | Phone: {call_phone})")
+
     stt_engine = deepgram.STT(
         model="nova-3",
-        language="multi",
+        language=stt_lang,
+        smart_format=True,
+        punctuate=True,
+        numerals=True,
         endpointing_ms=25,
         no_delay=True,
     )
@@ -1142,11 +1183,14 @@ Follow these specific instructions:
 
     await _telemetry("Agent voice engine ready", f"model={model_name}")
 
+#AGENT TOOLS TO BE MENTIONED HERE!!!!
+
     agent_tools = [
         fnc_ctx.end_call,
         fnc_ctx.search_knowledge_base,
-        fnc_ctx.check_doctor_availability,
     ]
+
+        # agent_tools = [fnc_ctx.end_call,fnc_ctx.search_knowledge_base, fnc_ctx.check_doctor_availability, ]
 
     class MantraMultilingualAgent(Agent):
         async def llm_node(
@@ -1281,6 +1325,53 @@ Follow these specific instructions:
             call_state["last_activity"] = asyncio.get_event_loop().time()
             call_state["prompted_inactivity"] = False
             call_state["user_has_spoken"] = True
+
+    _PIPELINE_ERROR_ALERT_COOLDOWN = 300.0  # seconds between alert emails per call
+
+    @session.on("error")
+    def on_session_error(ev):
+        err = getattr(ev, "error", None)
+        # Framework wraps provider errors (LLMError/STTError/TTSError carry .error)
+        inner = err if isinstance(err, BaseException) else getattr(err, "error", None) or err
+        source = getattr(ev, "source", None)
+        source_label = (
+            f"{getattr(source, 'provider', '')} {type(source).__name__}".strip()
+            if source is not None
+            else "unknown"
+        )
+        recoverable = getattr(err, "recoverable", None)
+        logger.error(
+            f"[DIAG] Pipeline error from {source_label}: {inner}",
+            exc_info=inner if isinstance(inner, BaseException) else None,
+        )
+
+        call_state["pipeline_error_count"] = call_state.get("pipeline_error_count", 0) + 1
+        now = asyncio.get_event_loop().time()
+        last_alert = call_state.get("last_pipeline_error_alert", 0.0)
+        if now - last_alert < _PIPELINE_ERROR_ALERT_COOLDOWN:
+            return
+        call_state["last_pipeline_error_alert"] = now
+        error_count = call_state["pipeline_error_count"]
+
+        async def _alert():
+            try:
+                await send_crash_email(
+                    service_name="Livekit Voice Agent pipeline",
+                    error=inner if isinstance(inner, BaseException) else RuntimeError(str(inner)),
+                    context_data={
+                        "Room Name": getattr(ctx.room, "name", "N/A"),
+                        "Job ID": getattr(ctx.job, "id", "N/A"),
+                        "Process ID (PID)": os.getpid(),
+                        "Component": source_label,
+                        "Recoverable": recoverable,
+                        "Errors This Call": error_count,
+                        "Agent": AGENT_NAME,
+                    },
+                )
+            except Exception as email_err:
+                logger.error(f"[DIAG] Failed to dispatch pipeline error email: {email_err}")
+
+        asyncio.create_task(_alert())
 
     async def inactivity_monitor():
         logger.info("Inactivity monitor started.")

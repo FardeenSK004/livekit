@@ -12,6 +12,17 @@ class KnowledgeRetriever:
         self.kb = kb
         self.session_cache = {}
         self.accessed_pages_meta: list[dict] = []
+        self.preloaded_pages: list[KnowledgePage] = []
+
+    async def prefetch(self, kb_ids: List[str]):
+        """Preload KB pages for the session's kb_ids into memory."""
+        if kb_ids:
+            try:
+                pages = await self.kb.prefetch_org_pages(kb_ids)
+                self.preloaded_pages = pages
+                logger.info(f"[Retriever] Preloaded {len(pages)} pages into memory for session kb_ids={kb_ids}")
+            except Exception as e:
+                logger.warning(f"[Retriever] Prefetch error (non-fatal): {e}")
 
     async def retrieve(self, query: str, kb_ids: List[str], top_k: int = 3, tags: List[str] = None) -> str:
         """

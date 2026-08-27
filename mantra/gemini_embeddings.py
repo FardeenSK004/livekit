@@ -99,11 +99,23 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
     return results
 
 
+_query_cache: dict[str, list[float]] = {}
+
+
 async def embed_text(text: str) -> Optional[list[float]]:
-    """Embed a single text; returns None on failure (caller falls back to FTS-only)."""
+    """Embed a single text with in-memory caching; returns None on failure (caller falls back to FTS-only)."""
+    clean_key = text.lower().strip()
+    if clean_key in _query_cache:
+        logger.debug(f"[Embeddings] In-memory query embedding cache hit for: '{clean_key[:50]}'")
+        return _query_cache[clean_key]
     try:
         result = await embed_texts([text])
-        return result[0] if result else None
+        if result:
+            _query_cache[clean_key] = result[0]
+            if len(_query_cache) > 500:
+                _query_cache.pop(next(iter(_query_cache)))
+            return result[0]
+        return None
     except Exception as e:  # noqa: BLE001
         logger.error(f"embed_text failed, continuing FTS-only: {e}")
         return None
