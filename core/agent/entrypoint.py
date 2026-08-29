@@ -41,7 +41,7 @@ from core.agent.monitors import (
 from core.agent.finalizer import finalize_call
 from services.session_recorder import SessionRecorder
 
-logger = logging.getLogger("core.agent")
+logger = logging.getLogger("mantra.agent")
 AGENT_NAME = os.getenv("AGENT_NAME", "mantra-agent")
 
 server = AgentServer(num_idle_processes=20, shutdown_process_timeout=120.0)
@@ -97,6 +97,8 @@ async def entrypoint(ctx: JobContext):
         "duration": 0,
     }
     recorder = SessionRecorder()
+    session = None
+    fnc_ctx = None
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(
@@ -107,90 +109,133 @@ async def entrypoint(ctx: JobContext):
         if track.kind == rtc.TrackKind.KIND_AUDIO:
             recorder.start_recording(track, f"participant_{participant.identity}")
 
-    # 3. Setup language manager & plugins (DeepSeek LLM + Cartesia Sonic-3 TTS)
-    language_mgr = LanguageManager(initial_language=current_lang)
-    stt_engine = build_stt(language=current_lang)
-    tts_engine = build_tts(
-        voice=voice_input,
-        speed=float(voice_speed),
-        language=current_lang,
-    )
-    live_llm = build_live_llm(model_preference=model_name)
+    try:
+        # 3. Setup language manager & plugins (DeepSeek LLM + Cartesia Sonic-3 TTS)
+        language_mgr = LanguageManager(initial_language=current_lang)
+        stt_engine = build_stt(language=current_lang)
+        tts_engine = build_tts(
+            voice=voice_input,
+            speed=float(voice_speed),
+            language=current_lang,
+        )
+        live_llm = build_live_llm(model_preference=model_name)
 
-    # 4. Setup Agent Tools
-    fnc_ctx = AssistantFunctions(
-        job_metadata=raw_metadata,
-        room_name=ctx.room.name,
-        ctx=ctx,
-        kb_ids=call_payload.get("kb_ids"),
-        kb_tags=call_payload.get("kb_tags"),
-        call_state=call_state,
-    )
-    await fnc_ctx.warmup()
+        # 4. Setup Agent Tools
+        fnc_ctx = AssistantFunctions(
+            job_metadata=raw_metadata,
+            room_name=ctx.room.name,
+            ctx=ctx,
+            kb_ids=call_payload.get("kb_ids"),
+            kb_tags=call_payload.get("kb_tags"),
+            call_state=call_state,
+        )
+        await fnc_ctx.warmup()
 
-    # 5. Build Agent Instructions
-    custom_prompt = call_payload.get("prompt") or call_payload.get("custom_prompt") or (
-        "You are a helpful AI voice assistant. Answer the caller's questions accurately and concisely."
-    )
-    prompt_with_lang = f"{custom_prompt}\n\n<!-- LANGUAGE_DIRECTIVE_START -->\n{language_mgr.get_prompt_directive()}\n<!-- LANGUAGE_DIRECTIVE_END -->"
+        # 5. Build Agent Instructions
+        custom_prompt = call_payload.get("prompt") or call_payload.get("custom_prompt") or (
+            "You are a helpful AI voice assistant. Answer the caller's questions accurately and concisely."
+        )
+        prompt_with_lang = f"{custom_prompt}\n\n<!-- LANGUAGE_DIRECTIVE_START -->\n{language_mgr.get_prompt_directive()}\n<!-- LANGUAGE_DIRECTIVE_END -->"
 
-    agent = Agent(
-        instructions=prompt_with_lang,
-        tools=[fnc_ctx.search_knowledge_base, fnc_ctx.end_call],
-    )
+        agent = Agent(
+            instructions=prompt_with_lang,
+            tools=[fnc_ctx.search_knowledge_base, fnc_ctx.end_call],
+        )
 
-    # 6. Initialize Voice Session
-    session = AgentSession(
-        turn_handling=TurnHandlingOptions(
-            turn_detection=inference.TurnDetector(),
-            endpointing={
-                "mode": "fixed",
-                "min_delay": 0.25,
-                "max_delay": 1.50,
-            },
-            interruption={
-                "mode": "adaptive",
-                "min_words": 2,
-                "min_duration": 0.40,
-                "resume_false_interruption": True,
-                "false_interruption_timeout": 1.5,
-                "backchannel_boundary": (1.0, 1.0),
-            },
-            preemptive_generation={
-                "preemptive_tts": True,
-            },
-        ),
-        vad=ctx.proc.userdata.get("vad") or build_vad(),
-        stt=stt_engine,
-        llm=live_llm,
-        tts=tts_engine,
-    )
-    fnc_ctx.session = session
-    fnc_ctx.agent = agent
+        # 6. Initialize Voice Session
+        session = AgentSession(
+            turn_handling=TurnHandlingOptions(
+                turn_detection=inference.TurnDetector(),
+                endpointing={
+                    "mode": "fixed",
+                    "min_delay": 0.25,
+                    "max_delay": 1.50,
+                },
+                interruption={
+                    "mode": "adaptive",
+                    "min_words": 2,
+                    "min_duration": 0.40,
+                    "resume_false_interruption": True,
+                    "false_interruption_timeout": 1.5,
+                    "backchannel_boundary": (1.0, 1.0),
+                },
+                preemptive_generation={
+                    "preemptive_tts": True,
+                },
+            ),
+            vad=ctx.proc.userdata.get("vad") or build_vad(),
+            stt=stt_engine,
+            llm=live_llm,
+            tts=tts_engine,
+        )
+        fnc_ctx.session = session
+        fnc_ctx.agent = agent
 
-    # 7. Register Monitors & Event Listeners
-    voice_id_str = resolve_voice_id(voice_input)
-    register_session_lifecycle_listeners(session, ctx, call_state)
-    start_transcript_logger(
-        ctx, session, call_state, language_mgr, stt_engine, tts_engine, agent, voice_id_str
-    )
-    start_inactivity_monitor(ctx, session, call_state)
-    start_call_limiter(ctx, call_state, max_seconds=600)
+        # 7. Register Monitors & Event Listeners
+        voice_id_str = resolve_voice_id(voice_input)
+        register_session_lifecycle_listeners(session, ctx, call_state)
+        start_transcript_logger(
+            ctx, session, call_state, language_mgr, stt_engine, tts_engine, agent, voice_id_str
+        )
+        start_inactivity_monitor(ctx, session, call_state)
+        start_call_limiter(ctx, call_state, max_seconds=600)
 
-    # 8. Start Session in Room with Agent
-    await session.start(agent=agent, room=ctx.room)
+        # 8. Start Session in Room with Agent
+        await session.start(agent=agent, room=ctx.room)
 
-    # Record agent local audio tracks
-    if ctx.room.local_participant:
-        for publication in ctx.room.local_participant.track_publications.values():
-            if publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
-                recorder.start_recording(publication.track, "agent")
+        # Record agent local audio tracks
+        if ctx.room.local_participant:
+            for publication in ctx.room.local_participant.track_publications.values():
+                if publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
+                    recorder.start_recording(publication.track, "agent")
 
-    # 9. Register room disconnect cleanup & finalization
-    @ctx.room.on("disconnected")
-    def on_disconnected():
-        history_snapshot = list(session.history.messages()) if hasattr(session, "history") else []
-        asyncio.create_task(
+        # 9. Wait for Remote Participant (Outbound Call)
+        if not is_inbound:
+            logger.info("Outbound call: waiting for remote participant to join room...")
+            wait_start = asyncio.get_event_loop().time()
+            while len(ctx.room.remote_participants) == 0:
+                await asyncio.sleep(0.1)
+                if not ctx.room.isconnected():
+                    return
+                if asyncio.get_event_loop().time() - wait_start > 60.0:
+                    logger.warning("Remote participant did not join within 60s. Disconnecting.")
+                    await ctx.room.disconnect()
+                    return
+            logger.info(f"Remote participant joined: {[p.identity for p in ctx.room.remote_participants.values()]}")
+            call_state["user_joined"] = True
+
+        # 10. Generate Initial Greeting
+        await asyncio.sleep(0.1)
+        client_name = call_payload.get("client_name") or "User"
+        logger.info(f"Generating initial greeting for {client_name} (inbound={is_inbound})...")
+        try:
+            if is_inbound:
+                session.generate_reply(
+                    instructions="Initiate the conversation according to your system prompt. Introduce yourself and ask how you can help."
+                )
+            else:
+                session.generate_reply(
+                    instructions=f"Greet the user named {client_name} and follow the opening script in your instructions."
+                )
+        except Exception as e:
+            logger.warning(f"Could not generate initial greeting: {e}")
+
+        # 11. Main Agent Execution Loop (block until call ends)
+        while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
+            await asyncio.sleep(1.0)
+
+    except asyncio.CancelledError:
+        logger.info("[DIAG] Call entrypoint cancelled.")
+        raise
+    except Exception as e:
+        logger.error(f"[DIAG] Error in entrypoint execution: {e}", exc_info=True)
+    finally:
+        logger.info("[DIAG] ======== ENTERING FINALLY BLOCK ========")
+        logger.info(f"[DIAG] connection_state={ctx.room.connection_state} user_joined={call_state.get('user_joined')}")
+        history_snapshot = (
+            list(session.history.messages()) if (session and hasattr(session, "history") and session.history) else []
+        )
+        await asyncio.shield(
             finalize_call(
                 ctx=ctx,
                 recorder=recorder,
@@ -200,41 +245,6 @@ async def entrypoint(ctx: JobContext):
                 history_snapshot=history_snapshot,
             )
         )
-
-    # 10. Wait for Remote Participant (Outbound Call)
-    if not is_inbound:
-        logger.info("Outbound call: waiting for remote participant to join room...")
-        wait_start = asyncio.get_event_loop().time()
-        while len(ctx.room.remote_participants) == 0:
-            await asyncio.sleep(0.1)
-            if not ctx.room.isconnected():
-                return
-            if asyncio.get_event_loop().time() - wait_start > 60.0:
-                logger.warning("Remote participant did not join within 60s. Disconnecting.")
-                await ctx.room.disconnect()
-                return
-        logger.info(f"Remote participant joined: {[p.identity for p in ctx.room.remote_participants.values()]}")
-        call_state["user_joined"] = True
-
-    # 11. Generate Initial Greeting
-    await asyncio.sleep(0.1)
-    client_name = call_payload.get("client_name") or "User"
-    logger.info(f"Generating initial greeting for {client_name} (inbound={is_inbound})...")
-    try:
-        if is_inbound:
-            session.generate_reply(
-                instructions="Initiate the conversation according to your system prompt. Introduce yourself and ask how you can help."
-            )
-        else:
-            session.generate_reply(
-                instructions=f"Greet the user named {client_name} and follow the opening script in your instructions."
-            )
-    except Exception as e:
-        logger.warning(f"Could not generate initial greeting: {e}")
-
-    # 12. Main Agent Execution Loop (block until call ends)
-    while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
-        await asyncio.sleep(1.0)
 
 
 def run_agent():

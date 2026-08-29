@@ -37,6 +37,7 @@ echo " Test Console: http://$LOCAL_IP:8081/console"
 echo " Healthcheck:  http://$LOCAL_IP:8081/health"
 echo " MCP Server:   MCP protocol on stdio"
 echo "----------------------------------------------------------------"
+echo ""
 echo "Press Ctrl+C to stop all services."
 
 # Wait for background processes to finish
