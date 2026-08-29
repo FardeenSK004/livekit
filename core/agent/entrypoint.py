@@ -59,8 +59,13 @@ def prewarm(proc: JobProcess):
 @server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext):
     """Main worker entry point invoked per LiveKit voice room session."""
-    logger.info(f"Connecting to room: {ctx.room.name} (Job: {ctx.job.id})")
     await ctx.connect()
+
+    # Register byte stream handler for lk.agent.session data channel
+    try:
+        ctx.room.register_byte_stream_handler("lk.agent.session", lambda reader, identity: None)
+    except Exception:
+        pass
 
     # 1. Parse metadata and resolve inbound/outbound context
     raw_metadata = ctx.job.metadata or "{}"
