@@ -1,6 +1,99 @@
 # Changelog
 
+## 2026-08-29
+
+### DeepSeek TTFT Resiliency & LLM Streaming Read Timeout Hardening
+
+- **fix:** Resolved `httpcore.ReadTimeout` $\rightarrow$ `httpx.ReadTimeout` $\rightarrow$ `livekit.agents._exceptions.APIConnectionError` when streaming responses from DeepSeek models (`deepseek-v4-pro` and `deepseek-v4-flash`):
+  - **`mantra/agent.py`:** Configured a dedicated `httpx.AsyncClient` with generous 60-second read timeouts (`timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0)`) and connection limits (`max_connections=20`, `keepalive_expiry=120`) in `build_post_call_llm()` and `entrypoint` live DeepSeek instantiation.
+  - **`mantra/utils.py`:** Injected `conn_options=APIConnectOptions(timeout=60.0, max_retry=3, retry_interval=2.0)` into `llm_engine.chat()` across `SessionRecorder.analyze_call()` and `SessionRecorder.generate_summary()`, preventing LiveKit's internal `LLMStream` from enforcing the 10-second default connect/read cutoff on DeepSeek thinking/reasoning requests.
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py).
+
+### Production Multi-Stage Dockerfile for `livekit-mcp` & Deployment Alignment
+
+- **feat:** Implemented a secure, optimized multi-stage build (`ghcr.io/astral-sh/uv:python3.12-bookworm-slim`) for `livekit-mcp` aligning with `lkt`'s containerization architecture:
+  - Multi-stage build with dependency layer caching via `uv sync --locked --no-install-project --no-dev`.
+  - Non-root system user `appuser` (UID 10001) for strict production security compliance.
+  - Native Starlette healthcheck (`HEALTHCHECK CMD curl -f http://localhost:8000/health || exit 1`).
+  - Executable entrypoint via `livekit-mcp` CLI.
+- Files: [livekit-mcp/Dockerfile](file:///home/fardeen/livekit-mcp/Dockerfile).
+
+## 2026-08-27
+
+### Organization Processes & Stages MCP Tool (`fetch_org_processes`) & Inbound Post-Call Integration
+
+- **feat:** Added `fetch_org_processes` (and alias `receive_org_processes`) tool to `livekit-mcp`:
+  - Queries `MantraAssist-backend` (`GET /api/v1/processes?org_id={org_id}`).
+  - Normalizes processes and stages along with their descriptions and stage IDs into structured format `[{"process_id": 317, "process_name": "...", "process_description": "...", "stage_ids": [1155, 1156, ...], "stages": [...]}]`.
+  - Implemented an in-memory TTL cache (10-minute expiry) in `MantraAssistBackendClient` to avoid redundant network queries for the same organization.
+- **feat:** Integrated MCP process stage retrieval into inbound call post-call analysis in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py):
+  - When an inbound call completes in `finalize()`, if `org_id` is present, it invokes `fetch_org_processes` via `MantraMCPClient`.
+  - Injects the retrieved `process_stage_data` into `SessionRecorder.analyze_call()`, enabling LLM post-call analysis to accurately assign `derived_process_id` and `new_stage_id` for CRM webhooks.
+- **refactor:** Removed legacy placeholder `greeting` tool from `livekit-mcp` (`tools/greeting.py`, `tools/__init__.py`, `server.py`).
+- **refactor:** Removed HTML landing page template from `livekit-mcp`:
+  - Replaced root endpoint (`GET /`) with a clean, lightweight JSON response (`{"status": "working", "service": "livekit-mcp", "transport": "sse", ...}`).
+  - Deleted `src/livekit_mcp/templates/` directory.
+- **fix:** Corrected database connection configuration in `livekit-mcp`:
+  - Mapped `DATABASE_URL` and `MCP_EVENTS_DB_URL` to point to `postgresql://postgres:password@localhost:5442/mcp_logs_db` (from the active `lkdb` Docker `postgres_mcp` container).
+  - Fixed health check endpoint `/api/dev/check-db` to return `200 OK` (healthy).
+- **feat:** Added provider `user_id` injection to doctor availability tool and post-call analysis:
+  - Formatted provider list in `doctor_availability.py` to include `(User ID: <id>)` (e.g. `Anshul (User ID: 345)`).
+  - Captured `provider_user_id` in `check_doctor_availability` and auto-injected into `appointment_metadata.provider_user_id` in `finalize()` in `mantra/agent.py`.
+- **refactor:** Standardized datetime formats and reconciled inbound stage transitions:
+  - Removed `preferred_end_datetime` from `appointment_metadata`.
+  - Updated `normalize_datetime` in `mantra/utils.py` to convert all timestamps to true UTC ISO 8601 string (`YYYY-MM-DDTHH:MM:SSZ`).
+  - Added reconciliation for initial `stage_id` in `finalize()` to ensure it strictly belongs to `effective_process_id` (defaulting to the process initial entry stage `1155`), preventing mismatched legacy stages (`323`).
+- **refactor:** Removed `x-client-id` and `x-client-secret` auth headers from `livekit-mcp` backend requests to `MantraAssist-backend`.
+- Files: [livekit-mcp/src/livekit_mcp/clients/backend_client.py](file:///home/fardeen/livekit-mcp/src/livekit_mcp/clients/backend_client.py), [livekit-mcp/src/livekit_mcp/tools/org_processes.py](file:///home/fardeen/livekit-mcp/src/livekit_mcp/tools/org_processes.py), [livekit-mcp/src/livekit_mcp/tools/doctor_availability.py](file:///home/fardeen/livekit-mcp/src/livekit_mcp/tools/doctor_availability.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py).
+
+## 2026-08-26
+
+### Post-Call `appointment_metadata` & Entrypoint Shutdown Timeout Hardening
+
+- **feat:** Added `appointment_metadata` schema and extraction to post-call analysis in [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py):
+  - Extracts `provider_user_id`, `provider_name`, `preferred_datetime`, `preferred_end_datetime`, `appointment_title`, and `appointment_notes`.
+  - Added `appointment_metadata` key to `CALL_DATA_UPDATE` and `CALL_DATA_INBOUND_UPDATE` webhook payloads in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py).
+- **feat:** Extended LiveKit IPC worker shutdown timeout from 15s to 40s (`LIVEKIT_ENTRYPOINT_TIMEOUT=40`) in `.venv/.../job_proc_lazy_main.py` and `.env.local`, ensuring deep reasoning post-call LLM models (`deepseek-v4-pro`) have sufficient execution time to generate summaries, extract fields, and dispatch webhooks before worker termination.
+- Files: [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), `.env.local`.
+
+### MCP Server JWT Authentication & Dynamic Live Date/Time Injection
+
+- **feat:** Configured `lkt` to authenticate against `livekit-mcp` with signed Mantra Auth JWT tokens:
+  - Added active `LIVEKIT_MCP_URL` and `LIVEKIT_MCP_JWT_TOKEN` in `lkt/.env`.
+  - `MantraMCPClient` sends `Authorization: Bearer <jwt>` and `?token=<jwt>` over SSE transport.
+  - `livekit-mcp` `AuthMiddleware` verifies token signature using shared `JWT_SECRET` (`sub: lkt-voice-agent`).
+- **feat:** Cleaned `livekit-mcp` $\rightarrow$ `MantraAssist-backend` client to query `GET /api/v1/webhooks/mcp` directly using webhook headers (`x-client-id`, `x-client-secret`, `ngrok-skip-browser-warning`).
+- **feat:** Injected dynamic live date, time, and current year (`2026`) directly into `initial_instructions` in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), eliminating LLM 2024/2025 pre-training cutoff bias on appointment date calculations.
+- **feat:** Added past-year auto-roll forward in `livekit-mcp` (`resolve_date_string` in `src/livekit_mcp/utils/timezone.py`) to automatically update any past-year dates to the current calendar year.
+- **feat:** Updated `backend_client.py` and `timezone.py` in `livekit-mcp` to preserve the target calendar date (`date = 2026-08-31`) and default `datetime` to `YYYY-MM-DDT00:00:00.000Z` when time is not specified by the user.
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/mcp_client.py](file:///home/fardeen/lkt/mantra/mcp_client.py), `lkt/.env`, `livekit-mcp/src/livekit_mcp/clients/backend_client.py`, `livekit-mcp/src/livekit_mcp/utils/timezone.py`.
+
+## 2026-08-25
+
+### Dynamic Department Parameter & Inbound Org ID Resolution for Doctor Availability
+
+- **feat:** Added `department` parameter extraction across `lkt` and `livekit-mcp`:
+  - **`mantra/agent.py`:** Updated `check_doctor_availability` tool to accept `department: Optional[str]` and dynamically extract medical specialty/department (e.g. `'Cardiology'`, `'Dermatology'`, `'Retina'`, `'Orthopedics'`) from caller transcripts.
+  - **`livekit-mcp`:** Updated `receive_doctor_availability` and `search_provider_availability` tools to accept `department` and query `GET /api/v1/providers/availability` with standard UTC params (`org_id`, `date`, `datetime`, `doc_name`, `department`).
+- **fix:** Fixed dynamic `org_id` resolution for inbound telephony calls in `mantra/agent.py`:
+  - Inbound calls now look up dialed DID in PostgreSQL `org_configs` and pass the registered `org_id` (e.g. `68`, `278`) directly into `call_state["org_id"]` and `AssistantFunctions`.
+  - Removed incorrect fallback to `kb_ids` vector collection UUIDs.
+- **fix:** Hardened `livekit-mcp` and `mantra/mcp_client.py`:
+  - Added seamless dev-mode anonymous auth in `livekit_mcp/auth/middleware.py`.
+  - Added relative date resolver (`resolve_date_string`) handling `'today'`, `'tomorrow'`, `'yesterday'`.
+  - Added resilient HTTP fallback (`POST /api/tools/call` via `httpx`) in `mantra/mcp_client.py` if SSE transport fails.
+  - Fixed logging format string `%d` → `%s` and normalized 10-digit Indian phone numbers.
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/mcp_client.py](file:///home/fardeen/lkt/mantra/mcp_client.py), `livekit-mcp/src/livekit_mcp/tools/doctor_availability.py`, `livekit-mcp/src/livekit_mcp/clients/backend_client.py`.
+
 ## 2026-08-24
+
+### Official Model Context Protocol (MCP 2.0) Architecture & SSE JSON-RPC Client
+
+- **feat:** Implemented official Model Context Protocol (MCP) JSON-RPC 2.0 client and server architecture across `lkt` and `livekit-mcp`:
+  - **`mantra/mcp_client.py`:** Built `MantraMCPClient` using Anthropic's official `mcp` SDK (`mcp.client.sse.sse_client` and `mcp.ClientSession`), querying `tools/list` and executing `tools/call` over SSE transport.
+  - **`mantra/agent.py`:** Integrated `MantraMCPClient` into `AssistantFunctions.check_doctor_availability`, replacing legacy REST endpoints with native MCP JSON-RPC 2.0 frames over SSE.
+  - **`livekit-mcp`:** Upgraded server application to use official `FastMCP` and `SseServerTransport` with mounted `/sse` and `/messages/` endpoints.
+- Files: [mantra/mcp_client.py](file:///home/fardeen/lkt/mantra/mcp_client.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), `livekit-mcp/src/livekit_mcp/server.py`.
 
 ### Knowledge Base Search Filler Elimination & Proactive Retrieval
 

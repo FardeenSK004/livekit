@@ -7,6 +7,10 @@ import aiohttp
 from mantra.email_alerts import send_crash_email
 from mantra.language_manager import LanguageManager, MultilingualParallelSTT, resolve_stt_language
 import sys
+import httpx
+import openai as openai_client
+
+from livekit.agents import APIConnectOptions
 
 # ── Suppress OpenTelemetry 429 errors ──────────────────────────────────
 os.environ.setdefault("OTEL_METRICS_EXPORTER", "none")
@@ -47,13 +51,22 @@ def build_post_call_llm() -> "llm.LLM":
     if not deepseek_key:
         logger.warning("DEEPSEEK_API_KEY not set for post-call LLM, falling back to gemini-2.5-flash")
         return google.LLM(model="gemini-2.5-flash")
-    import openai as openai_client
+
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0),
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=5, keepalive_expiry=120),
+    )
     client = openai_client.AsyncClient(
         api_key=deepseek_key,
         base_url="https://api.deepseek.com",
+        http_client=http_client,
     )
     logger.info(f"Post-call LLM using model: {POST_CALL_LLM_MODEL}")
-    return openai.LLM(model=POST_CALL_LLM_MODEL, client=client)
+    return openai.LLM(
+        model=POST_CALL_LLM_MODEL,
+        client=client,
+        timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0),
+    )
 
 # Also suppress noisy OTEL SDK logs once the SDK initialises
 logging.getLogger("opentelemetry").setLevel(logging.ERROR)
@@ -986,14 +999,21 @@ Follow these specific instructions:
             llm_engine = openai.LLM(model="gpt-4o-mini")
         else:
             logger.info("Using DeepSeek LLM")
-            import openai as openai_client
+
+            http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0),
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=5, keepalive_expiry=120),
+            )
+
             client = openai_client.AsyncClient(
                 api_key=deepseek_key,
                 base_url="https://api.deepseek.com",
+                http_client=http_client,
             )
             llm_engine = openai.LLM(
                 model="deepseek-v4-flash",
                 client=client,
+                timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0),
             )
     else:
         logger.info("Using OpenAI LLM")
