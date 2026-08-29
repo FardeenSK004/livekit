@@ -3,20 +3,24 @@ set -e
 
 case "$1" in
   agent)
-    echo "Starting LiveKit Agent..."
-    exec uv run python -m mantra.agent start
+    echo "Starting LiveKit Voice Agent..."
+    exec uv run python -m core.agent start
     ;;
   ui)
-    echo "Starting UI Server (FastAPI)..."
-    exec uv run python -m mantra.ui_server
+    echo "Starting FastAPI Application..."
+    exec uv run python app.py
+    ;;
+  dispatcher)
+    echo "Starting Dispatcher Routine..."
+    exec uv run python -m core.dispatcher
     ;;
   mcp)
     echo "Starting MCP Database Server..."
     exec uv run python mcp/server.py
     ;;
   *)
-    echo "Usage: $0 {agent|ui|mcp}"
+    echo "Usage: $0 {agent|ui|dispatcher|mcp}"
     echo "Defaulting to agent..."
-    exec uv run python -m mantra.agent start
+    exec uv run python -m core.agent start
     ;;
 esac

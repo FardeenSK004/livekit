@@ -1,7 +1,7 @@
 [project]
 name = "livekit-agent"
-version = "0.1.0"
-description = "A professional voice agent built with LiveKit"
+version = "1.0.0"
+description = "Mantra LiveKit AI Voice Agent & Telephony Backend"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -31,14 +31,42 @@ dependencies = [
     "langdetect>=1.0.9",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.ruff]
+line-length = 120
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["mantra*"]
-exclude = ["static*", "recordings*", "massist*"]
+include = [
+    "core*",
+    "routers*",
+    "controllers*",
+    "services*",
+    "dependencies*",
+    "models*",
+    "helpers*",
+    "configs*",
+    "constants*",
+    "custom_types*",
+    "routines*",
+    "prompts*",
+    "utils*",
+    "validators*",
+    "mantra*",
+]
+exclude = ["static*", "recordings*", "obsidian*"]
 
 [project.scripts]
-mantra-agent = "mantra.agent:run_agent"
-mantra-ui = "mantra.ui_server:main"
+mantra-agent = "core.agent:run_agent"
+mantra-ui = "app:main"
+mantra-dispatcher = "core.dispatcher:main"
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -51,4 +79,3 @@ torch = { index = "pytorch-cpu" }
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
-

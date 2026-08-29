@@ -1,0 +1,41 @@
+"""Environment variable type definitions."""
+
+from typing import Literal
+
+PY_ENV = Literal["development", "production", "staging", "test"]
+
+ENV_VARIABLE = Literal[
+    "PY_ENV",
+    "LIVEKIT_URL",
+    "LIVEKIT_API_KEY",
+    "LIVEKIT_API_SECRET",
+    "LIVEKIT_SIP_DOMAIN",
+    "DEEPGRAM_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "OPENAI_API_KEY",
+    "GOOGLE_API_KEY",
+    "CARTESIA_API_KEY",
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_DB",
+    "POSTGRES_HOST",
+    "POSTGRES_PORT",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "REDIS_HOST",
+    "REDIS_PORT",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_REGION",
+    "AWS_S3_BUCKET_NAME",
+    "MANTRAASSIST_BACKEND_URL",
+    "MANTRAASSIST_WEBHOOK_SECRET",
+    "LIVEKIT_MCP_URL",
+    "LIVEKIT_MCP_JWT_TOKEN",
+    "POST_CALL_LLM_MODEL",
+    "AGENT_NAME",
+    "AMD_ENABLED",
+    "TRANSFER_NUMBERS",
+    "TRANSFER_DEFAULT_NUMBER",
+    "TRANSFER_SIP_TRUNK_ID",
+]

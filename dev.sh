@@ -15,15 +15,14 @@ echo "Starting MCP Database Server..."
 uv run python mcp/server.py &
 MCP_PID=$!
 
-echo "Starting LiveKit Agent (dev mode)..."
-uv run python -m mantra.agent dev &
+echo "Starting LiveKit Voice Agent (dev mode)..."
+uv run python -m core.agent dev &
 AGENT_PID=$!
 
-echo "Starting UI Server (FastAPI)..."
-uv run python -m mantra.ui_server &
+echo "Starting FastAPI Application..."
+uv run python app.py &
 UI_PID=$!
 
-# Get local IP address (works on Linux/macOS)
 LOCAL_IP=$(hostname -I | awk '{print $1}')
 if [ -z "$LOCAL_IP" ]; then
     LOCAL_IP="localhost"
@@ -33,20 +32,11 @@ echo ""
 echo "----------------------------------------------------------------"
 echo " Everything is running!"
 echo " Webhook URL:  http://$LOCAL_IP:8081/api/v1/webhooks/telephony"
-echo " SIP (Twilio): http://$LOCAL_IP:8081/api/v1/sip/trunks/outbound/twilio"
-echo " SIP (Zadarma): http://$LOCAL_IP:8081/api/v1/sip/trunks/outbound/zadarma"
-echo " SIP (Plivo):   http://$LOCAL_IP:8081/api/v1/sip/trunks/outbound/plivo"
-echo " List Trunks:   GET http://$LOCAL_IP:8081/api/v1/sip/trunks/outbound"
-echo " Delete Trunk:  DELETE http://$LOCAL_IP:8081/api/v1/sip/trunks/outbound/{trunk_id}"
-echo " MCP Server:    MCP protocol on stdio"
-echo " Inbound Trunk CRUD: http://$LOCAL_IP:8081/api/v1/sip/trunks/inbound"
-echo " Dispatch Rule CRUD: http://$LOCAL_IP:8081/api/v1/sip/dispatch-rules"
+echo " Dashboard:    http://$LOCAL_IP:8081/dashboard"
+echo " Test Console: http://$LOCAL_IP:8081/console"
+echo " Healthcheck:  http://$LOCAL_IP:8081/health"
+echo " MCP Server:   MCP protocol on stdio"
 echo "----------------------------------------------------------------"
-echo "To trigger a call, send a POST to the Webhook URL."
-echo "To setup SIP, send a POST to the corresponding SIP URL."
-echo "To manage trunks, use the List and Delete endpoints above."
-echo "----------------------------------------------------------------"
-echo ""
 echo "Press Ctrl+C to stop all services."
 
 # Wait for background processes to finish

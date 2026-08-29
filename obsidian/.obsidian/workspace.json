@@ -33,9 +33,19 @@
               "icon": "lucide-git-fork",
               "title": "Graph view"
             }
+          },
+          {
+            "id": "f9a329e7ddef5a50",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "Graph view"
+            }
           }
         ],
-        "currentTab": 1
+        "currentTab": 2
       }
     ],
     "direction": "vertical"
@@ -196,7 +206,7 @@
       "bases:Create new base": false
     }
   },
-  "active": "d690e3ae9bac8b77",
+  "active": "f9a329e7ddef5a50",
   "lastOpenFiles": [
     "Outbound Call Walkthrough.canvas",
     "Untitled.canvas",
