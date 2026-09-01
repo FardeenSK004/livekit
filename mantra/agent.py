@@ -1188,6 +1188,7 @@ Follow these specific instructions:
     agent_tools = [
         fnc_ctx.end_call,
         fnc_ctx.search_knowledge_base,
+        fnc_ctx.check_doctor_availability,
     ]
 
         # agent_tools = [fnc_ctx.end_call,fnc_ctx.search_knowledge_base, fnc_ctx.check_doctor_availability, ]
