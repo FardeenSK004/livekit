@@ -37,7 +37,7 @@ logger = logging.getLogger("mantra.agent")
 logging.getLogger("livekit.agents").setLevel(logging.DEBUG)
 logger.info("Initializing process...")
 
-POST_CALL_LLM_MODEL = os.getenv("POST_CALL_LLM_MODEL", "deepseek-v4-pro")
+POST_CALL_LLM_MODEL = os.getenv("POST_CALL_LLM_MODEL", "deepseek-chat")
 
 
 def build_post_call_llm() -> "llm.LLM":
@@ -617,7 +617,77 @@ class AssistantFunctions:
         self._disconnect_task = create_bg_task(graceful_disconnect())
         return ""
 
+    @llm.function_tool(
+        description=(
+            "Check doctor and healthcare provider availability, working hours, and open appointment slots on a specific date. "
+            "ALWAYS use this tool whenever the caller asks about doctor availability, open consultation times, "
+            "scheduling an appointment, or doctor working hours on a given day. "
+            "If the caller mentions or asks about a specific medical department or specialty (e.g. 'Cardiology', 'Dermatology', 'Orthopedics', 'Pediatrics', 'Dental'), extract and pass it in department."
+        )
+    )
+    async def check_doctor_availability(
+        self,
+        date: Annotated[str, "The date to check in YYYY-MM-DD format (e.g. '2026-08-25'). If the caller specifies a relative day like 'tomorrow' or 'next Tuesday', calculate the exact YYYY-MM-DD date."],
+        doctor_name: Annotated[Optional[str], "Optional doctor name to filter by (e.g. 'Sharma' or 'Dr. Ananya'). If no doctor name is mentioned, leave None."] = None,
+        department: Annotated[Optional[str], "Optional medical department or specialty mentioned in the transcript/call (e.g. 'Cardiology', 'Dermatology', 'Orthopedics', 'Pediatrics', 'General Medicine'). If no department is mentioned, leave None."] = None,
+    ) -> str:
+        org_id = None
+        caller_phone = None
 
+        # 1. Extract from active call state (resolved from registered phone number in org_configs)
+        if self.call_state:
+            org_id = self.call_state.get("org_id")
+            caller_phone = (
+                self.call_state.get("caller_phone_number")
+                or self.call_state.get("caller_phone")
+                or self.call_state.get("phone_number")
+                or self.call_state.get("client_phone")
+            )
+
+        # 2. Extract dynamically from call metadata payload
+        if self.job_metadata:
+            try:
+                payload = json.loads(self.job_metadata) if isinstance(self.job_metadata, str) else self.job_metadata
+                if not org_id:
+                    org_id = payload.get("org_id") or (payload.get("metadata", {}).get("org_id") if isinstance(payload.get("metadata"), dict) else None)
+                if not caller_phone:
+                    caller_phone = (
+                        payload.get("phone_number")
+                        or payload.get("caller_phone")
+                        or payload.get("client_phone")
+                        or payload.get("from_phone")
+                    )
+            except Exception as e:
+                logger.warning(f"Could not parse job_metadata in check_doctor_availability: {e}")
+
+        logger.info(f"Agent requesting doctor availability via MCP: org_id={org_id}, date={date}, doctor={doctor_name}, department={department}, phone={caller_phone}")
+
+        from mantra.mcp_client import get_mcp_client
+
+        mcp_client = get_mcp_client()
+        result = await mcp_client.call_tool(
+            "receive_doctor_availability",
+            {
+                "org_id": org_id,
+                "date": str(date).strip(),
+                "query_date": str(date).strip(),
+                "name": str(doctor_name).strip() if doctor_name else None,
+                "doc_name": str(doctor_name).strip() if doctor_name else "",
+                "department": str(department).strip() if department else "",
+                "query": str(doctor_name).strip() if doctor_name else (str(department).strip() if department else None),
+                "caller_phone": caller_phone,
+            },
+        )
+        if self.call_state is not None and isinstance(result, str):
+            import re
+            m = re.search(r'User ID:\s*(\d+)', result, re.IGNORECASE) or re.search(r'Doctor ID:\s*(\d+)', result, re.IGNORECASE) or re.search(r'user_id[":\s]+(\d+)', result, re.IGNORECASE)
+            if m:
+                try:
+                    self.call_state["provider_user_id"] = int(m.group(1))
+                    logger.info(f"Captured provider_user_id={self.call_state['provider_user_id']} from MCP availability result")
+                except Exception:
+                    pass
+        return result
 
     # Removed query_knowledge_base tool as per user request to inject KB directly into the main job
 
@@ -735,6 +805,8 @@ async def entrypoint(ctx: JobContext):
                     resolved_context = await resolve_inbound_context(phone_number)
                     if resolved_context:
                         meta_payload.update(resolved_context)
+                        if resolved_context.get("org_id"):
+                            call_state["org_id"] = resolved_context.get("org_id")
                         logger.info(f"[DIAG] Inbound context merged: org_id={resolved_context.get('org_id')}")
                     else:
                         logger.warning(f"[DIAG] Inbound resolution failed for {phone_number} — using dispatch rule defaults, call WILL connect")
@@ -742,6 +814,7 @@ async def entrypoint(ctx: JobContext):
                     logger.warning("[DIAG] Inbound call has no phone_number in metadata")
 
             if meta_payload.get("org_id"):
+                call_state["org_id"] = meta_payload.get("org_id")
                 kb_ids_list.append(str(meta_payload["org_id"]))
             if "kb_id" in meta_payload and meta_payload["kb_id"]:
                 kb_ids_list.append(str(meta_payload["kb_id"]))
@@ -756,7 +829,14 @@ async def entrypoint(ctx: JobContext):
 
     logger.info(f"KB scope: kb_ids={kb_ids_list}, kb_tags={kb_tags_list}")
 
-    fnc_ctx = AssistantFunctions(ctx.job.metadata, ctx.room.name, ctx=ctx, kb_ids=kb_ids_list, kb_tags=kb_tags_list, call_state=call_state)
+    fnc_ctx = AssistantFunctions(
+        json.dumps(meta_payload) if ctx.job.metadata else "",
+        ctx.room.name,
+        ctx=ctx,
+        kb_ids=kb_ids_list,
+        kb_tags=kb_tags_list,
+        call_state=call_state,
+    )
     create_bg_task(fnc_ctx.warmup())
 
     # Session ID for S3 key naming
@@ -941,8 +1021,13 @@ Follow these specific instructions:
                 else:
                     context_body += f"- {readable_key}: {value}\n"
 
-            if context_body:
-                initial_instructions += context_header + context_body
+            # Inject live date and time context so LLM always uses current year and date
+            now_dt = datetime.datetime.now()
+            initial_instructions += "\n\n--- CURRENT DATE & TIME ---\n"
+            initial_instructions += f"- Today's Date: {now_dt.strftime('%A, %B %d, %Y')}\n"
+            initial_instructions += f"- Current Time: {now_dt.strftime('%I:%M %p')}\n"
+            initial_instructions += f"- Current Year: {now_dt.year}\n"
+            initial_instructions += f"- Always calculate appointment dates and relative days (e.g. 'today', 'tomorrow', 'next week', 'August 31') using the current year ({now_dt.year}) and pass in YYYY-MM-DD format.\n"
 
             # Add an overriding rule at the very end so it takes precedence over the backend prompt
             initial_instructions += "\n\n*** CRITICAL OVERRIDING RULES ***\n"
@@ -1197,6 +1282,7 @@ Follow these specific instructions:
     agent_tools = [
         fnc_ctx.end_call,
         fnc_ctx.search_knowledge_base,
+        fnc_ctx.check_doctor_availability,
     ]
 
         # agent_tools = [fnc_ctx.end_call,fnc_ctx.search_knowledge_base, fnc_ctx.check_doctor_availability, ]
@@ -1575,7 +1661,10 @@ Follow these specific instructions:
 
                 try:
                     logger.info("Waiting for session to become inactive (25s timeout).")
-                    await asyncio.wait_for(session.wait_for_inactive(), timeout=25.0)
+                    if hasattr(session, "wait_for_inactive") and callable(getattr(session, "wait_for_inactive")):
+                        await asyncio.wait_for(session.wait_for_inactive(), timeout=25.0)
+                    else:
+                        await asyncio.sleep(25.0)
                     logger.info("Session became inactive naturally.")
                 except asyncio.TimeoutError:
                     logger.warning(
@@ -1936,6 +2025,49 @@ Follow these specific instructions:
                     if (fnc_ctx and hasattr(fnc_ctx, 'used_process_stage_data') and fnc_ctx.used_process_stage_data) 
                     else None
                 )
+                # For inbound calls, query org processes and stage descriptions via MCP before post-call analysis
+                if is_inbound and not kb_process_stage_data:
+                    inbound_org_id = (
+                        call_state.get("org_id")
+                        or call_payload.get("org_id")
+                        or (fnc_ctx.org_id if fnc_ctx and hasattr(fnc_ctx, 'org_id') else None)
+                    )
+                    if inbound_org_id:
+                        try:
+                            from mantra.mcp_client import get_mcp_client
+                            logger.info(f"Fetching org processes via MCP for inbound post-call analysis: org_id={inbound_org_id}")
+                            mcp_client = get_mcp_client()
+                            mcp_res = await mcp_client.call_tool("fetch_org_processes", {"org_id": inbound_org_id})
+                            if mcp_res:
+                                items = []
+                                if isinstance(mcp_res, list):
+                                    items = mcp_res
+                                elif isinstance(mcp_res, dict):
+                                    items = [mcp_res]
+                                elif isinstance(mcp_res, str):
+                                    mcp_res_str = mcp_res.strip()
+                                    try:
+                                        parsed = json.loads(mcp_res_str)
+                                        if isinstance(parsed, list):
+                                            items = parsed
+                                        elif isinstance(parsed, dict):
+                                            items = [parsed]
+                                    except Exception:
+                                        pass
+                                    if not items:
+                                        for line in mcp_res_str.splitlines():
+                                            line = line.strip()
+                                            if line:
+                                                try:
+                                                    items.append(json.loads(line))
+                                                except Exception:
+                                                    pass
+                                if items:
+                                    kb_process_stage_data = items
+                                    logger.info(f"[INBOUND-MCP] Loaded {len(kb_process_stage_data)} processes via MCP for org_id={inbound_org_id}:\n{json.dumps(kb_process_stage_data, indent=2)}")
+                        except Exception as e:
+                            logger.warning(f"Failed to fetch org processes via MCP for inbound call: {e}")
+
                 if not kb_process_stage_data and fnc_ctx and hasattr(fnc_ctx, 'kb_ids') and fnc_ctx.kb_ids:
                     try:
                         kb = get_global_kb()
@@ -1950,6 +2082,7 @@ Follow these specific instructions:
                 llm_analysis_ran = False
                 derived_process_id = None
                 derived_user_intent = None
+                appointment_metadata = None
                 client_custom_fields = call_payload.get("client_custom_fields", {})
                 if not isinstance(client_custom_fields, dict):
                     client_custom_fields = {}
@@ -1989,7 +2122,7 @@ Follow these specific instructions:
                                     client_country_code=client_country_code,
                                     process_stage_data=kb_process_stage_data,
                                 ),
-                                timeout=70.0
+                                timeout=10.0
                             )
                             summary_text = analysis["summary"]
                             new_stage_id = analysis["new_stage_id"]
@@ -2020,6 +2153,17 @@ Follow these specific instructions:
                             if analysis.get("hospital_location"):
                                 client_custom_fields["hospital_location"] = analysis["hospital_location"]
 
+                            appointment_metadata = analysis.get("appointment_metadata") if isinstance(analysis.get("appointment_metadata"), dict) else None
+                            if appointment_metadata:
+                                appointment_metadata.pop("preferred_end_datetime", None)
+                                if appointment_metadata.get("preferred_datetime"):
+                                    appointment_metadata["preferred_datetime"] = normalize_datetime(appointment_metadata["preferred_datetime"])
+                                if appointment_metadata.get("provider_user_id") is not None:
+                                    appointment_metadata["provider_user_id"] = _as_int(appointment_metadata["provider_user_id"])
+                                elif call_state.get("provider_user_id") is not None:
+                                    appointment_metadata["provider_user_id"] = _as_int(call_state.get("provider_user_id"))
+                                    logger.info(f"[DIAG] Auto-injected provider_user_id={appointment_metadata['provider_user_id']} into appointment_metadata from call_state")
+
                             logger.info(
                                 f"Analysis completed. Process: {derived_process_id}, New Stage ID: {new_stage_id}, Next Call On: {next_call_on}, User Intent: {derived_user_intent}, Client Name: {call_payload.get('client_name')}"
                             )
@@ -2027,9 +2171,17 @@ Follow these specific instructions:
                             logger.warning(
                                 "Skipping analysis: LLM or history unavailable after session close"
                             )
-                    except asyncio.TimeoutError:
-                        logger.warning("[DIAG] finalize(): analyze_call timed out — using fallback summary")
-                        summary_text = "Call completed. Summary timed out during processing."
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        logger.warning("[DIAG] finalize(): analyze_call timed out or task cancelled — using fallback summary and captured state")
+                        summary_text = "Call completed."
+                        if call_state.get("provider_user_id") and not appointment_metadata:
+                            appointment_metadata = {
+                                "provider_user_id": _as_int(call_state.get("provider_user_id")),
+                                "provider_name": None,
+                                "preferred_datetime": None,
+                                "appointment_title": "Scheduled Appointment",
+                                "appointment_notes": "Appointment requested during call."
+                            }
                     except Exception as e:
                         logger.error(
                             f"Analysis or summary generation failed: {e}", exc_info=True
@@ -2042,7 +2194,7 @@ Follow these specific instructions:
                     else:
                         summary_text = "Call completed."
 
-            except Exception as e:
+            except (Exception, asyncio.CancelledError) as e:
                 logger.error(f"[DIAG] finalize(): Pipeline error in finalize: {e}", exc_info=True)
 
             # 6. Build webhook payload — separate structures for inbound vs outbound
@@ -2071,20 +2223,38 @@ Follow these specific instructions:
                     process_stage_data=kb_process_stage_data,
                 )
 
+                # Ensure payload_stage_id belongs to the effective_process_id
+                proc_stages = []
+                for p in kb_process_stage_data:
+                    if isinstance(p, dict) and _as_int(p.get("process_id") or p.get("id")) == effective_process_id:
+                        stg_list = p.get("stages") or p.get("stageDetails") or []
+                        for s in stg_list:
+                            if isinstance(s, dict):
+                                sid = _as_int(s.get("stage_id") or s.get("id"))
+                                if sid is not None:
+                                    proc_stages.append(sid)
+
+                if proc_stages:
+                    if payload_stage_id not in proc_stages:
+                        logger.info(
+                            f"[DIAG] finalize(): payload_stage_id {payload_stage_id} does not belong to process {effective_process_id} "
+                            f"(available: {proc_stages}) — defaulting to initial stage {proc_stages[0]}"
+                        )
+                        payload_stage_id = proc_stages[0]
 
             # Enforce stage-based call status rule:
             # If payload_new_stage_id == initial_stage_id (not updated) -> Incomplete
             # If payload_new_stage_id != initial_stage_id (updated) -> Completed
             if call_status not in ["No Answer", "Busy", "Failed"]:
-                if initial_stage_id is not None and payload_new_stage_id != initial_stage_id:
+                if payload_stage_id is not None and payload_new_stage_id != payload_stage_id:
                     call_status = "Completed"
-                    logger.info(f"[DIAG] finalize(): Stage updated from {initial_stage_id} to {payload_new_stage_id} — call_status='Completed'")
-                elif initial_stage_id is None and payload_new_stage_id is not None:
+                    logger.info(f"[DIAG] finalize(): Stage updated from {payload_stage_id} to {payload_new_stage_id} — call_status='Completed'")
+                elif payload_stage_id is None and payload_new_stage_id is not None:
                     call_status = "Completed"
                     logger.info(f"[DIAG] finalize(): New stage assigned ({payload_new_stage_id}) with no initial stage — call_status='Completed'")
                 else:
                     call_status = "Incomplete"
-                    logger.info(f"[DIAG] finalize(): Stage not updated (new_stage_id={payload_new_stage_id}, initial={initial_stage_id}) — call_status='Incomplete'")
+                    logger.info(f"[DIAG] finalize(): Stage not updated (new_stage_id={payload_new_stage_id}, initial={payload_stage_id}) — call_status='Incomplete'")
 
             if direction == "inbound":
                 raw_caller_phone = call_state.get("caller_phone_number") or call_payload.get("client_phone_number") or call_payload.get("client_phone") or ""
@@ -2116,6 +2286,8 @@ Follow these specific instructions:
                         },
                     }
                 }
+                if appointment_metadata:
+                    webhook_payload["data"]["appointment_metadata"] = appointment_metadata
             else:
                 event_name = "CALL_RETRY" if call_status in ["No Answer", "Busy", "Failed"] else "CALL_DATA_UPDATE"
                 if event_name == "CALL_RETRY":
@@ -2152,6 +2324,26 @@ Follow these specific instructions:
                             "call_custom_fields": call_payload.get("call_custom_fields", {}),
                         },
                     }
+                if appointment_metadata:
+                    webhook_payload["data"]["appointment_metadata"] = appointment_metadata
+
+            # Prominently log the complete generated webhook payload for easy developer copying
+            payload_json_str = json.dumps(webhook_payload, indent=2)
+            logger.info(
+                f"\n{'='*70}\n"
+                f"📋 [COMPLETE WEBHOOK PAYLOAD - {webhook_payload.get('event')}]\n"
+                f"{'='*70}\n"
+                f"{payload_json_str}\n"
+                f"{'='*70}"
+            )
+            print(
+                f"\n{'='*70}\n"
+                f"📋 [COMPLETE WEBHOOK PAYLOAD - {webhook_payload.get('event')}]\n"
+                f"{'='*70}\n"
+                f"{payload_json_str}\n"
+                f"{'='*70}\n",
+                flush=True
+            )
 
             # 8. Send to MantraAssist backend and save to local DB
             logger.info(f"[DIAG] finalize(): Step 8 — Saving to DB and delivering webhook...")
