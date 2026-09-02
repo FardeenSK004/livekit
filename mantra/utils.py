@@ -14,7 +14,7 @@ import asyncpg
 from typing import Dict, List, Optional, Union
 
 from livekit import rtc
-from livekit.agents import llm
+from livekit.agents import llm, APIConnectOptions
 import boto3
 
 logger = logging.getLogger("mantra.utils")
@@ -676,8 +676,11 @@ class SessionRecorder:
                 ),
                 llm.ChatMessage(role="user", content=[summary_prompt]),
             ]
-            stream = llm_engine.chat(chat_ctx=llm.ChatContext(items=messages))
-            response = await asyncio.wait_for(stream.collect(), timeout=45.0)
+            stream = llm_engine.chat(
+                chat_ctx=llm.ChatContext(items=messages),
+                conn_options=APIConnectOptions(timeout=60.0, max_retry=3, retry_interval=2.0),
+            )
+            response = await asyncio.wait_for(stream.collect(), timeout=60.0)
 
             import re
 
@@ -844,7 +847,10 @@ Provide ONLY the JSON object. Do not include markdown code block syntax or other
                 ),
                 llm.ChatMessage(role="user", content=[prompt]),
             ]
-            stream = llm_engine.chat(chat_ctx=llm.ChatContext(items=messages))
+            stream = llm_engine.chat(
+                chat_ctx=llm.ChatContext(items=messages),
+                conn_options=APIConnectOptions(timeout=60.0, max_retry=3, retry_interval=2.0),
+            )
             response = await asyncio.wait_for(stream.collect(), timeout=60.0)
 
             text = response.text.strip()

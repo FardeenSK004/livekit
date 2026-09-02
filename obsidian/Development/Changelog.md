@@ -22,13 +22,33 @@
 
 - **feat:** Updated `MantraMCPClient` in [mantra/mcp_client.py](file:///home/fardeen/lkt/mantra/mcp_client.py) to dynamically acquire OAuth access tokens from Auth Server (`POST ${AUTH_SERVER_URL}/api/oauth/token`) using `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`.
 - **refactor:** Removed static `LIVEKIT_MCP_JWT_TOKEN` from [.env.prod](file:///home/fardeen/lkt/.env.prod) in favor of clean OAuth client credentials authentication.
+## 2026-08-29
+
+### DeepSeek TTFT Resiliency & LLM Streaming Read Timeout Hardening
+
+- **fix:** Resolved `httpcore.ReadTimeout` $\rightarrow$ `httpx.ReadTimeout` $\rightarrow$ `livekit.agents._exceptions.APIConnectionError` when streaming responses from DeepSeek models (`deepseek-v4-pro` and `deepseek-v4-flash`):
+  - **`mantra/agent.py`:** Configured a dedicated `httpx.AsyncClient` with generous 60-second read timeouts (`timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0)`) and connection limits (`max_connections=20`, `keepalive_expiry=120`) in `build_post_call_llm()` and `entrypoint` live DeepSeek instantiation.
+  - **`mantra/utils.py`:** Injected `conn_options=APIConnectOptions(timeout=60.0, max_retry=3, retry_interval=2.0)` into `llm_engine.chat()` across `SessionRecorder.analyze_call()` and `SessionRecorder.generate_summary()`, preventing LiveKit's internal `LLMStream` from enforcing the 10-second default connect/read cutoff on DeepSeek thinking/reasoning requests.
+- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/utils.py](file:///home/fardeen/lkt/mantra/utils.py).
+
+### Production Multi-Stage Dockerfile for `livekit-mcp` & Deployment Alignment
+
+- **feat:** Implemented a secure, optimized multi-stage build (`ghcr.io/astral-sh/uv:python3.12-bookworm-slim`) for `livekit-mcp` aligning with `lkt`'s containerization architecture:
+  - Multi-stage build with dependency layer caching via `uv sync --locked --no-install-project --no-dev`.
+  - Non-root system user `appuser` (UID 10001) for strict production security compliance.
+  - Native Starlette healthcheck (`HEALTHCHECK CMD curl -f http://localhost:8000/health || exit 1`).
+  - Executable entrypoint via `livekit-mcp` CLI.
+- Files: [livekit-mcp/Dockerfile](file:///home/fardeen/livekit-mcp/Dockerfile).
 
 ## 2026-08-27
 
 ### Organization Processes & Stages MCP Tool (`fetch_org_processes`) & Inbound Post-Call Integration
 
 - **feat:** Added `fetch_org_processes` (and alias `receive_org_processes`) tool to `livekit-mcp`:
+<<<<<<< HEAD
   - Queries `MantraAssist-backend` (`GET /api/v1/processes?org_id={org_id}`) with standard webhook headers (`x-client-id`, `x-client-secret`, `ngrok-skip-browser-warning`).
+=======
+  - Queries `MantraAssist-backend` (`GET /api/v1/processes?org_id={org_id}`).
   - Normalizes processes and stages along with their descriptions and stage IDs into structured format `[{"process_id": 317, "process_name": "...", "process_description": "...", "stage_ids": [1155, 1156, ...], "stages": [...]}]`.
   - Implemented an in-memory TTL cache (10-minute expiry) in `MantraAssistBackendClient` to avoid redundant network queries for the same organization.
 - **feat:** Integrated MCP process stage retrieval into inbound call post-call analysis in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py):
