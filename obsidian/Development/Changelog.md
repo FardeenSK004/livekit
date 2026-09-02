@@ -1,15 +1,27 @@
 # Changelog
 
+## 2026-09-02
+
+### MCP Client Cloudflare WAF Bypass & AuthMiddleware Public Paths Update
+
+- **fix:** Added `auth.mantracare.com`, `livekit-mcp.app-mantra.com`, and `app-mantra.com` to `NO_PROXY` in `lkt/.env` to prevent outgoing MCP/Auth HTTP requests from routing through the HTTP proxy `13.234.222.62:8888` and triggering Cloudflare 403 blocks. Files: `lkt/.env`.
+- **fix:** Added standard browser `User-Agent` and `ngrok-skip-browser-warning` headers to `MantraMCPClient` (`mantra/mcp_client.py`) across OAuth token requests and SSE/HTTP tool call connections. Resolves Cloudflare WAF 403 Forbidden ("Attention Required! Cloudflare") blocks when fetching tokens or querying MCP endpoints over domain routes like `app-mantra.com`. Files: `mantra/mcp_client.py`.
+- **fix:** Added `/sitemap.xml` and `/robots.txt` to `DEFAULT_PUBLIC_PATHS` in `livekit-mcp` (`livekit_mcp/auth/middleware.py`). Prevents unauthenticated web crawlers and scanners from triggering unnecessary `401 Unauthorized: Missing token` warning logs. Files: `livekit-mcp/src/livekit_mcp/auth/middleware.py`.
+
 ## 2026-09-01
 
-### DeepSeek Extreme Low-Latency (<1s) Optimization & Intermittent Lag Elimination
+### MCP Server Transport Fix & `check_doctor_availability` Re-enablement
 
-- **feat/perf:** Fixed intermittent 3–8 second latency spikes and achieved ultra-fast (<1s) DeepSeek responses on live voice calls:
-  - **DeepSeek HTTP/2 Socket Pre-Warming & Keep-Alive:** Configured `httpx.AsyncClient` with `http2=True`, `max_connections=50`, `max_keepalive_connections=20`, and `keepalive_expiry=300.0`. Added background socket pre-warming ping (`_prewarm_deepseek`) on room connect to pre-establish TLS/TCP handshakes before the caller speaks.
-  - **Upfront KB System Prompt Context Injection:** Added `format_upfront_kb_context()` and pre-loaded organization Knowledge Base content directly into system instructions (`<!-- UPFRONT_KB_START -->`) at room startup. Eliminates 2-turn function tool call loops (`search_knowledge_base`), saving 1.5s–2.5s on factual turns.
-  - **Fix AssistantFunctions Scope:** Corrected `format_upfront_kb_context()` placement to module-level scope before `class AssistantFunctions`, resolving `AttributeError: 'AssistantFunctions' object has no attribute 'warmup'`.
-- Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py).
+- **fix:** `mcp/server.py` was running in `stdio` mode (`mcp.run()` default). `MantraMCPClient` connects over SSE HTTP to `http://0.0.0.0:8000/sse`, so no requests ever reached the server. Changed to `mcp.run(transport="sse", port=8000)` (configurable via `MCP_SERVER_PORT` env var). Files: `mcp/server.py`.
+- **fix:** `check_doctor_availability` was commented out of `agent_tools` in `mantra/agent.py`, so the LLM was never offered the tool and could never call the MCP server even when availability queries were made. Re-enabled it in the tools list. Files: `mantra/agent.py`.
 
+## 2026-08-30
+
+
+### Dynamic OAuth Token Acquisition & Hardcoded JWT Removal
+
+- **feat:** Updated `MantraMCPClient` in [mantra/mcp_client.py](file:///home/fardeen/lkt/mantra/mcp_client.py) to dynamically acquire OAuth access tokens from Auth Server (`POST ${AUTH_SERVER_URL}/api/oauth/token`) using `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET`.
+- **refactor:** Removed static `LIVEKIT_MCP_JWT_TOKEN` from [.env.prod](file:///home/fardeen/lkt/.env.prod) in favor of clean OAuth client credentials authentication.
 ## 2026-08-29
 
 ### DeepSeek TTFT Resiliency & LLM Streaming Read Timeout Hardening
@@ -33,6 +45,9 @@
 ### Organization Processes & Stages MCP Tool (`fetch_org_processes`) & Inbound Post-Call Integration
 
 - **feat:** Added `fetch_org_processes` (and alias `receive_org_processes`) tool to `livekit-mcp`:
+
+  - Queries `MantraAssist-backend` (`GET /api/v1/processes?org_id={org_id}`) with standard webhook headers (`x-client-id`, `x-client-secret`, `ngrok-skip-browser-warning`).
+=======
   - Queries `MantraAssist-backend` (`GET /api/v1/processes?org_id={org_id}`).
   - Normalizes processes and stages along with their descriptions and stage IDs into structured format `[{"process_id": 317, "process_name": "...", "process_description": "...", "stage_ids": [1155, 1156, ...], "stages": [...]}]`.
   - Implemented an in-memory TTL cache (10-minute expiry) in `MantraAssistBackendClient` to avoid redundant network queries for the same organization.
@@ -119,7 +134,6 @@
   - Instructed the LLM to synthesize its spoken response immediately after the initial search rather than launching sequential retries over the network.
 - Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
 
-
 ### Deepgram Nova-3 Telephony STT Configuration & Dynamic Locale Routing
 
 - **fix:** Resolved Deepgram STT misrecognizing Indian names (such as "Jaideep" -> "Debbie", "Navodaya" -> "Noodle"):
@@ -128,7 +142,6 @@
   - **`numerals=True`:** Enables digit formatting for numbers, dates, times, and phone numbers.
   - **Dynamic Locale Routing (`resolve_stt_language`):** Automatically provisions `en-IN` for Indian callers (+91), `en-US` for US/Canada (+1), `en-GB` for UK (+44), `en-AU` for Australia (+61), while supporting explicit language overrides (`hi`, `es`, `fr`).
 - Files: [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py), [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py)
-
 
 ### Pipeline Error Alerting (LLM/STT/TTS Provider Failures)
 
@@ -145,8 +158,6 @@
   - **Concurrent Hybrid Execution (`asyncio.gather`):** In `mantra/knowledge_base.py`, executes PostgreSQL FTS and query embedding concurrently.
   - **Pre-Warmed Database Connection Pool & Schemas:** Added `warmup()` method to `PostgresKnowledgeBase` and `AssistantFunctions` to pre-allocate asyncpg pools, cache schema flags, and pre-initialize clients.
 - Files: [mantra/knowledge_base.py](file:///home/fardeen/lkt/mantra/knowledge_base.py), [mantra/retriever.py](file:///home/fardeen/lkt/mantra/retriever.py), [mantra/gemini_embeddings.py](file:///home/fardeen/lkt/mantra/gemini_embeddings.py), [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py)
-
-## 2026-08-20
 
 ### Native Deepgram Nova-3 Multi & TurnDetector UX Calibration
 
