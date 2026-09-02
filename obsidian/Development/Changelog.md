@@ -45,7 +45,7 @@
 ### Organization Processes & Stages MCP Tool (`fetch_org_processes`) & Inbound Post-Call Integration
 
 - **feat:** Added `fetch_org_processes` (and alias `receive_org_processes`) tool to `livekit-mcp`:
-<<<<<<< HEAD
+
   - Queries `MantraAssist-backend` (`GET /api/v1/processes?org_id={org_id}`) with standard webhook headers (`x-client-id`, `x-client-secret`, `ngrok-skip-browser-warning`).
 =======
   - Queries `MantraAssist-backend` (`GET /api/v1/processes?org_id={org_id}`).
