@@ -1288,10 +1288,14 @@ Follow these specific instructions:
                                     logger.info(f"[LANG] TTS updated to language='{new_lang}' (voice={voice_id})")
                                 except Exception as tts_err:
                                     logger.error(f"[LANG] Failed to update TTS options: {tts_err}")
-                                try:
-                                    stt_engine.update_options(language=new_lang)
-                                except Exception as stt_err:
-                                    logger.error(f"[LANG] Failed to update STT options: {stt_err}")
+                                nonlocal _last_stt_language
+                                if new_lang != _last_stt_language:
+                                    try:
+                                        stt_engine.update_options(language=new_lang)
+                                        _last_stt_language = new_lang
+                                        logger.info(f"[LANG] STT updated to language='{new_lang}'")
+                                    except Exception as stt_err:
+                                        logger.error(f"[LANG] Failed to update STT options: {stt_err}")
 
                             # Synchronously update the language directive in the system message inside chat_ctx
                             directive = language_mgr.get_prompt_directive()
@@ -1318,6 +1322,7 @@ Follow these specific instructions:
 
     # ── Transcript logging & dynamic language switching task ─────────────
     _last_logged_history_size = 0
+    _last_stt_language = stt_lang  
 
     async def transcript_logger():
         nonlocal _last_logged_history_size
@@ -1345,11 +1350,14 @@ Follow these specific instructions:
                                         logger.info(f"[LANG] Language switch triggered: {old_lang} -> {new_lang}")
 
                                         # 1. Dynamically update STT language options
-                                        try:
-                                            stt_engine.update_options(language=new_lang)
-                                            logger.info(f"[LANG] STT updated to language='{new_lang}'")
-                                        except Exception as stt_err:
-                                            logger.error(f"[LANG] Failed to update STT language: {stt_err}")
+                                        nonlocal _last_stt_language
+                                        if new_lang != _last_stt_language:
+                                            try:
+                                                stt_engine.update_options(language=new_lang)
+                                                _last_stt_language = new_lang
+                                                logger.info(f"[LANG] STT updated to language='{new_lang}'")
+                                            except Exception as stt_err:
+                                                logger.error(f"[LANG] Failed to update STT language: {stt_err}")
 
                                         # 2. Dynamically update TTS language options (preserving voice & speed)
                                         try:
