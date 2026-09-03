@@ -308,6 +308,50 @@ async def resolve_inbound_context(phone_number: str) -> dict | None:
     return config
 
 
+async def resolve_outbound_context(org_id: str) -> dict | None:
+    """
+    Resolves outbound call KB context from PostgreSQL using org_id.
+    Fetches all kb_ids for the org and kb_tags from org_configs.
+    """
+    if not org_id:
+        return None
+    org_id = str(org_id).strip()
+    logger.info(f"[DIAG] resolve_outbound_context: looking up org_id={org_id} in DB...")
+    try:
+        kb = get_global_kb()
+        pool = await kb._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT org_id, kb_tags, prompt, voice, model FROM org_configs WHERE org_id = $1 AND is_active = true",
+                org_id,
+            )
+        try:
+            kb_ids = await kb.get_kb_ids_for_org(org_id)
+        except Exception as e:
+            logger.error(f"Failed to fetch kb_ids for outbound org {org_id}: {e}")
+            kb_ids = [org_id]
+        kb_tags = []
+        if row and row["kb_tags"]:
+            kb_tags = row["kb_tags"] if isinstance(row["kb_tags"], list) else []
+        logger.info(f"[DIAG] resolve_outbound_context: DB HIT — org_id={org_id}, kb_ids={kb_ids}, kb_tags={kb_tags}")
+        return {
+            "org_id": org_id,
+            "kb_ids": kb_ids,
+            "kb_tags": kb_tags,
+            "prompt": row["prompt"] if row and row["prompt"] else None,
+            "voice": row["voice"] if row and row["voice"] else None,
+            "model": row["model"] if row and row["model"] else None,
+        }
+    except Exception as e:
+        logger.error(f"Failed to resolve outbound context for org_id {org_id}: {e}")
+        try:
+            kb = get_global_kb()
+            kb_ids = await kb.get_kb_ids_for_org(org_id)
+            return {"org_id": org_id, "kb_ids": kb_ids, "kb_tags": []}
+        except Exception:
+            return {"org_id": org_id, "kb_ids": [org_id], "kb_tags": []}
+
+
 def format_upfront_kb_context(pages: list) -> str:
     if not pages:
         return ""
@@ -322,6 +366,36 @@ def format_upfront_kb_context(pages: list) -> str:
         text += entry
         total_len += len(entry)
     text += "\nDIRECTIVE: Use the pre-loaded Knowledge Base information above to answer caller questions directly and instantly without calling search_knowledge_base whenever possible.\n<!-- UPFRONT_KB_END -->"
+    return text
+
+
+def format_upfront_process_context(processes: list) -> str:
+    if not processes:
+        return ""
+
+    text = "\n\n<!-- UPFRONT_PROCESS_CONTEXT_START -->\n=== ORGANIZATION PROCESS AND STAGE INFORMATION ===\n"
+    total_len = 0
+    for process in processes:
+        if not isinstance(process, dict):
+            continue
+        process_name = process.get("name") or process.get("process_name") or "Process"
+        description = process.get("description") or process.get("process_description") or ""
+        entry = f"\n[PROCESS: {process_name}]\n{description}\n"
+        stages = process.get("stages") or process.get("stageDetails") or []
+        for stage in stages:
+            if not isinstance(stage, dict):
+                continue
+            stage_name = stage.get("name") or stage.get("stage_name") or "Stage"
+            stage_description = stage.get("description") or stage.get("stage_description") or ""
+            entry += f"[STAGE: {stage_name}]\n{stage_description}\n"
+        if total_len + len(entry) > 12000:
+            break
+        text += entry
+        total_len += len(entry)
+
+    if total_len == 0:
+        return ""
+    text += "\nDIRECTIVE: Use this process and stage information to answer specific caller questions directly. Do not invent details that are not present here.\n<!-- UPFRONT_PROCESS_CONTEXT_END -->"
     return text
 
 
@@ -378,13 +452,18 @@ class AssistantFunctions:
             await kb.warmup(self.kb_ids)
             retriever = await self._get_retriever()
             pages = await retriever.prefetch(self.kb_ids)
-            if pages and self.agent:
+            process_context = await kb.get_process_stage_data_for_kb_ids(self.kb_ids)
+            if self.agent:
                 upfront_text = format_upfront_kb_context(pages)
+                upfront_text += format_upfront_process_context(process_context)
                 if upfront_text:
                     cur_inst = self.agent.instructions
                     if isinstance(cur_inst, str) and "<!-- UPFRONT_KB_START -->" not in cur_inst:
                         await self.agent.update_instructions(cur_inst + upfront_text)
-                        logger.info(f"[KB] Injected {len(pages)} preloaded KB pages into agent instructions for zero-latency turn responses")
+                        logger.info(
+                            f"[KB] Injected {len(pages)} KB pages and {len(process_context)} "
+                            "process contexts into agent instructions"
+                        )
         except Exception as e:
             logger.warning(f"[KB] AssistantFunctions warmup error: {e}")
 
@@ -828,6 +907,31 @@ async def entrypoint(ctx: JobContext):
                         logger.warning(f"[DIAG] Inbound resolution failed for {phone_number} — using dispatch rule defaults, call WILL connect")
                 else:
                     logger.warning("[DIAG] Inbound call has no phone_number in metadata")
+            elif meta_payload.get("direction") == "outbound":
+                org_id = meta_payload.get("org_id")
+                logger.info(f"[DIAG] Outbound call detected — org_id={org_id}, resolving KB...")
+                if org_id:
+                    call_state["org_id"] = str(org_id)
+                    if not meta_payload.get("kb_ids"):
+                        outbound_ctx = await resolve_outbound_context(str(org_id))
+                        if outbound_ctx and outbound_ctx.get("kb_ids"):
+                            existing_ids = set([str(k) for k in meta_payload.get("kb_ids", []) if k])
+                            merged_ids = list(set([str(k) for k in outbound_ctx["kb_ids"] if k] + list(existing_ids)))
+                            if not meta_payload.get("kb_ids"):
+                                meta_payload["kb_ids"] = merged_ids
+                            else:
+                                for kid in outbound_ctx["kb_ids"]:
+                                    if str(kid) not in existing_ids:
+                                        meta_payload["kb_ids"].append(str(kid))
+                            if outbound_ctx.get("kb_tags") and not meta_payload.get("kb_tags"):
+                                meta_payload["kb_tags"] = outbound_ctx["kb_tags"]
+                            if outbound_ctx.get("org_id"):
+                                call_state["org_id"] = outbound_ctx["org_id"]
+                            logger.info(f"[DIAG] Outbound KB context merged: kb_ids={meta_payload.get('kb_ids')}, kb_tags={meta_payload.get('kb_tags')}")
+                        else:
+                            logger.warning(f"[DIAG] Outbound KB resolution returned no kb_ids for org_id={org_id}")
+                else:
+                    logger.warning("[DIAG] Outbound call has no org_id — KB will be empty unless kb_ids provided directly")
 
             if meta_payload.get("org_id"):
                 call_state["org_id"] = meta_payload.get("org_id")
@@ -842,6 +946,15 @@ async def entrypoint(ctx: JobContext):
             kb_tags_list = list(set([str(t) for t in kb_tags_list if t]))
         except Exception as e:
             logger.error(f"Failed to parse/resolve metadata: {e}")
+
+    if call_state.get("org_id"):
+        try:
+            org_id = str(call_state["org_id"])
+            org_kb_ids = await get_global_kb().get_kb_ids_for_org(org_id)
+            kb_ids_list = list(set(kb_ids_list + [str(kb_id) for kb_id in org_kb_ids if kb_id]))
+            logger.info(f"[DIAG] Expanded org {org_id} to KB collections: {org_kb_ids}")
+        except Exception as e:
+            logger.warning(f"Failed to expand KB collections for org {call_state['org_id']}: {e}")
 
     logger.info(f"KB scope: kb_ids={kb_ids_list}, kb_tags={kb_tags_list}")
 
