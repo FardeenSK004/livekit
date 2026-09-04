@@ -5,7 +5,7 @@ import os
 import datetime
 import aiohttp
 from mantra.email_alerts import send_crash_email
-from mantra.language_manager import LanguageManager, MultilingualParallelSTT, resolve_stt_language
+from mantra.language_manager import LanguageManager, MultilingualParallelSTT, resolve_stt_language, resolve_stt_keyterms
 import sys
 import httpx
 import openai as openai_client
@@ -1013,54 +1013,65 @@ async def entrypoint(ctx: JobContext):
 
 CORE BEHAVIOR:
 - This is a PHONE CALL. Speak naturally.
-- Keep responses SHORT (1-2 sentences).
-- Use natural fillers that match the caller's language (English: "Got it", "Sure"; Hindi: "Theek hai", "Haan").
-<!-- LANGUAGE_DIRECTIVE_START -->
-<!-- LANGUAGE_DIRECTIVE_END -->
+- Keep responses SHORT (1-2 sentences max).
 - Sound like a helpful human friend, not a robot.
-- DO NOT SPEAK IN OTHER LANGAUGES EXCEPT ENGLISH AND HINDI
 - Do NOT use markdown, bullet points, or special characters.
 - If the user pauses, wait patiently for them to finish.
-- ACTIVELY LISTEN: If the user asks a question (e.g., about directions, a bus stand, or any other detail), address it directly and helpfully BEFORE returning to the main topic. Never ignore the user's questions or blindly repeat your script.
-- RETAIN CONTEXT & AVOID REPETITION: Remember the user's previous answers. Do NOT repeatedly ask the same questions. If they say no or want to focus on something else, acknowledge it and move on. DO NOT be pushy.
-- KNOWLEDGE BASE & SEARCH DIRECTIVES:
-  * NEVER say search filler phrases like "Let me check that for you", "Let me look that up", "Let me check our records", "Let me see", or "One moment".
-  * Call the search tool SILENTLY in the background and respond directly with the actual answer.
-  * Call at most ONE search tool per turn. NEVER chain multiple consecutive search calls for the same user request.
-  * If a search returns no exact match, formulate your spoken response immediately using what is known, or politely ask the caller to clarify.
+- ACTIVELY LISTEN: If the user asks a question (directions, bus stand, timing, cost, etc.), answer it helpfully FIRST, then return to the main topic. Never ignore questions or blindly push the script.
+- RETAIN CONTEXT & AVOID REPETITION: Remember previous answers. Do not re-ask the same question. If the user says no or changes topic, acknowledge and move on. Never be pushy.
+
+<!-- LANGUAGE_DIRECTIVE_START -->
+LANGUAGE RULE (HINGLISH — CRITICAL):
+- ALWAYS speak in natural Hinglish (Hindi + English mixed the way Indians speak on phone calls).
+- Default style: Mix Hindi words + English words in the same sentence. Prefer Hindi sentence structure with English nouns/verbs where it feels natural.
+- Good examples:
+  - "Haan ji, main aapki madad kar sakta hoon. Aapko appointment book karni hai kya?"
+  - "Theek hai, aapko kis location pe prefer karenge — Paschim Vihar ya Noida?"
+  - "Got it. Aapka naam kya hai?"
+  - "Sure, main check karta hoon... aapka preferred time morning hai ya evening?"
+- Avoid pure English sentences and avoid pure Hindi (Devanagari-only) sentences.
+- Use simple everyday words. Prefer Roman script for Hindi words (Hinglish style) so the TTS sounds natural.
+- Fillers that sound natural in Hinglish: "Haan", "Theek hai", "Achha", "Bilkul", "Got it", "Sure", "Okay ji".
+- STRICT: Never switch to any other language (no Marathi, Kannada, Telugu, etc.). Only Hinglish / Hindi-English mix.
+- If the caller speaks pure English, still reply in light Hinglish (do not switch to pure English).
+- If the caller speaks pure Hindi, reply in Hinglish (do not go full Devanagari).
+<!-- LANGUAGE_DIRECTIVE_END -->
+
+KNOWLEDGE BASE & SEARCH DIRECTIVES:
+- NEVER say search filler phrases like "Let me check that for you", "Let me look that up", "One moment", "Main dekh raha hoon".
+- Call the search tool SILENTLY in the background and answer directly with the real information.
+- Call at most ONE search tool per turn. Never chain multiple searches for the same request.
+- If search returns nothing useful, reply immediately with what you know or politely ask for clarification.
+
 # HUMAN HANDOFF (DISABLED):
-# - Handoff to human is currently disabled.
-# - If the user explicitly asks to speak to a human or a doctor/clinical agent, apologize and let them know:
-#   "I understand you want to speak to a human or doctor. Unfortunately, we don't have human transfers available right now. However, I can help you book an appointment, or have an agent call you back later."
-# - If they insist, politely end the call. Do not promise transfers or human callback.
+# - Handoff is currently disabled.
+# - If user asks for a human or doctor, say:
+#   "Main samajh sakta hoon aap human agent se baat karna chahte hain. Abhi human transfer available nahi hai. Main aapko appointment book karwa sakta hoon ya agent ko callback schedule kar sakta hoon."
+# - If they insist, politely end the call. Do not promise transfers.
 
 POLITENESS & EMPATHY:
-- Always be polite, courteous, and respectful.
-- Show genuine empathy and understanding. Use phrases like "I understand", "I'm sorry to hear that", "That must be frustrating", "I'm here to help".
-- Be patient and kind, even if the user seems confused or annoyed.
-- Use a warm, caring, and reassuring tone.
-- Never be rude, dismissive, or impatient.
+- Always be polite, courteous and respectful.
+- Show real empathy: "Main samajh sakta hoon", "Woh toh frustrating hoga", "Main aapki madad ke liye yahan hoon".
+- Warm, caring and reassuring tone. Never rude or dismissive.
 
 ENDING THE CALL:
-- You have a tool called `end_call`. Call this tool ONLY when the call is concluding.
-- NEVER call `end_call` during the opening greeting, introduction, or while the conversation is in progress.
-- Call `end_call` ONLY when:
-  * The user explicitly says goodbye, thank you, that's all, not interested, hang up, or end the call.
-  * The user explicitly declines or rejects the offer (e.g. "not interested", "no thanks", "I don't need this").
-  * The conversation has reached its natural conclusion and all objectives are addressed.
-- The sequence for ending a call: 1) Call `end_call` tool, 2) THEN say a brief warm goodbye in your response text.
-- Do NOT ask follow-up questions after the user indicates they want to end the call or is not interested.
-- Keep your final goodbye SHORT: "Thank you for your time. Have a great day!"
+- You have a tool called `end_call`. Call it ONLY when the call is clearly ending.
+- NEVER call `end_call` during greeting or while conversation is ongoing.
+- Call `end_call` only when:
+  * User says goodbye / thank you / that's all / not interested / hang up.
+  * User clearly rejects the offer.
+  * Conversation has reached a natural end.
+- Sequence: 1) Call `end_call` tool → 2) Then say a short warm goodbye.
+- Final goodbye example: "Thank you for your time. Have a great day!" or "Dhanyavaad. Aapka din shubh ho!"
 
 PRONUNCIATION (CRITICAL):
-- ALWAYS write the brand name as "MantraCare" (as a single word). NEVER write "Mantra Care" with a space.
-- ALWAYS write "MantraAssist" (as a single word). NEVER write "Mantra Assist" with a space.
-- These are spoken brand names on a phone call — single-word format ensures correct pronunciation.
+- ALWAYS write the brand name as "MantraCare" (single word). NEVER "Mantra Care".
+- ALWAYS write "MantraAssist" (single word). NEVER "Mantra Assist".
 
 PROSODY AND TONE (CRITICAL):
-- DO NOT use exclamation marks (!) or ALL CAPS in your responses.
-- The voice engine uses punctuation and casing to determine volume and emotion. Exclamation marks or ALL CAPS will cause the agent to yell or shout inappropriately.
-- Keep your punctuation flat (use periods and commas). Instead of "HELLO!", write "Hello." Instead of "Great!", write "Great."
+- DO NOT use exclamation marks (!) or ALL CAPS.
+- Use only periods and commas. The voice engine treats ! and CAPS as shouting.
+- Write: "Hello." not "HELLO!" | "Great." not "Great!"
 
 Follow these specific instructions:
 """
@@ -1297,6 +1308,13 @@ Follow these specific instructions:
             or ai_p.get("lang")
         )
 
+    # If no explicit language payload was provided, inspect initial_instructions for Devanagari script
+    if not raw_lang and "initial_instructions" in locals() and initial_instructions:
+        devanagari_count = sum(1 for ch in initial_instructions if 0x0900 <= ord(ch) <= 0x097F)
+        if devanagari_count > 0:
+            raw_lang = "hi"
+            logger.info(f"[LANG] Detected Devanagari script in prompt ({devanagari_count} chars). Auto-selecting initial_language='hi'")
+
     language_mgr = LanguageManager(initial_language=raw_lang)
     language = language_mgr.get_current_language()
     call_state["current_language"] = language
@@ -1367,15 +1385,21 @@ Follow these specific instructions:
     stt_lang = resolve_stt_language(language=language, phone_number=call_phone, country_code=country_val)
     logger.info(f"[STT] Deepgram Nova-3 configured with language/locale: '{stt_lang}' (Direction: {'inbound' if is_inbound else 'outbound'} | Phone: {call_phone})")
 
-    stt_engine = deepgram.STT(
-        model="nova-3",
-        language=stt_lang,
-        smart_format=True,
-        punctuate=True,
-        numerals=True,
-        endpointing_ms=25,
-        no_delay=True,
-    )
+    dynamic_keyterms = resolve_stt_keyterms(payload=payload if "payload" in locals() and isinstance(payload, dict) else None)
+    stt_kwargs = {
+        "model": "nova-3",
+        "language": stt_lang,
+        "smart_format": True,
+        "punctuate": True,
+        "numerals": True,
+        "endpointing_ms": 25,
+        "no_delay": True,
+    }
+    if dynamic_keyterms:
+        stt_kwargs["keyterm"] = dynamic_keyterms
+        logger.info(f"[STT] Deepgram Nova-3 keyterm prompting enabled ({len(dynamic_keyterms)} terms): {dynamic_keyterms[:10]}...")
+
+    stt_engine = deepgram.STT(**stt_kwargs)
 
     session = AgentSession(
         turn_handling=TurnHandlingOptions(
@@ -1446,7 +1470,9 @@ Follow these specific instructions:
                                 except Exception as tts_err:
                                     logger.error(f"[LANG] Failed to update TTS options: {tts_err}")
                                 try:
-                                    stt_engine.update_options(language=new_lang)
+                                    target_stt_lang = resolve_stt_language(language=new_lang, phone_number=call_phone, country_code=country_val)
+                                    stt_engine.update_options(language=target_stt_lang)
+                                    logger.info(f"[LANG] STT updated to language/locale='{target_stt_lang}'")
                                 except Exception as stt_err:
                                     logger.error(f"[LANG] Failed to update STT options: {stt_err}")
 
@@ -1532,11 +1558,13 @@ Follow these specific instructions:
                                         logger.info(f"[LANG] Language switch triggered: {old_lang} -> {new_lang}")
 
                                         # 1. Dynamically update STT language options
-                                        try:
-                                            stt_engine.update_options(language=new_lang)
-                                            logger.info(f"[LANG] STT updated to language='{new_lang}'")
-                                        except Exception as stt_err:
-                                            logger.error(f"[LANG] Failed to update STT language: {stt_err}")
+                                        if stt_lang != "multi":
+                                            try:
+                                                target_stt_lang = resolve_stt_language(language=new_lang, phone_number=call_phone, country_code=country_val) if new_lang == "en" else new_lang
+                                                stt_engine.update_options(language=target_stt_lang)
+                                                logger.info(f"[LANG] STT updated to language/locale='{target_stt_lang}'")
+                                            except Exception as stt_err:
+                                                logger.error(f"[LANG] Failed to update STT language: {stt_err}")
 
                                         # 2. Dynamically update TTS language options (preserving voice & speed)
                                         try:
