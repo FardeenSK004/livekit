@@ -162,26 +162,36 @@ class NativeLanguageDetector:
 class LanguageHysteresisTracker:
     """
     Hysteresis state machine tracking language transitions and stability.
+    Includes a cooldown to prevent rapid flip-flopping from unreliable langdetect results.
     """
+
+    _SWITCH_COOLDOWN: float = 5.0  # minimum seconds between language switches
 
     def __init__(self, initial_lang: str):
         self.current_language: str = initial_lang
         self.pending_candidate: Optional[str] = None
         self.pending_count: int = 0
+        self._last_switch_time: float = 0.0  # monotonic timestamp of last switch
 
     def evaluate_transition(
         self,
         detected_lang: str,
         confidence: float,
     ) -> Tuple[str, bool]:
-        """Evaluates state transition based on confidence and hysteresis."""
+        """Evaluates state transition based on confidence, hysteresis, and cooldown."""
         if not detected_lang or detected_lang not in SUPPORTED_LANGUAGES or detected_lang == self.current_language:
             self._reset()
             return self.current_language, False
 
+        now = time.time()
+
         if confidence >= 0.75:
+            if now - self._last_switch_time < self._SWITCH_COOLDOWN:
+                logger.debug(f"[LANG] Switch to '{detected_lang}' suppressed by cooldown ({self._SWITCH_COOLDOWN}s)")
+                return self.current_language, False
             old = self.current_language
             self.current_language = detected_lang
+            self._last_switch_time = now
             self._reset()
             logger.info(f"[LANG] Confirmed switch: {old} -> {self.current_language} (conf={confidence:.2f})")
             return self.current_language, True
@@ -189,8 +199,13 @@ class LanguageHysteresisTracker:
         if self.pending_candidate == detected_lang:
             self.pending_count += 1
             if self.pending_count >= 2:
+                if now - self._last_switch_time < self._SWITCH_COOLDOWN:
+                    logger.debug(f"[LANG] Multi-turn switch to '{detected_lang}' suppressed by cooldown")
+                    self._reset()
+                    return self.current_language, False
                 old = self.current_language
                 self.current_language = detected_lang
+                self._last_switch_time = now
                 self._reset()
                 logger.info(f"[LANG] Multi-turn confirmed switch: {old} -> {self.current_language}")
                 return self.current_language, True
