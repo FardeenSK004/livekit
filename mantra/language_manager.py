@@ -66,7 +66,7 @@ def resolve_stt_language(
     # Check country code if provided
     cc = (country_code or "").strip().upper()
     if cc in ("IN", "IND", "INDIA"):
-        return "en-IN"
+        return "multi"
     elif cc in ("US", "USA", "CA", "CAN", "UNITED STATES", "CANADA"):
         return "en-US"
     elif cc in ("GB", "GBR", "UK", "UNITED KINGDOM"):
@@ -84,7 +84,11 @@ def resolve_stt_language(
         phone = phone[1:]
 
     if phone.startswith("91") and len(phone) >= 12:
-        return "en-IN"
+        return "multi"
+    elif len(phone) == 10 and phone[0] in ("6", "7", "8", "9"):
+        return "multi"
+    elif phone.startswith("0") and len(phone) in (10, 11) and phone[1] in ("1", "2", "6", "7", "8", "9"):
+        return "multi"
     elif phone.startswith("1") and len(phone) >= 11:
         return "en-US"
     elif phone.startswith("44") and len(phone) >= 11:
@@ -94,8 +98,8 @@ def resolve_stt_language(
     elif phone.startswith("64") and len(phone) >= 10:
         return "en-NZ"
 
-    # Default international English
-    return "en-US"
+    # Default to Deepgram Nova-3 multilingual locale ('multi') for bilingual English/Hindi speech
+    return "multi"
 
 
 # ── 1. Unicode Script & Statistical ML Language Detector ─────────────────
@@ -343,9 +347,10 @@ class MultilingualParallelStream(stt.RecognizeStream):
     async def _run(self) -> None:
         for lang in self._languages:
             try:
+                stt_lang = "en-IN" if lang == "en" else lang
                 child_stt = deepgram.STT(
                     model="nova-3",
-                    language=lang,
+                    language=stt_lang,
                     smart_format=True,
                     numerals=True,
                     endpointing_ms=150,
