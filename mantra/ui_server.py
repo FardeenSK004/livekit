@@ -2742,6 +2742,29 @@ async def handle_outbound_call_webhook(request: Request):
     payload_meta.setdefault("provider", provider)
     payload["metadata"] = payload_meta
 
+    if payload.get("org_id") and not payload.get("kb_ids"):
+        try:
+            org_id = str(payload["org_id"])
+            conn = await get_db_connection()
+            try:
+                kb_rows = await conn.fetch("SELECT id FROM kb_collections WHERE org_id = $1", org_id)
+                kb_ids = [str(r["id"]) for r in kb_rows]
+                if org_id not in kb_ids:
+                    kb_ids.append(org_id)
+                if kb_ids:
+                    payload["kb_ids"] = kb_ids
+                    logger.info(f"[KB] Enriched outbound payload with kb_ids={kb_ids} for org_id={org_id}")
+                tag_row = await conn.fetchrow("SELECT kb_tags FROM org_configs WHERE org_id = $1 AND is_active = true", org_id)
+                if tag_row and tag_row["kb_tags"] and not payload.get("kb_tags"):
+                    kb_tags = tag_row["kb_tags"] if isinstance(tag_row["kb_tags"], list) else []
+                    if kb_tags:
+                        payload["kb_tags"] = kb_tags
+                        logger.info(f"[KB] Enriched outbound payload with kb_tags={kb_tags}")
+            finally:
+                await conn.close()
+        except Exception as e:
+            logger.warning(f"[KB] Outbound enrichment skipped (non-fatal): {e}")
+
     # Log the webhook event (payload received from MantraAssist, sent to agent)
     asyncio.create_task(save_call_event(
         call_id=str(call_id),
@@ -3332,6 +3355,28 @@ async def create_and_call_plivo(request: Request):
             phone_number = f"+{country_code}{client_phone}"
         else:
             phone_number = client_phone
+
+        if payload.get("org_id") and not payload.get("kb_ids"):
+            try:
+                org_id = str(payload["org_id"])
+                conn = await get_db_connection()
+                try:
+                    kb_rows = await conn.fetch("SELECT id FROM kb_collections WHERE org_id = $1", org_id)
+                    kb_ids = [str(r["id"]) for r in kb_rows]
+                    if org_id not in kb_ids:
+                        kb_ids.append(org_id)
+                    if kb_ids:
+                        payload["kb_ids"] = kb_ids
+                        logger.info(f"[KB] Enriched Plivo outbound payload with kb_ids={kb_ids} for org_id={org_id}")
+                    tag_row = await conn.fetchrow("SELECT kb_tags FROM org_configs WHERE org_id = $1 AND is_active = true", org_id)
+                    if tag_row and tag_row["kb_tags"] and not payload.get("kb_tags"):
+                        kb_tags = tag_row["kb_tags"] if isinstance(tag_row["kb_tags"], list) else []
+                        if kb_tags:
+                            payload["kb_tags"] = kb_tags
+                finally:
+                    await conn.close()
+            except Exception as e:
+                logger.warning(f"[KB] Plivo outbound enrichment skipped (non-fatal): {e}")
 
         # 3. Trigger Agent Dispatch — use direct client (no proxy needed for LiveKit Cloud)
         call_id = payload.get("call_id") or payload.get("voice_id") or int(time.time())
