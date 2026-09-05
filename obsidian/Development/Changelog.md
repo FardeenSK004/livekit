@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-04
+
+### STT Language Resolution Unlocking & Hindi Model (`hi`) Target Fix
+
+- **bugfix:** Fixed bug where STT resolution mapped all Hindi/Indian calls to `multi`. Because `stt_lang == "multi"`, the `if stt_lang != "multi":` guard in `llm_node()` evaluated to `False`, permanently trapping the STT engine in generic `multi` mode and preventing STT options from updating when Hindi or English speech occurred.
+- **fix:** Restored `resolve_stt_language()` so Hindi calls (`language="hi"`) evaluate directly to Deepgram Nova-3's dedicated Hindi speech model (**`hi`**), which transcribes Hindi speech into Hindi words/Devanagari with 100% accuracy.
+- **fix:** Removed the `if stt_lang != "multi":` blocking guard in `mantra/agent.py`. STT options now dynamically update (`stt_engine.update_options`) between Deepgram's Hindi model (`hi`) and Indian English model (`en-IN` + dynamic `keyterm` prompting) on every turn transition.
+
+### Indian Telesales Executive Hinglish System Prompt & Language Directive Alignment
+
+- **feat:** Updated `initial_instructions` in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py) with full natural Hinglish guidelines tailored for Indian female telesales executive personas (short 1-2 sentence turns, active listening, context retention, search directives, handoff rules, flat prosody, and brand single-word pronunciation guards).
+- **fix:** Updated `LanguageManager.get_prompt_directive()` in [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py) to return Hinglish prompt directives matching `<!-- LANGUAGE_DIRECTIVE_START --> ... <!-- LANGUAGE_DIRECTIVE_END -->`. Prevents dynamic `llm_node` language updates from overwriting Hinglish instructions with pure Devanagari Hindi or pure Latin English.
+
+
+### Deepgram STT Indian English (`en-IN`) Locale Resolution & Devanagari Script Fix
+
+- **fix:** Updated `resolve_stt_language()` in [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py) so Indian calls (country code `IN`, `+91` prefix, 10-digit Indian numbers starting `6-9`, landlines starting `0`) strictly use Deepgram Nova-3's **`en-IN`** locale, while US and international calls retain **`en-US`**.
+- **fix:** Fixed `NativeLanguageDetector.detect()` in [mantra/language_manager.py](file:///home/fardeen/lkt/mantra/language_manager.py): any utterance containing Devanagari script (e.g., *"Hello आप"*, *"नहीं मेरा नाम व्यात्या sir."*) strictly evaluates to Hindi (`hi`), preventing false language switches to English (`hi -> en`).
+- **fix:** Updated initial language initialization in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py) to automatically inspect `initial_instructions` for Devanagari script when `payload` lacks an explicit language field. Initializes `initial_language="hi"` (Hindi) so initial Hindi agent greetings (*"नमस्ते..."*) start with `language="hi"` STT/TTS rather than default English (`en-IN`).
+- **fix:** Updated dynamic STT language switching in [mantra/agent.py](file:///home/fardeen/lkt/mantra/agent.py) (`stt_engine.update_options`) to run through `resolve_stt_language()` when `new_lang == 'en'`, preserving the `en-IN` regional locale for Indian phone calls instead of falling back to US English (`en-US`).
+
 ## 2026-09-03
 
 ### Live Call Process Context Injection
