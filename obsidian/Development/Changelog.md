@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-09
+
+### Broad Symptom Department Clarification
+
+- **feat:** Added `clarify_medical_department` to fetch organization-specific department options through MCP, retain them in per-call state, and force one targeted follow-up before doctor availability is checked.
+- **fix:** Added a deterministic availability gate that fetches `get_org_departments` when the model skips clarification and rejects invented departments such as `Ophthalmology` unless they exactly match the organization's department list.
+- **fix:** Kept department names internal, supplied the MA department list as model context for LLM-based routing, preloaded options after org resolution, and rejected departments outside the returned list.
+- **Files:** `mantra/agent.py`, `livekit-mcp/src/livekit_mcp/tools/department_list.py`, `livekit-mcp/src/livekit_mcp/clients/backend_client.py`.
+
 ## 2026-09-04
 
 ### Per-Call STT Keyterm Memory
