@@ -520,7 +520,7 @@ def format_upfront_kb_context(pages: list) -> str:
             break
         text += entry
         total_len += len(entry)
-    text += "\nDIRECTIVE: Use the pre-loaded Knowledge Base information above to answer caller questions directly and instantly without calling search_knowledge_base whenever possible.\n<!-- UPFRONT_KB_END -->"
+    text += "\nDIRECTIVE: Use the pre-loaded Knowledge Base information above for general informational questions only. Never use it for doctor availability, appointment slots, booking, rescheduling, cancellation, or doctor working hours; those requests must use the dedicated MCP availability tool.\n<!-- UPFRONT_KB_END -->"
     return text
 
 
@@ -826,9 +826,11 @@ class AssistantFunctions:
 
     @llm.function_tool(
         description=(
-            "Search the knowledge base for factual information, doctor profiles, availability, working hours, pricing, services, "
+            "Search the knowledge base for general factual information, doctor profiles, pricing, services, "
             "policies, and any entity or topic asked by the caller. Call this tool silently without saying search fillers "
-            "(e.g., do NOT say 'Let me check' or 'Let me look that up'). Speak the retrieved answer directly."
+            "(e.g., do NOT say 'Let me check' or 'Let me look that up'). Speak the retrieved answer directly. "
+            "NEVER use this tool for doctor availability, open appointment slots, booking, rescheduling, cancellation, "
+            "or doctor working hours; always use the dedicated MCP availability tool for those requests."
         )
     )
     async def search_knowledge_base(
@@ -861,9 +863,85 @@ class AssistantFunctions:
         self._disconnect_task = create_bg_task(graceful_disconnect())
         return ""
 
+    async def _load_department_options(self, org_id: int | str) -> list[str]:
+        """Load and remember the departments available for this organization."""
+        from mantra.mcp_client import get_mcp_client
+
+        try:
+            raw_departments = await get_mcp_client().call_tool(
+                "get_org_departments",
+                {"org_id": org_id},
+            )
+            departments = json.loads(raw_departments) if isinstance(raw_departments, str) else raw_departments
+            if isinstance(departments, dict):
+                departments = departments.get("departments") or departments.get("data") or []
+            if not isinstance(departments, list):
+                departments = []
+            normalized = []
+            for item in departments:
+                name = str(item).strip()
+                if name and name.casefold() not in {value.casefold() for value in normalized}:
+                    normalized.append(name)
+        except Exception as exc:
+            logger.warning(f"Failed to fetch departments for org_id={org_id}: {exc}")
+            normalized = []
+
+        if self.call_state is not None:
+            self.call_state["department_options"] = normalized
+        return normalized
+
+    @llm.function_tool(
+        description=(
+            "Use when the caller gives a broad medical symptom without a clear department or specialty, such as 'I have an eye problem'. "
+            "Fetch the organization's department list silently. Then reason over the caller's natural-language symptom and select exactly one department from that returned list. "
+            "Do not ask the caller to choose a department, do not mention department names aloud, and immediately call check_doctor_availability with the selected exact department."
+        )
+    )
+    async def clarify_medical_department(
+        self,
+        symptom: Annotated[str, "The caller's broad symptom or reason for the appointment."],
+    ) -> str:
+        org_id = self.call_state.get("org_id") if self.call_state else None
+        if not org_id and self.job_metadata:
+            try:
+                payload = json.loads(self.job_metadata) if isinstance(self.job_metadata, str) else self.job_metadata
+                org_id = payload.get("org_id") or (
+                    payload.get("metadata", {}).get("org_id")
+                    if isinstance(payload.get("metadata"), dict)
+                    else None
+                )
+            except Exception as exc:
+                logger.warning(f"Could not parse job_metadata in clarify_medical_department: {exc}")
+
+        if not org_id:
+            return "Ask the caller which specific eye or medical specialty they need, then continue without guessing a department."
+
+        departments = await self._load_department_options(org_id)
+
+        if self.call_state is not None:
+            self.call_state["department_clarification_symptom"] = symptom.strip()
+
+        if not departments:
+            return (
+                "Department discovery is unavailable for this organization. Do not ask the caller to choose a department "
+                "and do not fall back to the knowledge base. Proceed directly by calling check_doctor_availability with "
+                "the best department inferred from the conversation, or leave department empty if none is known."
+            )
+
+        return (
+            f"INTERNAL ROUTING CONTEXT ONLY. Caller symptom: {symptom.strip()}. "
+            f"Allowed departments: {json.dumps(departments)}. "
+            "Select the single best department using the full conversation context, then call check_doctor_availability with that exact value. "
+            "Do not say the department list, ask the caller to choose, or explain the routing."
+        )
+
     @llm.function_tool(
         description=(
             "Check doctor and healthcare provider availability, working hours, and open appointment slots on a specific date. "
+            "This is the authoritative real-time MCP tool for appointment availability. Never use the knowledge base for this request. "
+            "If the organization department list is available, the department must match one of its values. "
+            "Never invent a generic department such as Ophthalmology when a department list is available. If the department is unknown, "
+            "call clarify_medical_department first, then continue even if department discovery is unavailable. Never ask the caller to choose a department by name. "
             "ALWAYS use this tool whenever the caller asks about doctor availability, open consultation times, "
             "scheduling an appointment, or doctor working hours on a given day. "
             "If the caller mentions or asks about a specific medical department or specialty (e.g. 'Cardiology', 'Dermatology', 'Orthopedics', 'Pediatrics', 'Dental'), extract and pass it in department."
@@ -903,6 +981,30 @@ class AssistantFunctions:
                     )
             except Exception as e:
                 logger.warning(f"Could not parse job_metadata in check_doctor_availability: {e}")
+
+        department_options = self.call_state.get("department_options", []) if self.call_state else []
+        if not department_options and org_id:
+            department_options = await self._load_department_options(org_id)
+
+        requested_department = str(department).strip() if department else ""
+        matched_department = next(
+            (
+                option
+                for option in department_options
+                if option.casefold() == requested_department.casefold()
+            ),
+            None,
+        )
+        if not matched_department and department_options:
+            if self.call_state is not None:
+                self.call_state["department_clarification_symptom"] = requested_department
+            return (
+                "Department selection is invalid. Call clarify_medical_department, choose one exact value from its "
+                "returned allowed departments, and retry availability. Do not ask the caller to choose a department."
+            )
+
+        if self.call_state is not None:
+            self.call_state["selected_department"] = matched_department or requested_department or None
 
         logger.info(f"Agent requesting doctor availability via MCP: org_id={org_id}, date={date}, doctor={doctor_name}, department={department}, phone={caller_phone}")
 
@@ -1122,6 +1224,8 @@ async def entrypoint(ctx: JobContext):
         kb_tags=kb_tags_list,
         call_state=call_state,
     )
+    if call_state.get("org_id"):
+        create_bg_task(fnc_ctx._load_department_options(call_state["org_id"]))
     create_bg_task(fnc_ctx.warmup())
 
     # Session ID for S3 key naming
@@ -1594,6 +1698,7 @@ Follow these specific instructions:
     agent_tools = [
         fnc_ctx.end_call,
         fnc_ctx.search_knowledge_base,
+        fnc_ctx.clarify_medical_department,
         fnc_ctx.check_doctor_availability,
     ]
 
