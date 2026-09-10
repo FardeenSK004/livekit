@@ -43,7 +43,7 @@
 		{
 			"id": "node-lkt-agent",
 			"type": "text",
-			"text": "🤖 **LiveKit Voice Agent Worker (mantra/agent.py)**\n• STT: Deepgram Nova-3 (Bilingual English/Hindi)\n• LLM: DeepSeek V4 / GPT-4o-Mini\n• TTS: Cartesia Sonic-3\n• VAD: Silero VAD + Turn Detection",
+			"text": "🤖 **LiveKit Voice Agent Worker (mantra/agent.py)**\n• STT: Deepgram Nova-3 (Bilingual English/Hindi)\n• LLM: DeepSeek V4 / GPT-4o-Mini\n• TTS: LiveKit native sonic-3\n• VAD: Silero VAD + Turn Detection",
 			"fontSize": 12,
 			"x": -80,
 			"y": -320,
@@ -153,7 +153,7 @@
 		{
 			"id": "node-caller-stats",
 			"type": "text",
-			"text": "⚡ **Turnaround Time (<150ms)**\n1. Speech transcribed (Deepgram)\n2. Agent calls MCP tool\n3. MCP queries MA backend REST API\n4. MCP converts UTC ➔ IST\n5. Agent speaks response (Cartesia)",
+			"text": "⚡ **Turnaround Time (<150ms)**\n1. Speech transcribed (Deepgram)\n2. Agent calls MCP tool\n3. MCP queries MA backend REST API\n4. MCP converts UTC ➔ IST\n5. Agent speaks response (LiveKit sonic-3)",
 			"fontSize": 12,
 			"x": 310,
 			"y": 240,

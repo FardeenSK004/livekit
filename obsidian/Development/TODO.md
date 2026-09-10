@@ -1,10 +1,12 @@
 # TODO
 
+> **Last Updated:** 2026-09-10
+
 ## Blocker (Prod Gate)
 
-- [ ] **MCP server broken** — `livekit.agents.llm.mcp` missing `CstdioServerParameters`. Likely an upstream API change. DB tool unavailable to agent.
-- [ ] **Ingest KB data for org 66** — `kb_pages` has zero rows. The FTS retriever works but needs content.
-- [ ] **Fix post-call webhook 404** — n8n endpoint missing on the ngrok backend at `MANTRAASSIST_BACKEND_URL`
+- [x] **RESOLVED (2026-09-01):** MCP SSE transport fix — `mcp/server.py` was stdio-only; now `mcp.run(transport="sse", port=8000)` and `check_doctor_availability` re-enabled in `agent_tools`.
+- [ ] **Ingest KB data for org 66** — `kb_pages` has zero rows. The hybrid retriever works but needs content.
+- [ ] **Fix post-call webhook 404** — n8n endpoint missing on ngrok backend
 - [ ] **Handoff TTS glitch** — `"..."` residual utterance after `transfer_to_human` causes traceback. Race between tool return and `update_instructions` silence enforcement.
 - [ ] **Configure S3** — `AWS_S3_BUCKET_NAME` not set, recordings silently dropped
 

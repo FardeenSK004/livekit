@@ -78,11 +78,11 @@ Delete a trunk.
 
 ### POST /v1/sip/trunks/inbound / GET / DELETE / PATCH
 
-Inbound trunk CRUD — create, list, delete, and update inbound SIP trunks. The Voicelink variant (`/v1/sip/trunks/inbound/voicelink`) auto-creates a dispatch rule.
+Inbound trunk CRUD — create, list, delete, and update inbound SIP trunks. The Voicelink variant (`/v1/sip/trunks/inbound/voicelink`) auto-creates a dispatch rule. `DELETE /v1/sip/trunks/inbound/{trunk_id}` cascades: deletes associated dispatch rules (union of `org_configs.dispatch_rule_id` + LiveKit list) before the trunk, then removes matching `org_configs` rows and the Redis `trunk:provider:{id}` cache entry.
 
 ### POST /v1/sip/inbound/setup
 
-End-to-end inbound SIP setup: creates LiveKit inbound trunk + dispatch rule + configures provider SIP forwarding (Zadarma, Twilio, Plivo Zentrunk, VoiceLink). Accepts `org_id`, `provider`, `number`, `prompt`, `voice`, `model`, `kb_tags`, `transfer_numbers`, `client_name`, `process_id`. Stores config in `org_configs` only after provider forwarding succeeds.
+End-to-end inbound SIP setup: creates LiveKit inbound trunk + dispatch rule + configures provider SIP forwarding (Zadarma, Twilio, Plivo Zentrunk, VoiceLink). `provider` is **required** (no default; `zadarma|twilio|plivo|voice_link`) and validated before any LiveKit provisioning. On provider-forwarding failure, newly-created trunk/dispatch-rule are rolled back. Accepts `org_id`, `provider`, `number`, `prompt`, `voice`, `model`, `kb_tags`, `transfer_numbers`, `client_name`, `process_id`. Stores config in `org_configs` only after provider forwarding succeeds.
 
 ### POST /v1/sip/dispatch-rules / GET / DELETE / PATCH
 
@@ -156,9 +156,9 @@ Returns `{ "url": "wss://..." }` — LiveKit server URL for frontend.
 
 ### GET /health
 
-Readiness endpoint. Returns `{ "healthy": true|false }` — `false` when any infrastructure dependency fails OR any provider is at its concurrency limit OR the global agent pool (`MAX_CALL_CONCURRENCY`, default 5) is saturated.
+Readiness endpoint. Returns `{ "healthy": true|false }` — `false` when any infrastructure dependency fails OR any trunk is at its concurrency limit OR the global agent pool (`MAX_CALL_CONCURRENCY`, default 5) is saturated.
 
-Checks: LiveKit, Redis, PostgreSQL, Deepgram STT, MantraAssist backend, S3, `provider_capacity_{plivo,zadarma,voice_link,twilio}`, `capacity_max_concurrency`.
+Checks: LiveKit, Redis, PostgreSQL, Deepgram STT, MantraAssist backend, S3, per-trunk `trunk_capacity_{trunk_id}`, `capacity_max_concurrency`.
 
 ---
 
