@@ -4,6 +4,8 @@
 > **Last Updated:** 2026-09-04  
 > **Status:** Active maintenance, Doctor Availability Tool Integration, Org Processes & Stages MCP Tool, Inbound Post-Call Integration
 
+- [x] **Inbound SIP Trunk and Dispatch Rule Lifecycle (2026-09-10):** Required an explicit provider with no primary default, validated it before inbound LiveKit provisioning, rolled back newly-created trunk/rule resources when provider forwarding failed, and made inbound trunk deletion remove associated LiveKit dispatch rules and `org_configs` mappings.
+
 - [x] **STT Language Resolution Unlocking & Hindi Model (`hi`) Target Fix (2026-09-04):** (1) Fixed bug where STT resolution mapped Hindi calls to `multi`, triggering an `if stt_lang != "multi":` guard that locked STT in `multi` and blocked `stt_engine.update_options` updates. (2) Restored `resolve_stt_language()` so Hindi calls (`language="hi"`) map directly to Deepgram Nova-3's dedicated **`hi`** model. (3) Removed the `if stt_lang != "multi":` guard in `mantra/agent.py` so STT dynamically updates between Deepgram's `hi` model and `en-IN` + `keyterm` model on turn transitions. Files: `mantra/agent.py`, `mantra/language_manager.py`.
 - [x] **Hindi-English STT Stability & Name Recognition (2026-09-05):** Defaulted unspecified calls to Deepgram Nova-3 `multi`, removed transcript-driven STT model switching, and raised endpointing to `100ms` for code-switching. Explicit `hi` and English locale requests remain supported. Files: `mantra/agent.py`, `mantra/language_manager.py`.
 - [x] **Per-Call STT Keyterm Memory (2026-09-05):** Added bounded call-local vocabulary learning for names and locations, seeded from call context and applied to Deepgram Nova-3 keyterms during later turns. Files: `mantra/agent.py`, `mantra/language_manager.py`.
