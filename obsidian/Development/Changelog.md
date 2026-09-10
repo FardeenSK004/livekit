@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-10
+
+### Organization-Agnostic Symptom Clarification
+
+- **fix:** Broad symptom routing no longer forces a department guess from one keyword or uses hardcoded specialty mappings.
+- **fix:** The agent may ask up to two targeted questions about onset, progression, severity, and associated symptoms before checking availability, using only the organization's returned department options.
+- **Files:** `mantra/agent.py`.
+
 ## 2026-09-09
 
 ### Appointment Availability MCP Routing
